@@ -80,6 +80,31 @@ export default function StudioView(p) {
       deletingIds.current.delete(item.id);
     }
   }
+  async function removeSelectedImages() {
+    const targets = p.libraryItems.filter((item) => selection.has(item.id));
+    for (const item of targets) {
+      try {
+        await p.deleteLibraryItem(item.id);
+      } catch (error) {
+        p.setError(`${item.filename}: ${error.message}`);
+        return;
+      }
+    }
+    setSelection(new Set());
+  }
+  async function moveLibraryItem(sourceId, targetId) {
+    if (sourceId === targetId) return;
+    const ordered = [...p.libraryItems];
+    const from = ordered.findIndex((item) => item.id === sourceId);
+    const to = ordered.findIndex((item) => item.id === targetId);
+    if (from < 0 || to < 0) return;
+    ordered.splice(to, 0, ordered.splice(from, 1)[0]);
+    try {
+      await p.reorderLibraryItems(ordered.map((item) => item.id));
+    } catch (error) {
+      p.setError(error.message);
+    }
+  }
   const [visible, setVisible] = useState(80);
   const inputRef = useRef(null),
     moreRef = useRef(null);
@@ -616,6 +641,14 @@ export default function StudioView(p) {
             <button disabled={exporting} onClick={() => exportImages(true)}>
               Stáhnout výběr
             </button>
+            {tab === "library" && (
+              <button
+                className="selection-delete"
+                onClick={removeSelectedImages}
+              >
+                <Trash2 size={13} /> Smazat výběr
+              </button>
+            )}
           </div>
         )}
         {count ? (
@@ -630,8 +663,14 @@ export default function StudioView(p) {
                   generating={p.isGenerating}
                   progress={p.progressValue}
                   selected={selection.has(item?.id)}
+                  isLibrary={tab === "library"}
                   onOpen={() => item && open(item, index)}
                   onSelect={() => item && toggleSelection(item.id)}
+                  onLibraryDrop={
+                    tab === "library"
+                      ? (sourceId) => item && moveLibraryItem(sourceId, item.id)
+                      : undefined
+                  }
                   onDownload={() => download(item)}
                   onReuse={() => reuse(item)}
                   onDelete={() => removeImage(item)}
@@ -1115,26 +1154,50 @@ function ImageCard({
   generating,
   progress,
   selected,
+  isLibrary,
   onOpen,
   onSelect,
+  onLibraryDrop,
   onDownload,
   onReuse,
   onDelete,
   canDelete,
   onContext,
 }) {
+  const libraryMode = isLibrary || Boolean(onLibraryDrop);
   return (
     <article
-      className={`image-card ${selected ? "selected" : ""}`}
+      className={`image-card ${selected ? "selected" : ""} ${libraryMode ? "is-library-card" : ""}`}
       onContextMenu={onContext}
       draggable={Boolean(item)}
+      onDragOver={(event) => {
+        if (
+          libraryMode &&
+          event.dataTransfer.types.includes("application/x-library-order")
+        )
+          event.preventDefault();
+      }}
+      onDrop={(event) => {
+        const sourceId = event.dataTransfer.getData(
+          "application/x-library-order",
+        );
+        if (sourceId) {
+          event.preventDefault();
+          onLibraryDrop?.(sourceId);
+        }
+      }}
       onDragStart={(event) => {
         if (item) {
-          event.dataTransfer.setData(
-            "application/x-img2img",
-            JSON.stringify(item),
-          );
-          event.dataTransfer.effectAllowed = "copy";
+          if (libraryMode) {
+            event.dataTransfer.setData("application/x-library-order", item.id);
+            event.dataTransfer.effectAllowed = "move";
+          } else {
+            event.dataTransfer.setData(
+              "application/x-img2img",
+              JSON.stringify(item),
+            );
+            event.dataTransfer.effectAllowed = "copy";
+          }
         }
       }}
     >
@@ -1143,16 +1206,19 @@ function ImageCard({
         role="button"
         tabIndex={item ? 0 : -1}
         aria-label={
-          item ? `Zvětšit obrázek ${index + 1}` : `Výstup ${index + 1} čeká`
+          item
+            ? `Vybrat obrázek ${index + 1} · dvojklikem otevřít`
+            : `Výstup ${index + 1} čeká`
         }
-        onClick={onOpen}
+        onClick={onSelect || onOpen}
+        onDoubleClick={onOpen}
         onKeyDown={(event) => {
           if (
             event.target === event.currentTarget &&
             ["Enter", " "].includes(event.key)
           ) {
             event.preventDefault();
-            onOpen();
+            (onSelect || onOpen)();
           }
         }}
       >
@@ -1174,19 +1240,6 @@ function ImageCard({
             </div>
             <span>{generating ? "GENERUJI…" : "NEDOKONČENO"}</span>
           </div>
-        )}
-        {item && onSelect && (
-          <button
-            className={`select-image ${selected ? "is-selected" : ""}`}
-            aria-label={`Vybrat obrázek ${index + 1}`}
-            aria-pressed={Boolean(selected)}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect();
-            }}
-          >
-            {selected ? <Check size={12} /> : null}
-          </button>
         )}
         {item && <span className="card-number">{index + 1}</span>}
       </div>

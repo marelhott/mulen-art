@@ -79,6 +79,16 @@ def api_library_delete(item_id: str):
     return {"ok": True, "id": item_id}
 
 
+def api_library_order(ids: list[str]):
+    if any(not isinstance(item, str) for item in ids):
+        raise HTTPException(status_code=400, detail="Invalid library order.")
+    existing = {item["id"] for item in load_library_items()}
+    if len(ids) != len(set(ids)) or not set(ids).issubset(existing):
+        raise HTTPException(status_code=400, detail="Library order contains invalid IDs.")
+    (OUTPUTS_DIR / "library-order.json").write_text(json.dumps(ids), encoding="utf-8")
+    return {"ids": ids}
+
+
 @app.post("/api/generate")
 def api_generate(payload: dict):
     job_id = uuid.uuid4().hex
@@ -235,6 +245,12 @@ def load_library_items() -> list[dict[str, Any]]:
             items.append(data)
         except Exception:
             continue
+    try:
+        order = json.loads((OUTPUTS_DIR / "library-order.json").read_text(encoding="utf-8"))
+        positions = {item_id: index for index, item_id in enumerate(order)}
+        items.sort(key=lambda item: positions.get(item["id"], len(positions)))
+    except (OSError, ValueError, TypeError):
+        pass
     return items
 
 

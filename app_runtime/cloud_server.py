@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image
-from app_runtime.server import OUTPUTS_DIR, api_library_delete, load_library_items, now_iso
+from app_runtime.server import OUTPUTS_DIR, api_library_delete, api_library_order, load_library_items, now_iso
 
 
 class VolumeUsage:
@@ -257,6 +257,14 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         with lock:
             refresh()
             result = api_library_delete(item_id)
+            commit()
+            return result
+
+    @app.put("/api/library/order")
+    def reorder_library(payload: dict):
+        with lock:
+            refresh()
+            result = api_library_order(payload.get("ids", []))
             commit()
             return result
 

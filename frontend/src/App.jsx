@@ -595,6 +595,23 @@ function App() {
     }
   }
 
+  async function reorderLibraryItems(ids) {
+    const response = await fetch(`${API_URL}/api/library/order`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Library reorder failed.");
+    const positions = new Map(data.ids.map((id, index) => [id, index]));
+    setLibraryItems((current) =>
+      [...current].sort(
+        (a, b) =>
+          (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity),
+      ),
+    );
+  }
+
   function openResultImage(image, index) {
     setSelectedImage({
       ...image,
@@ -701,6 +718,7 @@ function App() {
         handleFileChange,
         handleGenerate,
         deleteLibraryItem,
+        reorderLibraryItems,
         selectedImage,
         setSelectedImage,
         openResultImage,
