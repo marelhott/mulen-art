@@ -4,7 +4,7 @@ import StudioView from "./StudioView";
 const API_URL = import.meta.env.VITE_API_URL || "";
 const POLL_INTERVAL = 1500;
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
-const DEFAULT_ENGINE = { mode: "faithful", conditioningMode: "style", sampler: "dpmpp_2m", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
+const DEFAULT_ENGINE = { mode: "quick", conditioningMode: "style", sampler: "dpmpp_2m_sde", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
 const EMPTY_JOB = {
   id: "",
   status: "idle",
@@ -382,7 +382,7 @@ function App() {
     setDenoise(Number(preset.denoise ?? 0.45));
     setCfg(Number(preset.cfg ?? 5));
     setSteps(Number(preset.steps ?? 25));
-    setEngine(preset.engine ? {...DEFAULT_ENGINE, ...preset.engine} : { ...DEFAULT_ENGINE, mode: "quick", sampler: "dpmpp_2m_sde" });
+    setEngine({...DEFAULT_ENGINE, ...(preset.engine || {}), mode: "quick", maxSide: 1536});
     setResizeScale(Math.min(preset.engine?.mode === "detail" ? 2 : 4, Number(preset.resizeScale ?? 2)));
   }
 
@@ -474,9 +474,9 @@ function App() {
       sampler: engine.sampler,
       schedule: engine.schedule,
       conditioning_mode: "style",
-      render_mode: engine.mode, seed: Number(engine.seed === "" ? -1 : engine.seed),
+      render_mode: "quick", seed: Number(engine.seed === "" ? -1 : engine.seed),
       prompt: "", negative_prompt: "",
-      max_side: engine.maxSide, detail_strength: engine.detailStrength, detail_steps: engine.detailSteps,
+      max_side: 1536, detail_strength: engine.detailStrength, detail_steps: engine.detailSteps,
       scale: Number(resizeScale.toFixed(2)),
     };
     const count = numImages;

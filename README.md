@@ -107,11 +107,18 @@ ones. Uploads may overlap, aggregate progress includes all accepted/pending subm
 and accepted job IDs persist across reloads. There is no application-level queue count
 cap; Modal GPU concurrency and account usage limits still apply.
 
+## Studio output enlargement
+
+The studio always uses the original single-pass schedule (`quick`), with original 1536px
+input normalization and SDE as default sampler. Enlarging the completed output uses only
+Lanczos interpolation. Old presets cannot re-enable full steps or a second diffusion pass.
+Detail/full-step API modes below remain internal diagnostics, not studio controls.
+
 ## Generation controls
 
-- Quick: original schedule-based step budget (e.g. 25 × 0.45 = 11 denoising steps).
+- Original (UI default, internal `quick`): SDE DPM++ 2M, Karras, original schedule-based step budget (e.g. 25 × 0.45 = 11 denoising steps).
   Blank negative prompts use the original SDXL zero conditioning. Enlarging uses Lanczos.
-- Full steps (new UI default): preserves the requested number of actual denoising steps.
+- Full steps (optional): preserves the requested number of actual denoising steps.
   The schedule length is ceil(steps / denoise); effective strength is recorded because
   discretization slightly changes it.
   This is a Diffusers implementation, not a claim of pixel-identical Forge sampling.

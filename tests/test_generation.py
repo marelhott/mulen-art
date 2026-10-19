@@ -96,6 +96,17 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(result['meta']['upscaler'], 'lanczos')
         self.assertIsNone(pipe.calls[0]['negative_prompt'])
 
+    def test_original_enlargement_only_resizes_completed_image(self):
+        small_pipe, small, _, _ = self.run_generation(render_mode='quick', scale=1, sampler='dpmpp_2m_sde')
+        large_pipe, large, _, _ = self.run_generation(render_mode='quick', scale=2, sampler='dpmpp_2m_sde')
+        self.assertEqual(len(large_pipe.calls), 1)
+        for key in ('strength', 'num_inference_steps', 'prompt', 'negative_prompt', 'guidance_scale'):
+            self.assertEqual(small_pipe.calls[0][key], large_pipe.calls[0][key])
+        self.assertEqual(small_pipe.calls[0]['image'].tobytes(), large_pipe.calls[0]['image'].tobytes())
+        decode = lambda result: Image.open(io.BytesIO(base64.b64decode(result['images'][0]['image_base64'])))
+        expected = decode(small).resize((256, 192), Image.Resampling.LANCZOS)
+        self.assertEqual(expected.tobytes(), decode(large).tobytes())
+
     def test_ode_and_sde_are_distinct_and_order_is_explicit(self):
         scheduler = Mock()
         with patch.object(core, 'get_diffusers', return_value={'scheduler': scheduler}):

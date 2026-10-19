@@ -749,16 +749,7 @@ export default function StudioView(p) {
           <SlidersHorizontal size={13} />
           <Label>NASTAVENÍ GENEROVÁNÍ</Label>
         </div>
-        <Select label="ZPRACOVÁNÍ" value={p.engine.mode}
-          onChange={(mode) => {
-            p.setEngine((e) => ({...e, mode, sampler: mode === "quick" ? "dpmpp_2m_sde" : "dpmpp_2m"}));
-            if (mode === "detail" && p.resizeScale > 2) p.setResizeScale(2);
-          }}
-          items={[{id:"quick",name:"Rychlý · jeden průchod"},{id:"faithful",name:"Plné kroky · jeden průchod"},{id:"detail",name:"Detail · dva průchody"}]} />
-        <p className="engine-hint">{p.engine.mode === "quick"
-          ? `Při ${p.steps} krocích a tomto denoise proběhne přibližně ${Math.max(1, Math.floor(p.steps * p.denoise))} výpočtových kroků. Zvětšení je Lanczos.`
-          : p.engine.mode === "detail" ? "První průchod max. 1024 px, druhý dokresluje texturu až do 2048 px. Vyšší čas a spotřeba GPU."
-          : "Zadaný počet kroků skutečně proběhne. Při stejném nastavení trvá déle než rychlý režim. Zvětšení je Lanczos."}</p>
+        <p className="engine-hint">Původní generování v jednom průchodu. Hotový obraz se zvětšuje pouze interpolací Lanczos, bez AI dokreslování a přidávání detailů.</p>
         <Range
           label="DENOISE"
           min={0.05}
@@ -790,16 +781,6 @@ export default function StudioView(p) {
         {["dpmpp_2m", "dpmpp_2m_sde"].includes(p.engine.sampler) && <Select label="ROZVRH ŠUMU" value={p.engine.schedule}
           onChange={(schedule)=>p.setEngine((e)=>({...e,schedule}))}
           items={[{id:"karras",name:"Karras"},{id:"normal",name:"Normal"}]} />}
-        {p.engine.mode !== "detail" && <Select label="MAX. STRANA PŘI GENEROVÁNÍ" value={String(p.engine.maxSide)}
-          onChange={(value)=>p.setEngine((e)=>({...e,maxSide:Number(value)}))}
-          items={[{id:"1024",name:"1024 px"},{id:"1536",name:"1536 px"},{id:"2048",name:"2048 px · vyšší nároky"}]} />}
-        {p.engine.mode === "detail" && <>
-          <Range label="PROMĚNA PŘI DOKRESLENÍ" min={0.05} max={0.6} step={0.01}
-            value={p.engine.detailStrength} onChange={(detailStrength)=>p.setEngine((e)=>({...e,detailStrength}))}
-            hint="Nízká hodnota lépe zachová tahy a kompozici" />
-          <Range label="KROKY DOKRESLENÍ" min={1} max={50} step={1}
-            value={p.engine.detailSteps} onChange={(detailSteps)=>p.setEngine((e)=>({...e,detailSteps}))} />
-        </>}
         <label className="control-block engine-field"><Label>SEED · −1 = NÁHODNÝ</Label>
           <input aria-label="Seed" type="number" min="-1" max="4294967295" step="1" value={p.engine.seed}
             onChange={(event)=>p.setEngine((e)=>({...e,seed:event.target.value}))} />
