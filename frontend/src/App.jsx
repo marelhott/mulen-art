@@ -589,19 +589,32 @@ function App() {
   }
 
   async function deleteLibraryItem(itemId) {
-    const response = await fetch(`${API_URL}/api/library/${itemId}`, {
-      method: "DELETE",
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.detail || "Delete failed.");
-    }
+    if (deletedIds.current.has(itemId)) return;
+    const libraryIndex = libraryItems.findIndex((item) => item.id === itemId);
+    const canvasIndex = results.findIndex((item) => item?.id === itemId);
+    const libraryItem = libraryItems[libraryIndex];
+    const canvasItem = results[canvasIndex];
     deletedIds.current.add(itemId);
-    window.localStorage.setItem("img2img-deleted-ids", JSON.stringify([...deletedIds.current]));
     setLibraryItems((current) => current.filter((item) => item.id !== itemId));
     setResults((current) => current.filter((item) => item?.id !== itemId));
-    if (selectedImage?.libraryId === itemId) {
-      setSelectedImage(null);
+    if (selectedImage?.libraryId === itemId || selectedImage?.id === itemId) setSelectedImage(null);
+    try {
+      const response = await fetch(`${API_URL}/api/library/${itemId}`, {method: "DELETE"});
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || "Smazání se nezdařilo.");
+      }
+    } catch (error) {
+      deletedIds.current.delete(itemId);
+      const restore = (item, index) => (current) => {
+        if (!item || current.some((entry) => entry?.id === itemId)) return current;
+        const next = [...current];
+        next.splice(Math.min(Math.max(0, index), next.length), 0, item);
+        return next;
+      };
+      setLibraryItems(restore(libraryItem, libraryIndex));
+      setResults(restore(canvasItem, canvasIndex));
+      throw error;
     }
   }
 

@@ -83,16 +83,12 @@ export default function StudioView(p) {
   }
   async function removeSelectedImages() {
     const targets = (tab === "library" ? p.libraryItems : p.results.filter(Boolean)).filter((item) => selection.has(item.id));
-    for (const item of targets) {
-      try {
-        await p.deleteLibraryItem(item.id);
-      } catch (error) {
-        p.setError(`${item.filename}: ${error.message}`);
-        return;
-      }
-    }
     setSelection(new Set());
+    const outcomes = await Promise.allSettled(targets.map((item) => p.deleteLibraryItem(item.id)));
+    const errors = outcomes.flatMap((result, index) => result.status === "rejected" ? [`${targets[index].filename}: ${result.reason.message}`] : []);
+    if (errors.length) p.setError(errors.join(" · "));
   }
+
   async function moveLibraryItem(sourceId, targetId) {
     if (sourceId === targetId) return;
     const ordered = [...p.libraryItems];
