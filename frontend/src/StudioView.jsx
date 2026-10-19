@@ -64,21 +64,35 @@ export default function StudioView(p) {
   const [exporting, setExporting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [context, setContext] = useState(null);
-  const [deleteTarget, setDeleteTarget] = useState(null);
+  const deletingIds = useRef(new Set());
+  async function removeImage(item) {
+    if (deletingIds.current.has(item.id)) return;
+    deletingIds.current.add(item.id);
+    setContext(null);
+    try {
+      await p.deleteLibraryItem(item.id);
+      setSelection(
+        (current) => new Set([...current].filter((id) => id !== item.id)),
+      );
+    } catch (error) {
+      p.setError(error.message);
+    } finally {
+      deletingIds.current.delete(item.id);
+    }
+  }
   const [visible, setVisible] = useState(80);
   const inputRef = useRef(null),
     moreRef = useRef(null);
   useEffect(() => {
-    if (!libraryOpen && !deleteTarget) return;
+    if (!libraryOpen) return;
     const key = (event) => {
       if (event.key === "Escape") {
         setLibraryOpen(false);
-        setDeleteTarget(null);
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [libraryOpen, deleteTarget]);
+  }, [libraryOpen]);
   const items = tab === "library" ? p.libraryItems : p.results;
   const count = tab === "library" ? items.length : p.outputCount;
   const workspaceRef = useRef(null);
@@ -620,7 +634,7 @@ export default function StudioView(p) {
                   onSelect={() => item && toggleSelection(item.id)}
                   onDownload={() => download(item)}
                   onReuse={() => reuse(item)}
-                  onDelete={() => setDeleteTarget(item)}
+                  onDelete={() => removeImage(item)}
                   canDelete={!p.isGenerating}
                   onContext={(event) => {
                     event.preventDefault();
@@ -820,7 +834,7 @@ export default function StudioView(p) {
                   onOpen={() => p.openLibraryImage(item)}
                   onDownload={() => download(item)}
                   onReuse={() => reuse(item)}
-                  onDelete={() => setDeleteTarget(item)}
+                  onDelete={() => removeImage(item)}
                   canDelete={!p.isGenerating}
                 />
               ))}
@@ -870,45 +884,11 @@ export default function StudioView(p) {
           <button
             role="menuitem"
             disabled={p.isGenerating}
-            onClick={() => setDeleteTarget(context.item)}
+            onClick={() => removeImage(context.item)}
           >
             <Trash2 />
             Odstranit
           </button>
-        </div>
-      )}
-      {deleteTarget && (
-        <div className="modal-backdrop confirm-backdrop">
-          <section
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="Odstranit obrázek?"
-            className="confirm-dialog"
-          >
-            <h2>Odstranit obrázek?</h2>
-            <p>Výsledek se odstraní z galerie i knihovny.</p>
-            <div>
-              <button
-                className="toolbar-button"
-                onClick={() => setDeleteTarget(null)}
-              >
-                Zrušit
-              </button>
-              <button
-                className="danger-button"
-                onClick={async () => {
-                  try {
-                    await p.deleteLibraryItem(deleteTarget.id);
-                    setDeleteTarget(null);
-                  } catch (error) {
-                    p.setError(error.message);
-                  }
-                }}
-              >
-                Odstranit
-              </button>
-            </div>
-          </section>
         </div>
       )}
     </div>

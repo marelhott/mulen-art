@@ -741,10 +741,15 @@ input[type="range"]::-moz-range-progress {
   margin-bottom: 26px;
 }
 .tabs {
+  flex-shrink: 0;
   background: transparent;
   border-color: var(--line);
 }
 .tabs button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 9px;
   letter-spacing: 0;
   padding: 6px 10px;
@@ -752,7 +757,9 @@ input[type="range"]::-moz-range-progress {
 .tabs span {
   font-size: 8px;
   opacity: 0.7;
-  margin-left: 4px;
+  margin-left: 0;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 .density-control {
   display: flex;

@@ -65,7 +65,7 @@ function App() {
   const recordsCache = useRef(new Map());
   const previewUrl = inputItems[0]?.url || "";
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
-  const [resizeScale, setResizeScale] = useState(1);
+  const [resizeScale, setResizeScale] = useState(2);
   const [modelId, setModelId] = useState("tuymans_sdxl");
   const [generationMode, setGenerationMode] = useState("checkpoint");
   const [loraId, setLoraId] = useState("none");
@@ -382,7 +382,7 @@ function App() {
     setDenoise(Number(preset.denoise ?? 0.45));
     setCfg(Number(preset.cfg ?? 5));
     setSteps(Number(preset.steps ?? 25));
-    setResizeScale(Number(preset.resizeScale ?? 1));
+    setResizeScale(Number(preset.resizeScale ?? 2));
   }
 
   function handlePresetSelect(event) {
