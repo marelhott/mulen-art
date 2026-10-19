@@ -110,6 +110,22 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def health():
         return {"ok": True, "provider": "modal", "demo_mode": False}
 
+    @app.middleware("http")
+    async def fresh_frontend_entry(request: Request, call_next):
+        entry = request.url.path in {"/", "/index.html"}
+        if entry:
+            # StaticFiles ETags depend on size/mtime. Image builds can preserve those
+            # across changed, equal-length asset names and incorrectly answer 304.
+            request.scope["headers"] = [(key, value) for key, value in request.scope["headers"]
+                                        if key.lower() not in {b"if-none-match", b"if-modified-since"}]
+        response = await call_next(request)
+        if entry:
+            response.headers["Cache-Control"] = "no-store"
+            for header in ("etag", "last-modified"):
+                if header in response.headers:
+                    del response.headers[header]
+        return response
+
     @app.get("/api/options")
     def options():
         return get_options()
@@ -212,7 +228,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         expanded = []
         for source_index, payload in enumerate(payloads):
             for variant_index in range(payload["num_images"]):
-                expanded.append({**payload, "num_images": 1, "source_index": source_index, "variant_index": variant_index})
+                expanded.append({**payload, "seed": -1 if payload["seed"] == -1 else (payload["seed"] + variant_index) % 2**32, "num_images": 1, "source_index": source_index, "variant_index": variant_index})
         return enqueue(expanded)
 
     @app.get("/api/jobs/{job_id}")

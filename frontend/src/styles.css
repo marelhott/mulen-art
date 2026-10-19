@@ -1924,3 +1924,9 @@ input[type="range"]::-moz-range-progress {
     transform: rotate(360deg);
   }
 }
+
+.engine-hint { font-size: 11px; line-height: 1.6; color: var(--muted); margin: -8px 0 22px; }
+.engine-field input, .engine-field textarea { width: 100%; box-sizing: border-box; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 9px; padding: 10px; font: inherit; }
+.engine-field textarea { resize: vertical; }
+.engine-prompts { margin-bottom: 24px; }
+.engine-prompts summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-bottom: 16px; }

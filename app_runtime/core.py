@@ -2,6 +2,7 @@ import base64
 import gc
 import io
 import json
+import math
 import os
 import random
 import time
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL.PngImagePlugin import PngInfo
 
 
 QUALITY_TO_STEPS = {
@@ -22,7 +24,7 @@ QUALITY_TO_STEPS = {
 MIN_SCALE = 0.5
 MAX_SCALE = 4.0
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config" / "models.json"
-SAMPLER_OPTIONS = {"dpmpp_2m", "euler_a", "ddim"}
+SAMPLER_OPTIONS = {"dpmpp_2m", "dpmpp_2m_sde", "euler_a", "ddim"}
 SCHEDULE_OPTIONS = {"karras", "normal"}
 
 CURRENT_MODEL_ID = None
@@ -49,6 +51,13 @@ class GenerationInput:
     schedule: str
     scale: float
     num_images: int
+    render_mode: str = "quick"
+    seed: int = -1
+    prompt: str = ""
+    negative_prompt: str = ""
+    max_side: int = 1536
+    detail_strength: float = 0.25
+    detail_steps: int = 15
 
 
 def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None,
@@ -71,7 +80,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
     setup_seconds = time.monotonic() - started
 
     source_image = decode_image(generation_input.image_base64)
-    source_image = normalize_dimensions(source_image)
+    source_image = normalize_dimensions(source_image, min(generation_input.max_side, 1024) if generation_input.render_mode == "detail" else generation_input.max_side)
     report_progress(progress_callback, 0.34, f"Source normalized to {source_image.width}x{source_image.height}")
 
     steps = generation_input.steps
@@ -83,30 +92,64 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
         "steps": steps, "scale": generation_input.scale, "guidance_scale": guidance_scale,
         "sampler": generation_input.sampler, "schedule": generation_input.schedule,
         "demo_mode": False,
+        "render_mode": generation_input.render_mode,
+        "prompt": generation_input.prompt, "negative_prompt": generation_input.negative_prompt,
+        "max_side": generation_input.max_side,
+        "generation_width": source_image.width, "generation_height": source_image.height,
+        "steps_mode": "schedule" if generation_input.render_mode == "quick" else "actual",
+        "detail_strength": generation_input.detail_strength, "detail_steps": generation_input.detail_steps,
+        "upscaler": "sdxl_second_pass" if generation_input.render_mode == "detail" else "lanczos",
+
     }
 
     inference_started = time.monotonic()
     for index in range(generation_input.num_images):
-        seed = random.randint(0, 2**31 - 1)
+        seed = random.randint(0, 2**32 - 1) if generation_input.seed == -1 else (generation_input.seed + index) % 2**32
         generator = torch.Generator(device="cuda").manual_seed(seed)
-        base_progress = 0.35 + (index / max(1, generation_input.num_images)) * 0.55
+        base_progress = 0.35 + (index / generation_input.num_images) * 0.55
+        span = 0.55 / generation_input.num_images
+        detail = generation_input.render_mode == "detail"
+        schedule_steps, strength = inference_schedule(steps, generation_input.denoise, generation_input.render_mode != "quick")
+        # An explicit empty negative prompt is encoded, unlike None (zero embeddings in SDXL).
+        conditioning = {"prompt": generation_input.prompt,
+                        "negative_prompt": generation_input.negative_prompt if generation_input.render_mode != "quick" or generation_input.negative_prompt else None}
         report_progress(progress_callback, base_progress, f"Generating image {index + 1}/{generation_input.num_images}")
         result = pipe(
-            prompt="",
-            image=source_image,
-            strength=generation_input.denoise,
-            guidance_scale=guidance_scale,
-            num_inference_steps=steps,
+            **conditioning, image=source_image, strength=strength,
+            guidance_scale=guidance_scale, num_inference_steps=schedule_steps,
             generator=generator,
-            callback_on_step_end=build_step_callback(progress_callback, base_progress, generation_input.num_images, index, steps),
+            callback_on_step_end=build_step_callback(progress_callback, base_progress, generation_input.num_images, index, steps,
+                                                     span=span * (0.45 if detail else 1), stage="Base" if detail else ""),
             callback_on_step_end_tensor_inputs=[],
         ).images[0]
-
-        result = upscale_if_needed(result, generation_input.scale)
-        output_images.append(encode_image(result))
+        actual_steps = int(pipe.num_timesteps)
+        effective_strength = strength
+        effective_detail_strength = None
+        if detail:
+            target = detail_dimensions(result.size, generation_input.scale)
+            result = result.resize(target, Image.Resampling.LANCZOS)
+            schedule_steps, strength = inference_schedule(generation_input.detail_steps, generation_input.detail_strength, True)
+            effective_detail_strength = strength
+            result = pipe(
+                **conditioning, image=result, strength=strength,
+                guidance_scale=guidance_scale, num_inference_steps=schedule_steps,
+                generator=generator,
+                callback_on_step_end=build_step_callback(progress_callback, base_progress + span * 0.45,
+                    generation_input.num_images, index, generation_input.detail_steps, span=span * 0.55, stage="Detail"),
+                callback_on_step_end_tensor_inputs=[],
+            ).images[0]
+        else:
+            result = upscale_if_needed(result, generation_input.scale)
+        image_meta = {**meta, "seed": seed, "actual_steps": actual_steps,
+                      "effective_strength": effective_strength,
+                      "effective_detail_strength": effective_detail_strength,
+                      "actual_detail_steps": int(pipe.num_timesteps) if detail else 0,
+                      "output_width": result.width, "output_height": result.height}
+        output_images.append({**encode_image(result, image_meta), "generation_meta": image_meta})
         if image_callback is not None:
-            image_callback(output_images[-1], meta)
-        report_progress(progress_callback, base_progress + 0.55 / max(1, generation_input.num_images), f"Image {index + 1}/{generation_input.num_images} saved")
+            image_callback(output_images[-1], image_meta)
+        meta.update(image_meta)
+        report_progress(progress_callback, base_progress + span, f"Image {index + 1}/{generation_input.num_images} saved")
 
     meta["setup_seconds"] = round(setup_seconds, 2)
     meta["generation_and_save_seconds"] = round(time.monotonic() - inference_started, 2)
@@ -124,6 +167,7 @@ def get_options() -> dict[str, Any]:
         "loras": [{"id": item["id"], "name": item["name"]} for item in config.get("loras", [])],
         "samplers": [
             {"id": "dpmpp_2m", "name": "DPM++ 2M"},
+            {"id": "dpmpp_2m_sde", "name": "DPM++ 2M SDE"},
             {"id": "euler_a", "name": "Euler a"},
             {"id": "ddim", "name": "DDIM"},
         ],
@@ -202,6 +246,21 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     if isinstance(raw_count, bool) or num_images < 1 or str(raw_count).strip() != str(num_images):
         raise ValueError("num_images must be a positive integer")
 
+    render_mode = str(payload.get("render_mode", "quick"))
+    if render_mode not in {"quick", "faithful", "detail"}:
+        raise ValueError("Unknown render mode")
+    seed_value = payload.get("seed", -1)
+    seed = int(seed_value)
+    if isinstance(seed_value, bool) or seed != float(seed_value) or not -1 <= seed <= 2**32 - 1:
+        raise ValueError("Seed must be -1 (random) or an integer from 0 to 4294967295")
+    if render_mode == "detail" and scale > 2:
+        raise ValueError("Detail mode supports up to 2x; use quick/faithful mode for larger resizing")
+    if sampler in {"euler_a", "ddim"}:
+        schedule = "normal"  # These Diffusers schedulers do not implement Karras sigmas.
+    prompt = str(payload.get("prompt", ""))
+    negative_prompt = str(payload.get("negative_prompt", ""))
+    if max(len(prompt), len(negative_prompt)) > 4000:
+        raise ValueError("Prompt is too long")
     return GenerationInput(
         image_base64=str(payload["image_base64"]),
         model_id=model_id,
@@ -214,6 +273,10 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         schedule=schedule,
         scale=scale,
         num_images=num_images,
+        render_mode=render_mode, seed=seed, prompt=prompt, negative_prompt=negative_prompt,
+        max_side=int(clamp(int(payload.get("max_side", 1536)), 512, 2048)),
+        detail_strength=clamp(float(payload.get("detail_strength", 0.25)), 0.05, 0.6),
+        detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
     )
 
 
@@ -242,6 +305,7 @@ def ensure_pipeline(model_id: str):
     )
     pipe.scheduler = make_scheduler(pipe.scheduler.config, "dpmpp_2m", "karras")
     pipe = pipe.to("cuda")
+    pipe.enable_vae_tiling()
 
     try:
         pipe.enable_xformers_memory_efficient_attention()
@@ -288,17 +352,15 @@ def ensure_lora(pipe, lora_id: str, lora_strength: float) -> None:
 def make_scheduler(config: Any, sampler: str, schedule: str):
     diffusers = get_diffusers()
     if sampler == "euler_a":
-        return diffusers["euler_a_scheduler"].from_config(
-            config,
-            use_karras_sigmas=schedule == "karras",
-        )
+        return diffusers["euler_a_scheduler"].from_config(config)
 
     if sampler == "ddim":
         return diffusers["ddim_scheduler"].from_config(config)
 
     return diffusers["scheduler"].from_config(
         config,
-        algorithm_type="sde-dpmsolver++",
+        algorithm_type="sde-dpmsolver++" if sampler == "dpmpp_2m_sde" else "dpmsolver++",
+        solver_order=2,
         use_karras_sigmas=schedule == "karras",
     )
 
@@ -312,8 +374,8 @@ def decode_image(image_base64: str) -> Image.Image:
     return image.convert("RGB")
 
 
-def normalize_dimensions(image: Image.Image) -> Image.Image:
-    max_side = int(os.getenv("MAX_IMAGE_SIDE", "1536"))
+def normalize_dimensions(image: Image.Image, max_side: int | None = None) -> Image.Image:
+    max_side = max_side or int(os.getenv("MAX_IMAGE_SIDE", "1536"))
     width, height = image.size
 
     if max(width, height) > max_side:
@@ -326,6 +388,18 @@ def normalize_dimensions(image: Image.Image) -> Image.Image:
     return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def inference_schedule(steps: int, strength: float, actual: bool) -> tuple[int, float]:
+    if not actual:
+        return max(steps, math.ceil(1 / strength)), strength
+    # Diffusers slices the schedule to floor(N * strength). Preserve requested actual steps.
+    total = math.ceil(steps / strength)
+    return total, min(1.0, (steps + 1e-6) / total)
+
+
+def detail_dimensions(size: tuple[int, int], scale: float) -> tuple[int, int]:
+    return tuple(max(64, round(side * scale / 8) * 8) for side in size)
+
+
 def upscale_if_needed(image: Image.Image, scale: float) -> Image.Image:
     if scale == 1.0:
         return image
@@ -333,13 +407,24 @@ def upscale_if_needed(image: Image.Image, scale: float) -> Image.Image:
     return image.resize((round(width * scale), round(height * scale)), Image.Resampling.LANCZOS)
 
 
-def encode_image(image: Image.Image) -> dict[str, Any]:
+def encode_image(image: Image.Image, metadata: dict | None = None) -> dict[str, Any]:
     output_format = os.getenv("OUTPUT_FORMAT", "PNG").upper()
     if output_format not in {"PNG", "WEBP"}:
         output_format = "PNG"
 
     buffer = io.BytesIO()
     save_kwargs = {"format": output_format}
+    if output_format == "PNG" and metadata is not None:
+        info = PngInfo()
+        info.add_text("sdxl_studio", json.dumps(metadata, ensure_ascii=False))
+        # Forge's PNG Info can read these common fields; engine-specific settings remain in JSON.
+        sampler_names = {"dpmpp_2m": "DPM++ 2M", "dpmpp_2m_sde": "DPM++ 2M SDE", "euler_a": "Euler a", "ddim": "DDIM"}
+        info.add_text("parameters", f"{metadata.get('prompt', '')}\nNegative prompt: {metadata.get('negative_prompt', '')}\n"
+                      f"Steps: {metadata.get('steps')}, Sampler: {sampler_names.get(metadata.get('sampler'), metadata.get('sampler'))}, "
+                      f"Schedule type: {metadata.get('schedule', '').title()}, CFG scale: {metadata.get('guidance_scale')}, "
+                      f"Seed: {metadata.get('seed')}, Size: {metadata.get('generation_width')}x{metadata.get('generation_height')}, "
+                      f"Model: {metadata.get('model_id')}, Denoising strength: {metadata.get('denoise')}")
+        save_kwargs["pnginfo"] = info
     if output_format == "WEBP":
         save_kwargs.update({"quality": 95, "method": 6})
     image.save(buffer, **save_kwargs)
@@ -354,7 +439,7 @@ def encode_image(image: Image.Image) -> dict[str, Any]:
 
 def build_demo_response(generation_input: GenerationInput, progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
     source_image = decode_image(generation_input.image_base64)
-    source_image = normalize_dimensions(source_image)
+    source_image = normalize_dimensions(source_image, min(generation_input.max_side, 1024) if generation_input.render_mode == "detail" else generation_input.max_side)
     report_progress(progress_callback, 0.12, f"Demo source normalized to {source_image.width}x{source_image.height}")
     output_images = []
 
@@ -457,17 +542,17 @@ def report_progress(progress_callback: ProgressCallback | None, progress: float,
         progress_callback(min(max(progress, 0.0), 1.0), message)
 
 
-def build_step_callback(progress_callback: ProgressCallback | None, base_progress: float, total_images: int, image_index: int, steps: int):
+def build_step_callback(progress_callback: ProgressCallback | None, base_progress: float, total_images: int, image_index: int, steps: int, *, span: float | None = None, stage: str = ""):
     if progress_callback is None:
         return None
 
-    image_span = 0.55 / max(1, total_images)
+    image_span = span if span is not None else 0.55 / max(1, total_images)
 
     def step_callback(_pipe, step_index, _timestep, _kwargs):
         actual_steps = max(1, int(getattr(_pipe, "num_timesteps", steps)))
         fraction = min(1, (step_index + 1) / actual_steps)
         progress = base_progress + fraction * image_span
-        report_progress(progress_callback, progress, f"Image {image_index + 1}/{total_images}: step {step_index + 1}/{actual_steps}")
+        report_progress(progress_callback, progress, f"Image {image_index + 1}/{total_images}: {stage + ' · ' if stage else ''}step {step_index + 1}/{actual_steps}")
         return _kwargs
 
     return step_callback

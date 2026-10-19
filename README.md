@@ -91,9 +91,33 @@ frontend host or Vercel account is required.
 - Job records expire according to Modal Dict retention; completed images persist
   separately in the output Volume until deleted.
 
-The pipeline uses an empty text prompt, matching the original workflow. Denoise,
-checkpoint and LoRA control the appearance. Output scaling uses Lanczos, not AI
-super-resolution. Inputs are normalized to at most 1536 px on the long side.
+## Generation controls
+
+- Quick: original schedule-based step budget (e.g. 25 × 0.45 = 11 denoising steps).
+  Blank negative prompts use the original SDXL zero conditioning. Enlarging uses Lanczos.
+- Full steps (new UI default): preserves the requested number of actual denoising steps.
+  The schedule length is ceil(steps / denoise); effective strength is recorded because
+  discretization slightly changes it. Empty negative prompts are explicitly encoded.
+  This is a Diffusers implementation, not a claim of pixel-identical Forge sampling.
+- Detail: full first pass, Lanczos enlargement, then another SDXL img2img pass with the
+  same checkpoint/LoRA. Defaults: 15 detail steps at 0.25 denoise. This can change texture
+  and composition, and consumes more GPU time. First-pass long side is capped at 1024,
+  scale at 2×, so second-pass long side is at most 2048. VAE tiling reduces memory use;
+  this is not tiled UNet diffusion. No refiner or third-party upscaler is substituted.
+- DPM++ 2M uses dpmsolver++ order 2; DPM++ 2M SDE is a separate choice. Karras applies
+  only to these two. Euler a and DDIM use their supported normal schedule.
+- Single-pass resolution: selectable 1024/1536/2048 maximum long side; small sources are
+  not enlarged before the first pass. Default output enlargement remains 2×.
+- Seed −1 is random. A fixed unsigned 32-bit seed increments across variants; independent
+  inputs intentionally reuse the same variant seeds for comparison. No guarantee of
+  identical noise across Forge, different hardware or dependency versions.
+- Optional positive/negative plain-text prompts are passed to both SDXL text encoders.
+  Standard CLIP token limits apply; Forge prompt weighting/long-prompt chunking is not implemented.
+- Each output retains its own seed, actual step counts, effective strengths and sizes in
+  library JSON and embedded PNG metadata (`sdxl_studio` plus common `parameters` fields).
+  Old saved presets restore quick/SDE behavior; new presets retain all engine controls.
+
+Rollback before these changes: Git tag `studio-before-detail-engine-2026-10-19`.
 
 ## Verification
 

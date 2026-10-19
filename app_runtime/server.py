@@ -205,6 +205,7 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
     saved_items = []
 
     for index, image in enumerate(result.get("images", []), start=1):
+        meta = {**result.get("meta", {}), **image.get("generation_meta", {})}
         raw = base64.b64decode(image["image_base64"])
         extension = image.get("format", "png").lower()
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")

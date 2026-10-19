@@ -550,7 +550,7 @@ export default function StudioView(p) {
           <Range
             label="ZVĚTŠENÍ"
             min={0.5}
-            max={4}
+            max={p.engine.mode === "detail" ? 2 : 4}
             step={0.05}
             value={p.resizeScale}
             onChange={p.setResizeScale}
@@ -733,6 +733,16 @@ export default function StudioView(p) {
           <SlidersHorizontal size={13} />
           <Label>NASTAVENÍ GENEROVÁNÍ</Label>
         </div>
+        <Select label="ZPRACOVÁNÍ" value={p.engine.mode}
+          onChange={(mode) => {
+            p.setEngine((e) => ({...e, mode, sampler: mode === "quick" ? "dpmpp_2m_sde" : "dpmpp_2m"}));
+            if (mode === "detail" && p.resizeScale > 2) p.setResizeScale(2);
+          }}
+          items={[{id:"quick",name:"Rychlý · jeden průchod"},{id:"faithful",name:"Plné kroky · jeden průchod"},{id:"detail",name:"Detail · dva průchody"}]} />
+        <p className="engine-hint">{p.engine.mode === "quick"
+          ? `Při ${p.steps} krocích a tomto denoise proběhne přibližně ${Math.max(1, Math.floor(p.steps * p.denoise))} výpočtových kroků. Zvětšení je Lanczos.`
+          : p.engine.mode === "detail" ? "První průchod max. 1024 px, druhý dokresluje texturu až do 2048 px. Vyšší čas a spotřeba GPU."
+          : "Zadaný počet kroků skutečně proběhne. Při stejném nastavení trvá déle než rychlý režim. Zvětšení je Lanczos."}</p>
         <Range
           label="DENOISE"
           min={0.05}
@@ -758,22 +768,36 @@ export default function StudioView(p) {
           value={p.steps}
           onChange={p.setSteps}
         />
-        <Select
-          label="RYCHLOST"
-          value={
-            p.steps === 15 ? "preview" : p.steps === 25 ? "standard" : "custom"
-          }
-          onChange={(value) =>
-            value !== "custom" && p.setSteps(value === "preview" ? 15 : 25)
-          }
-          items={[
-            { id: "preview", name: "Rychlý náhled · 15 kroků" },
-            { id: "standard", name: "Standard · 25 kroků" },
-            ...(p.steps !== 15 && p.steps !== 25
-              ? [{ id: "custom", name: `Vlastní · ${p.steps} kroků` }]
-              : []),
-          ]}
-        />
+        <Select label="SAMPLER" value={p.engine.sampler}
+          onChange={(sampler) => p.setEngine((e)=>({...e, sampler, schedule: ["euler_a","ddim"].includes(sampler) ? "normal" : e.schedule}))}
+          items={[{id:"dpmpp_2m",name:"DPM++ 2M"},{id:"dpmpp_2m_sde",name:"DPM++ 2M SDE"},{id:"euler_a",name:"Euler a"},{id:"ddim",name:"DDIM"}]} />
+        {["dpmpp_2m", "dpmpp_2m_sde"].includes(p.engine.sampler) && <Select label="ROZVRH ŠUMU" value={p.engine.schedule}
+          onChange={(schedule)=>p.setEngine((e)=>({...e,schedule}))}
+          items={[{id:"karras",name:"Karras"},{id:"normal",name:"Normal"}]} />}
+        {p.engine.mode !== "detail" && <Select label="MAX. STRANA PŘI GENEROVÁNÍ" value={String(p.engine.maxSide)}
+          onChange={(value)=>p.setEngine((e)=>({...e,maxSide:Number(value)}))}
+          items={[{id:"1024",name:"1024 px"},{id:"1536",name:"1536 px"},{id:"2048",name:"2048 px · vyšší nároky"}]} />}
+        {p.engine.mode === "detail" && <>
+          <Range label="PROMĚNA PŘI DOKRESLENÍ" min={0.05} max={0.6} step={0.01}
+            value={p.engine.detailStrength} onChange={(detailStrength)=>p.setEngine((e)=>({...e,detailStrength}))}
+            hint="Nízká hodnota lépe zachová tahy a kompozici" />
+          <Range label="KROKY DOKRESLENÍ" min={1} max={50} step={1}
+            value={p.engine.detailSteps} onChange={(detailSteps)=>p.setEngine((e)=>({...e,detailSteps}))} />
+        </>}
+        <label className="control-block engine-field"><Label>SEED · −1 = NÁHODNÝ</Label>
+          <input aria-label="Seed" type="number" min="-1" max="4294967295" step="1" value={p.engine.seed}
+            onChange={(event)=>p.setEngine((e)=>({...e,seed:event.target.value}))} />
+        </label>
+        <details className="engine-prompts"><summary>Prompt a negativní prompt</summary>
+          <label className="control-block engine-field"><Label>PROMPT</Label>
+            <textarea aria-label="Prompt" value={p.engine.prompt} rows={3} maxLength={4000}
+              onChange={(event)=>p.setEngine((e)=>({...e,prompt:event.target.value}))} />
+          </label>
+          <label className="control-block engine-field"><Label>NEGATIVNÍ PROMPT</Label>
+            <textarea aria-label="Negativní prompt" value={p.engine.negativePrompt} rows={3} maxLength={4000}
+              onChange={(event)=>p.setEngine((e)=>({...e,negativePrompt:event.target.value}))} />
+          </label>
+        </details>
         <section className="control-block preset-block">
           <Label>ULOŽENÁ NASTAVENÍ</Label>
           <select
@@ -954,7 +978,7 @@ function Select({ label, value, onChange, items }) {
   return (
     <label className="control-block">
       <Label>{label}</Label>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)}>
         {items.map((item) => (
           <option key={item.id} value={item.id}>
             {item.name}
@@ -1552,6 +1576,13 @@ function ImageViewer({
               ["Denoise", settings.denoise],
               ["CFG", settings.cfg ?? settings.guidance_scale],
               ["Kroky", settings.steps],
+              ["Skutečné kroky", settings.actual_steps],
+              ["Režim", settings.render_mode],
+              ["Kroky dokreslení", settings.actual_detail_steps || undefined],
+              ["Denoise dokreslení", settings.render_mode === "detail" ? settings.detail_strength : undefined],
+              ["Rozvrh šumu", settings.schedule],
+              ["Prompt", settings.prompt || undefined],
+              ["Negativní prompt", settings.negative_prompt || undefined],
               ["Síla LoRA", settings.lora_strength],
               ["Sampler", settings.sampler],
               ["Seed", settings.seed],

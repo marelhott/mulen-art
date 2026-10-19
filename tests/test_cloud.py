@@ -66,12 +66,43 @@ class CloudFlowTests(unittest.TestCase):
         ledger["2026-10"] = 100
         self.assertEqual(VolumeUsage(path, Mock()).get("2026-10"), 100)
 
+    def test_public_frontend_refresh_never_reuses_equal_size_build(self):
+        import os
+        frontend = self.output / "frontend"
+        frontend.mkdir()
+        index = frontend / "index.html"
+        index.write_text('<html>build-one</html>')
+        os.utime(index, (1000, 1000))
+        app = create_app(jobs={}, usage={}, submit=lambda *_: None, refresh=lambda: None,
+                         commit=lambda: None, username=None, password=None,
+                         auth_enabled=False, frontend_dir=str(frontend))
+        client = TestClient(app)
+        first = client.get("/")
+        self.assertEqual(first.headers["cache-control"], "no-store")
+        index.write_text('<html>build-two</html>')
+        os.utime(index, (1000, 1000))
+        second = client.get("/", headers={"if-none-match": "*", "if-modified-since": "Wed, 21 Oct 2037 07:28:00 GMT"})
+        self.assertEqual(second.status_code, 200)
+        self.assertIn('build-two', second.text)
+        self.assertNotIn('etag', second.headers)
+
     def test_options_and_polling_do_not_submit_gpu(self):
         data = self.client.get("/api/options").json()
         self.assertEqual(len(data["models"]), 4)
         self.assertEqual(len(data["loras"]), 3)
         self.assertEqual(self.client.get("/api/jobs/missing").status_code, 404)
         self.assertEqual(len(self.submissions), 0)
+
+    def test_batch_variant_seeds_and_engine_options_survive_gateway(self):
+        settings = {**self.payload, "num_images": 3, "seed": 4294967295,
+                    "render_mode": "detail", "detail_steps": 8, "scale": 2}
+        self.app = self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None)
+        self.client = TestClient(self.app); self.client.auth = ("studio", "test-password")
+        response = self.client.post("/api/generate-batch", json={
+            "inputs": [{"image_base64": self.payload["image_base64"], "name": "test.png"}], "settings": settings})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([p["seed"] for _, p in self.submissions], [4294967295, 0, 1])
+        self.assertTrue(all(p["render_mode"] == "detail" and p["detail_steps"] == 8 for _, p in self.submissions))
 
     def test_invalid_input_does_not_allocate_gpu_or_quota(self):
         for payload in [{}, {**self.payload, "model_id": "missing"}, {**self.payload, "image_base64": "invalid"}]:

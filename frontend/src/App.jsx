@@ -4,8 +4,7 @@ import StudioView from "./StudioView";
 const API_URL = import.meta.env.VITE_API_URL || "";
 const POLL_INTERVAL = 1500;
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
-const DEFAULT_SAMPLER = "dpmpp_2m";
-const DEFAULT_SCHEDULE = "karras";
+const DEFAULT_ENGINE = { mode: "faithful", sampler: "dpmpp_2m", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
 const EMPTY_JOB = {
   id: "",
   status: "idle",
@@ -74,6 +73,7 @@ function App() {
   const [denoise, setDenoise] = useState(0.45);
   const [cfg, setCfg] = useState(5);
   const [steps, setSteps] = useState(25);
+  const [engine, setEngine] = useState(DEFAULT_ENGINE);
   const [results, setResults] = useState([]);
   const [libraryItems, setLibraryItems] = useState([]);
   const [selectedImage, setSelectedImage] = useState(null);
@@ -294,7 +294,7 @@ function App() {
   const targetSize = useMemo(() => {
     const ratio = Math.min(
       1,
-      1536 / Math.max(imageSize.width, imageSize.height),
+      (engine.mode === "detail" ? Math.min(engine.maxSide, 1024) : engine.maxSide) / Math.max(imageSize.width, imageSize.height),
     );
     const baseWidth = Math.max(
       64,
@@ -304,10 +304,10 @@ function App() {
       64,
       Math.floor((imageSize.height * ratio) / 8) * 8,
     );
-    const width = Math.round(baseWidth * resizeScale);
-    const height = Math.round(baseHeight * resizeScale);
+    const width = engine.mode === "detail" ? Math.max(64, Math.round(baseWidth * resizeScale / 8) * 8) : Math.round(baseWidth * resizeScale);
+    const height = engine.mode === "detail" ? Math.max(64, Math.round(baseHeight * resizeScale / 8) * 8) : Math.round(baseHeight * resizeScale);
     return { width, height };
-  }, [imageSize, resizeScale]);
+  }, [imageSize, resizeScale, engine.maxSide, engine.mode]);
 
   const isGenerating =
     isSubmitting ||
@@ -359,6 +359,7 @@ function App() {
       cfg,
       steps,
       resizeScale,
+      engine,
     };
   }
 
@@ -382,7 +383,8 @@ function App() {
     setDenoise(Number(preset.denoise ?? 0.45));
     setCfg(Number(preset.cfg ?? 5));
     setSteps(Number(preset.steps ?? 25));
-    setResizeScale(Number(preset.resizeScale ?? 2));
+    setEngine(preset.engine || { ...DEFAULT_ENGINE, mode: "quick", sampler: "dpmpp_2m_sde" });
+    setResizeScale(Math.min(preset.engine?.mode === "detail" ? 2 : 4, Number(preset.resizeScale ?? 2)));
   }
 
   function handlePresetSelect(event) {
@@ -470,8 +472,11 @@ function App() {
       lora_strength: Number(loraStrength),
       cfg: Number(cfg),
       steps: Number(steps),
-      sampler: DEFAULT_SAMPLER,
-      schedule: DEFAULT_SCHEDULE,
+      sampler: engine.sampler,
+      schedule: engine.schedule,
+      render_mode: engine.mode, seed: Number(engine.seed === "" ? -1 : engine.seed),
+      prompt: engine.prompt, negative_prompt: engine.negativePrompt,
+      max_side: engine.maxSide, detail_strength: engine.detailStrength, detail_steps: engine.detailSteps,
       scale: Number(resizeScale.toFixed(2)),
     };
     const count = numImages;
@@ -515,6 +520,7 @@ function App() {
               inputs: [{ name: item.file.name, image_base64: image }],
               settings: {
                 ...settings,
+                seed: settings.seed === -1 ? -1 : (settings.seed + offset) % 4294967296,
                 num_images: Math.min(8, count - offset),
               },
             }),
@@ -689,6 +695,7 @@ function App() {
         setCfg,
         steps,
         setSteps,
+        engine, setEngine,
         resizeScale,
         setResizeScale,
         targetSize,
