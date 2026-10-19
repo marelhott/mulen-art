@@ -91,13 +91,21 @@ frontend host or Vercel account is required.
 - Job records expire according to Modal Dict retention; completed images persist
   separately in the output Volume until deleted.
 
+## Canvas and saved library
+
+All generated outputs persist in `/api/history`, displayed on the canvas across batches
+and reloads. New outputs enter the library only through explicit Save. Removing an item
+from the library clears its membership, preserving the image in history. Existing records
+without membership metadata retain their previous saved status. Single click opens the
+viewer; clicking the enlarged image closes it. Multi-selection uses a separate mode.
+
 ## Generation controls
 
 - Quick: original schedule-based step budget (e.g. 25 × 0.45 = 11 denoising steps).
   Blank negative prompts use the original SDXL zero conditioning. Enlarging uses Lanczos.
 - Full steps (new UI default): preserves the requested number of actual denoising steps.
   The schedule length is ceil(steps / denoise); effective strength is recorded because
-  discretization slightly changes it. Empty negative prompts are explicitly encoded.
+  discretization slightly changes it.
   This is a Diffusers implementation, not a claim of pixel-identical Forge sampling.
 - Detail: full first pass, Lanczos enlargement, then another SDXL img2img pass with the
   same checkpoint/LoRA. Defaults: 15 detail steps at 0.25 denoise. This can change texture
@@ -111,8 +119,9 @@ frontend host or Vercel account is required.
 - Seed −1 is random. A fixed unsigned 32-bit seed increments across variants; independent
   inputs intentionally reuse the same variant seeds for comparison. No guarantee of
   identical noise across Forge, different hardware or dependency versions.
-- Optional positive/negative plain-text prompts are passed to both SDXL text encoders.
-  Standard CLIP token limits apply; Forge prompt weighting/long-prompt chunking is not implemented.
+- The studio generates without text prompts, including when restoring old presets.
+  It uses the original zero negative conditioning for empty negative prompts, independently
+  of render mode. Internal API conditioning comparison remains available for diagnostics.
 - Each output retains its own seed, actual step counts, effective strengths and sizes in
   library JSON and embedded PNG metadata (`sdxl_studio` plus common `parameters` fields).
   Old saved presets restore quick/SDE behavior; new presets retain all engine controls.

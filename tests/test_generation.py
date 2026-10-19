@@ -68,12 +68,21 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual([call['image'].size for call in pipe.calls], [(128, 96), (256, 192)] * 2)
         self.assertEqual([meta['seed'] for meta in emitted], [42, 43])
         self.assertTrue(all(meta['actual_steps'] == 25 and meta['actual_detail_steps'] == 15 for meta in emitted))
-        self.assertEqual(pipe.calls[0]['negative_prompt'], '')
+        self.assertIsNone(pipe.calls[0]['negative_prompt'])
         self.assertEqual([u[0] for u in updates], sorted(u[0] for u in updates))
         im = Image.open(io.BytesIO(base64.b64decode(result['images'][0]['image_base64'])))
         self.assertEqual(json.loads(im.info['sdxl_studio'])['seed'], 42)
         self.assertIn('Seed: 42', im.info['parameters'])
         self.assertEqual(result['images'][1]['generation_meta']['seed'], 43)
+
+    def test_conditioning_is_independent_of_render_mode(self):
+        for mode in ('quick', 'faithful', 'detail'):
+            for conditioning, negative, expected in (
+                ('style', '', None), ('encoded', '', ''), ('style', 'blur', 'blur')):
+                pipe, result, _, _ = self.run_generation(render_mode=mode,
+                    conditioning_mode=conditioning, negative_prompt=negative)
+                self.assertTrue(all(call['negative_prompt'] == expected for call in pipe.calls))
+                self.assertEqual(result['meta']['conditioning_mode'], conditioning)
 
     def test_quick_always_has_at_least_one_denoising_step(self):
         for strength in (.05, .1, .35, .45, 1):
@@ -99,7 +108,7 @@ class GenerationTests(unittest.TestCase):
 
     def test_invalid_settings_rejected_and_unsupported_karras_normalized(self):
         for override in ({'seed': -2}, {'seed': 1.2}, {'seed': 2**32}, {'seed': True},
-                         {'render_mode': 'missing'}, {'render_mode': 'detail', 'scale': 4}):
+                         {'conditioning_mode': 'missing'}, {'render_mode': 'missing'}, {'render_mode': 'detail', 'scale': 4}):
             with self.assertRaises(ValueError):
                 core.parse_input({**self.payload, **override})
         self.assertEqual(core.parse_input({**self.payload, 'sampler': 'euler_a'}).schedule, 'normal')

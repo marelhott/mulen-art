@@ -61,6 +61,7 @@ export default function StudioView(p) {
     () => Number(localStorage.getItem("img2img-thumb-size")) || 0,
   );
   const [selection, setSelection] = useState(new Set());
+  const [selecting, setSelecting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [context, setContext] = useState(null);
@@ -119,7 +120,7 @@ export default function StudioView(p) {
     return () => window.removeEventListener("keydown", key);
   }, [libraryOpen]);
   const items = tab === "library" ? p.libraryItems : p.results;
-  const count = tab === "library" ? items.length : p.outputCount;
+  const count = items.length;
   const workspaceRef = useRef(null);
   const [workspaceWidth, setWorkspaceWidth] = useState(600);
   useEffect(() => {
@@ -157,6 +158,7 @@ export default function StudioView(p) {
   useEffect(() => {
     setVisible(80);
     setSelection(new Set());
+    setSelecting(false);
   }, [tab]);
   useEffect(() => {
     if (!moreRef.current) return;
@@ -275,10 +277,10 @@ export default function StudioView(p) {
         <button
           className={tab === "results" ? "active" : ""}
           onClick={() => setTab("results")}
-          title="Výsledky"
+          title="Plátno"
         >
           <Grid2X2 />
-          <span>STUDIO</span>
+          <span>PLÁTNO</span>
         </button>
         <button
           className={tab === "library" ? "active" : ""}
@@ -336,6 +338,13 @@ export default function StudioView(p) {
                 : "GENERUJI"
               : "GENEROVAT"}
         </button>
+        <OverallProgress
+          progress={p.progressValue}
+          job={p.job}
+          active={p.isGenerating || p.isSubmitting}
+          ready={p.readyCount}
+          total={p.outputCount}
+        />
         <div className="control-block">
           <div className="label-row">
             <Label>VARIANTY NA VSTUP</Label>
@@ -569,16 +578,14 @@ export default function StudioView(p) {
           <div>
             <h1>
               <span className="heading-glow" />
-              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : "VÝSLEDKY GENEROVÁNÍ"}
+              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : "PLÁTNO · HISTORIE GENEROVÁNÍ"}
             </h1>
             <p>
               {tab === "library"
                 ? `${items.length} uložených obrázků`
                 : p.isGenerating
                   ? `${p.readyCount} / ${p.outputCount} hotovo · ${p.sourceCount} vstupů`
-                  : p.readyCount
-                    ? `${p.readyCount} uložených výsledků`
-                    : "Tvoje modely. Tvoje obrazy."}
+                  : `${p.results.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
             </p>
           </div>
           <button
@@ -596,7 +603,7 @@ export default function StudioView(p) {
               aria-pressed={tab === "results"}
               onClick={() => setTab("results")}
             >
-              Výsledky
+              Plátno <span>{p.results.filter(Boolean).length}</span>
             </button>
             <button
               aria-pressed={tab === "library"}
@@ -629,6 +636,13 @@ export default function StudioView(p) {
             {p.error}
           </div>
         )}
+        <div className="canvas-actions">
+          <button className={`toolbar-button ${selecting ? "active" : ""}`} aria-pressed={selecting}
+            onClick={() => {setSelecting(!selecting); setSelection(new Set());}}>
+            <Check size={13} /> {selecting ? "Ukončit výběr" : "Vybrat více"}
+          </button>
+          <span className="help-text">Kliknutím zvětšíš · ve výběru označíš rámečkem</span>
+        </div>
         {selection.size > 0 && (
           <div className="selection-toolbar">
             <span>
@@ -641,6 +655,10 @@ export default function StudioView(p) {
             <button disabled={exporting} onClick={() => exportImages(true)}>
               Stáhnout výběr
             </button>
+            {tab !== "library" && <button onClick={async () => {
+              try { for (const item of p.results.filter((item) => item && selection.has(item.id))) await p.saveLibraryItem(item.id); }
+              catch (error) { p.setError(error.message); }
+            }}><Plus size={13} /> Uložit výběr do knihovny</button>}
             {tab === "library" && (
               <button
                 className="selection-delete"
@@ -664,6 +682,11 @@ export default function StudioView(p) {
                   progress={p.progressValue}
                   selected={selection.has(item?.id)}
                   isLibrary={tab === "library"}
+                  selectMode={selecting}
+                  isSaved={p.libraryItems.some((saved) => saved.id === item?.id)}
+                  onSave={tab !== "library" ? async () => {
+                    try { await p.saveLibraryItem(item.id); } catch (error) { p.setError(error.message); }
+                  } : undefined}
                   onOpen={() => item && open(item, index)}
                   onSelect={() => item && toggleSelection(item.id)}
                   onLibraryDrop={
@@ -673,7 +696,7 @@ export default function StudioView(p) {
                   }
                   onDownload={() => download(item)}
                   onReuse={() => reuse(item)}
-                  onDelete={() => removeImage(item)}
+                  onDelete={tab === "library" ? () => removeImage(item) : undefined}
                   canDelete={!p.isGenerating}
                   onContext={(event) => {
                     event.preventDefault();
@@ -788,16 +811,6 @@ export default function StudioView(p) {
           <input aria-label="Seed" type="number" min="-1" max="4294967295" step="1" value={p.engine.seed}
             onChange={(event)=>p.setEngine((e)=>({...e,seed:event.target.value}))} />
         </label>
-        <details className="engine-prompts"><summary>Prompt a negativní prompt</summary>
-          <label className="control-block engine-field"><Label>PROMPT</Label>
-            <textarea aria-label="Prompt" value={p.engine.prompt} rows={3} maxLength={4000}
-              onChange={(event)=>p.setEngine((e)=>({...e,prompt:event.target.value}))} />
-          </label>
-          <label className="control-block engine-field"><Label>NEGATIVNÍ PROMPT</Label>
-            <textarea aria-label="Negativní prompt" value={p.engine.negativePrompt} rows={3} maxLength={4000}
-              onChange={(event)=>p.setEngine((e)=>({...e,negativePrompt:event.target.value}))} />
-          </label>
-        </details>
         <section className="control-block preset-block">
           <Label>ULOŽENÁ NASTAVENÍ</Label>
           <select
@@ -848,13 +861,7 @@ export default function StudioView(p) {
             <p>Žádná aktivní úloha</p>
           )}
         </details>
-        <OverallProgress
-          progress={p.progressValue}
-          job={p.job}
-          active={p.isGenerating || p.isSubmitting}
-          ready={p.readyCount}
-          total={p.outputCount}
-        />
+
         <div className="cloud-note">
           <span className="online-dot" />
           <p>
@@ -925,7 +932,7 @@ export default function StudioView(p) {
           <button
             role="menuitem"
             onClick={() => {
-              p.openLibraryImage(context.item);
+              open(context.item, items.findIndex((item) => item?.id === context.item.id));
               setContext(null);
             }}
           >
@@ -947,10 +954,14 @@ export default function StudioView(p) {
           <button
             role="menuitem"
             disabled={p.isGenerating}
-            onClick={() => removeImage(context.item)}
+            onClick={() => {
+              if (tab === "library") removeImage(context.item);
+              else p.saveLibraryItem(context.item.id).catch((error) => p.setError(error.message));
+              setContext(null);
+            }}
           >
             <Trash2 />
-            Odstranit
+            {tab === "library" ? "Odstranit z knihovny" : "Uložit do knihovny"}
           </button>
         </div>
       )}
@@ -1179,6 +1190,9 @@ function ImageCard({
   progress,
   selected,
   isLibrary,
+  selectMode,
+  isSaved,
+  onSave,
   onOpen,
   onSelect,
   onLibraryDrop,
@@ -1231,18 +1245,20 @@ function ImageCard({
         tabIndex={item ? 0 : -1}
         aria-label={
           item
-            ? `Vybrat obrázek ${index + 1} · dvojklikem otevřít`
+            ? `${selectMode ? "Vybrat" : "Zvětšit"} obrázek ${index + 1}`
             : `Výstup ${index + 1} čeká`
         }
-        onClick={onSelect || onOpen}
-        onDoubleClick={onOpen}
+        onClick={(event) => {
+          if (onSelect && (selectMode || event.metaKey || event.ctrlKey || event.shiftKey)) onSelect();
+          else onOpen?.();
+        }}
         onKeyDown={(event) => {
           if (
             event.target === event.currentTarget &&
             ["Enter", " "].includes(event.key)
           ) {
             event.preventDefault();
-            (onSelect || onOpen)();
+            (selectMode && onSelect ? onSelect : onOpen)?.();
           }
         }}
       >
@@ -1297,13 +1313,15 @@ function ImageCard({
             >
               <ArrowDownToLine />
             </IconButton>
-            <IconButton
+            {onSave && <IconButton label={isSaved ? `Obrázek ${index + 1} je v knihovně` : `Uložit obrázek ${index + 1} do knihovny`}
+              disabled={isSaved} onClick={onSave}>{isSaved ? <Check /> : <Plus />}</IconButton>}
+            {onDelete && <IconButton
               label={`Odstranit obrázek ${index + 1}`}
               disabled={!canDelete}
               onClick={onDelete}
             >
               <Trash2 />
-            </IconButton>
+            </IconButton>}
           </div>
         </footer>
       )}
@@ -1328,6 +1346,7 @@ function ImageViewer({
     dialogRef = useRef(null),
     closeRef = useRef(null),
     drag = useRef(null);
+  const clickStart = useRef(null), moved = useRef(false);
   const source = sourceFor(image),
     settings = image.settings || {},
     src = urlFor(image);
@@ -1452,12 +1471,12 @@ function ImageViewer({
           style={{
             transform: `translate(${zoom > 1 ? pan.x : 0}px, ${zoom > 1 ? pan.y : 0}px) scale(${mode === "compare" ? 1 : zoom})`,
             cursor:
-              mode === "compare" ? "default" : zoom > 1 ? "grab" : "zoom-in",
+              mode === "compare" ? "default" : zoom > 1 ? "grab" : "zoom-out",
           }}
-          onDoubleClick={() =>
-            mode !== "compare" && changeZoom(zoom === 1 ? 2 : 1)
-          }
+          onClick={() => { if (mode !== "compare" && !moved.current) onClose(); }}
           onPointerDown={(event) => {
+            clickStart.current = {x: event.clientX, y: event.clientY};
+            moved.current = false;
             if (zoom <= 1 || mode === "compare") return;
             drag.current = {
               x: event.clientX - pan.x,
@@ -1466,6 +1485,7 @@ function ImageViewer({
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
           onPointerMove={(event) => {
+            if (clickStart.current && Math.hypot(event.clientX - clickStart.current.x, event.clientY - clickStart.current.y) > 4) moved.current = true;
             if (drag.current)
               setPan({
                 x: event.clientX - drag.current.x,
@@ -1473,9 +1493,12 @@ function ImageViewer({
               });
           }}
           onPointerUp={() => {
+            clickStart.current = null;
             drag.current = null;
           }}
           onPointerCancel={() => {
+            clickStart.current = null;
+            moved.current = true;
             drag.current = null;
           }}
         >
@@ -1514,7 +1537,7 @@ function ImageViewer({
         <p className="viewer-help">
           {mode === "compare"
             ? "Posuvníkem porovnej původní vstup a výsledek"
-            : "Kolečko / dvojklik: zoom · tažení: posun · ← → obrázky · Esc zavřít"}
+            : "Kliknutí: zavřít · kolečko: zoom · tažení: posun · ← → obrázky"}
         </p>
       </div>
       <aside className="viewer-details">
@@ -1578,6 +1601,7 @@ function ImageViewer({
               ["Kroky", settings.steps],
               ["Skutečné kroky", settings.actual_steps],
               ["Režim", settings.render_mode],
+              ["Vedení modelu", settings.conditioning_mode],
               ["Kroky dokreslení", settings.actual_detail_steps || undefined],
               ["Denoise dokreslení", settings.render_mode === "detail" ? settings.detail_strength : undefined],
               ["Rozvrh šumu", settings.schedule],

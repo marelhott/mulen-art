@@ -152,12 +152,15 @@ class CloudFlowTests(unittest.TestCase):
         image = job["result"]["images"][0]
         self.assertNotIn("image_base64", image)
         self.assertEqual(self.client.get(image["url"]).status_code, 200)
-        items = self.client.get("/api/library").json()["items"]
-        self.assertEqual(len(items), 1)
-        self.assertEqual(self.client.delete(f'/api/library/{image["id"]}').status_code, 200)
-        self.assertEqual(self.client.get(image["url"]).status_code, 404)
+        self.assertEqual(len(self.client.get("/api/history").json()["items"]), 1)
         self.assertEqual(self.client.get("/api/library").json()["items"], [])
-        self.assertEqual(len(self.commits), 1)
+        self.assertEqual(self.client.post(f'/api/library/{image["id"]}').status_code, 200)
+        self.assertEqual(len(self.client.get("/api/library").json()["items"]), 1)
+        self.assertEqual(self.client.delete(f'/api/library/{image["id"]}').status_code, 200)
+        self.assertEqual(self.client.get(image["url"]).status_code, 200)
+        self.assertEqual(len(self.client.get("/api/history").json()["items"]), 1)
+        self.assertEqual(self.client.get("/api/library").json()["items"], [])
+        self.assertEqual(len(self.commits), 2)
 
     def test_worker_failure_visible_after_gateway_restart(self):
         import modal_app
@@ -187,7 +190,8 @@ class CloudFlowTests(unittest.TestCase):
             modal_app.generate_image.local("stream-job", self.payload)
         self.assertEqual(self.jobs["stream-job"]["status"], "completed")
         self.assertEqual(len(self.jobs["stream-job"]["result"]["images"]), 2)
-        self.assertEqual(len(self.client.get("/api/library").json()["items"]), 2)
+        self.assertEqual(len(self.client.get("/api/history").json()["items"]), 2)
+        self.assertEqual(self.client.get("/api/library").json()["items"], [])
 
     def test_img2img_progress_uses_actual_denoising_steps(self):
         from app_runtime.core import build_step_callback

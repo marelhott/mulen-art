@@ -50,6 +50,16 @@ def api_options():
     return get_options()
 
 
+@app.get("/api/history")
+def api_history():
+    return {"items": load_history_items()}
+
+
+@app.post("/api/library/{item_id}")
+def api_library_save(item_id: str):
+    return set_library_membership(item_id, True)
+
+
 @app.get("/api/library")
 def api_library():
     return {"items": load_library_items()}
@@ -57,26 +67,24 @@ def api_library():
 
 @app.delete("/api/library/{item_id}")
 def api_library_delete(item_id: str):
+    return set_library_membership(item_id, False)
+
+
+def set_library_membership(item_id: str, saved: bool):
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", item_id):
+        raise HTTPException(status_code=404, detail="Image not found.")
     metadata_path = OUTPUTS_DIR / f"{item_id}.json"
     if not metadata_path.exists():
-        raise HTTPException(status_code=404, detail="Library item not found.")
-
-    try:
-        data = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Invalid library metadata: {exc}") from exc
-
-    image_name = data.get("filename")
-    image_path = OUTPUTS_DIR / image_name if image_name else None
-
-    try:
-        metadata_path.unlink(missing_ok=True)
-        if image_path is not None:
-            image_path.unlink(missing_ok=True)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to delete library item: {exc}") from exc
-
-    return {"ok": True, "id": item_id}
+        raise HTTPException(status_code=404, detail="Image not found.")
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not data.get("filename") or not (OUTPUTS_DIR / data["filename"]).is_file():
+        raise HTTPException(status_code=404, detail="Image not found.")
+    data["saved_to_library"] = saved
+    temporary = metadata_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
+    temporary.replace(metadata_path)
+    return {"ok": True, "id": item_id, "item": data}
 
 
 def api_library_order(ids: list[str]):
@@ -225,6 +233,7 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
             "model_id": meta.get("model_id"),
             "lora_id": meta.get("lora_id"),
             "settings": meta,
+            "saved_to_library": False,
         }
         metadata_path = OUTPUTS_DIR / f"{stem}.json"
         metadata_path.write_text(json.dumps(record, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -233,7 +242,7 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
     return saved_items
 
 
-def load_library_items() -> list[dict[str, Any]]:
+def load_history_items() -> list[dict[str, Any]]:
     items = []
     for metadata_path in sorted(OUTPUTS_DIR.glob("*.json"), reverse=True):
         try:
@@ -246,6 +255,12 @@ def load_library_items() -> list[dict[str, Any]]:
             items.append(data)
         except Exception:
             continue
+    return items
+
+
+def load_library_items() -> list[dict[str, Any]]:
+    # Legacy images remain saved; new generations explicitly start on the canvas only.
+    items = [item for item in load_history_items() if item.get("saved_to_library", True)]
     try:
         order = json.loads((OUTPUTS_DIR / "library-order.json").read_text(encoding="utf-8"))
         positions = {item_id: index for index, item_id in enumerate(order)}

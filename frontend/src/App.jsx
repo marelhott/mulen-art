@@ -4,7 +4,7 @@ import StudioView from "./StudioView";
 const API_URL = import.meta.env.VITE_API_URL || "";
 const POLL_INTERVAL = 1500;
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
-const DEFAULT_ENGINE = { mode: "faithful", sampler: "dpmpp_2m", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
+const DEFAULT_ENGINE = { mode: "faithful", conditioningMode: "style", sampler: "dpmpp_2m", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
 const EMPTY_JOB = {
   id: "",
   status: "idle",
@@ -75,6 +75,7 @@ function App() {
   const [steps, setSteps] = useState(25);
   const [engine, setEngine] = useState(DEFAULT_ENGINE);
   const [results, setResults] = useState([]);
+  const [batchResults, setBatchResults] = useState([]);
   const [libraryItems, setLibraryItems] = useState([]);
   const [selectedImage, setSelectedImage] = useState(null);
   const [presets, setPresets] = useState([]);
@@ -220,14 +221,11 @@ function App() {
         .slice(-10);
       const ready = slots.filter(Boolean);
       const latest = logs.at(-1)?.message || "Čekání na cloudové GPU";
-      setResults(slots);
-      setLibraryItems((current) =>
-        Array.from(
-          new Map(
-            [...ready, ...current].map((item) => [item.id, item]),
-          ).values(),
-        ),
-      );
+      setBatchResults(slots);
+      setResults((current) => {
+        const ids = new Set(ready.map((item) => item.id));
+        return [...slots, ...current.filter((item) => item && !ids.has(item.id))];
+      });
       const progress =
         records.reduce(
           (sum, record) =>
@@ -326,14 +324,14 @@ function App() {
             Math.round((job.progress || 0) * 100),
           ),
         );
-  const readyCount = results.filter(Boolean).length;
+  const readyCount = batchResults.filter(Boolean).length;
   const outputCount = isGenerating
     ? Math.max(
-        results.length,
+        batchResults.length,
         plannedOutputs,
         activeJobs.reduce((sum, item) => sum + item.expected_images, 0),
       )
-    : results.length || 0;
+    : batchResults.length || 0;
   const sourceCount =
     inputItems.length ||
     new Set(activeJobs.map((item) => item.source_id || item.source_name))
@@ -383,7 +381,7 @@ function App() {
     setDenoise(Number(preset.denoise ?? 0.45));
     setCfg(Number(preset.cfg ?? 5));
     setSteps(Number(preset.steps ?? 25));
-    setEngine(preset.engine || { ...DEFAULT_ENGINE, mode: "quick", sampler: "dpmpp_2m_sde" });
+    setEngine(preset.engine ? {...DEFAULT_ENGINE, ...preset.engine} : { ...DEFAULT_ENGINE, mode: "quick", sampler: "dpmpp_2m_sde" });
     setResizeScale(Math.min(preset.engine?.mode === "detail" ? 2 : 4, Number(preset.resizeScale ?? 2)));
   }
 
@@ -474,8 +472,9 @@ function App() {
       steps: Number(steps),
       sampler: engine.sampler,
       schedule: engine.schedule,
+      conditioning_mode: "style",
       render_mode: engine.mode, seed: Number(engine.seed === "" ? -1 : engine.seed),
-      prompt: engine.prompt, negative_prompt: engine.negativePrompt,
+      prompt: "", negative_prompt: "",
       max_side: engine.maxSide, detail_strength: engine.detailStrength, detail_steps: engine.detailSteps,
       scale: Number(resizeScale.toFixed(2)),
     };
@@ -491,7 +490,7 @@ function App() {
     restoreRecentAllowed.current = false;
     setError("");
     setSubmissionErrors([]);
-    setResults([]);
+    setBatchResults([]);
     setSelectedImage(null);
     setJob({
       ...EMPTY_JOB,
@@ -573,16 +572,21 @@ function App() {
       throw new Error(data.detail || "Library load failed.");
     }
     setLibraryItems(data.items || []);
-    if (restoreRecent && !activeJobs.length && restoreRecentAllowed.current) {
-      setResults((current) =>
-        current.length
-          ? current
-          : (data.items || []).map((item) => ({
-              ...item,
-              source_name: item.settings?.source_name || item.filename,
-            })),
-      );
-    }
+    const historyResponse = await fetch(`${API_URL}/api/history`);
+    if (!historyResponse.ok) throw new Error("Historii se nepodařilo načíst.");
+    const history = await historyResponse.json();
+    setResults((current) => {
+      const ids = new Set(current.filter(Boolean).map((item) => item.id));
+      return [...current, ...(history.items || []).filter((item) => !ids.has(item.id))];
+    });
+  }
+
+  async function saveLibraryItem(itemId) {
+    const response = await fetch(`${API_URL}/api/library/${itemId}`, {method: "POST"});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Uložení se nezdařilo.");
+    setLibraryItems((current) => current.some((item) => item.id === itemId) ? current : [data.item, ...current]);
+    setResults((current) => current.map((item) => item?.id === itemId ? {...item, saved_to_library: true} : item));
   }
 
   async function deleteLibraryItem(itemId) {
@@ -594,8 +598,7 @@ function App() {
       throw new Error(data.detail || "Delete failed.");
     }
     setLibraryItems((current) => current.filter((item) => item.id !== itemId));
-    setResults((current) => current.filter((item) => item?.id !== itemId));
-    window.localStorage.removeItem("img2img-last-batch");
+    setResults((current) => current.map((item) => item?.id === itemId ? {...item, saved_to_library: false} : item));
     if (selectedImage?.libraryId === itemId) {
       setSelectedImage(null);
     }
@@ -702,6 +705,7 @@ function App() {
         imageSize,
         results,
         libraryItems,
+        saveLibraryItem,
         isGenerating,
         isSubmitting,
         plannedOutputs,

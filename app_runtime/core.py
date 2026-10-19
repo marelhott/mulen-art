@@ -58,6 +58,7 @@ class GenerationInput:
     max_side: int = 1536
     detail_strength: float = 0.25
     detail_steps: int = 15
+    conditioning_mode: str = "style"
 
 
 def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None,
@@ -93,6 +94,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
         "sampler": generation_input.sampler, "schedule": generation_input.schedule,
         "demo_mode": False,
         "render_mode": generation_input.render_mode,
+        "conditioning_mode": generation_input.conditioning_mode,
         "prompt": generation_input.prompt, "negative_prompt": generation_input.negative_prompt,
         "max_side": generation_input.max_side,
         "generation_width": source_image.width, "generation_height": source_image.height,
@@ -112,7 +114,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
         schedule_steps, strength = inference_schedule(steps, generation_input.denoise, generation_input.render_mode != "quick")
         # An explicit empty negative prompt is encoded, unlike None (zero embeddings in SDXL).
         conditioning = {"prompt": generation_input.prompt,
-                        "negative_prompt": generation_input.negative_prompt if generation_input.render_mode != "quick" or generation_input.negative_prompt else None}
+                        "negative_prompt": generation_input.negative_prompt if generation_input.conditioning_mode == "encoded" or generation_input.negative_prompt else None}
         report_progress(progress_callback, base_progress, f"Generating image {index + 1}/{generation_input.num_images}")
         result = pipe(
             **conditioning, image=source_image, strength=strength,
@@ -249,6 +251,9 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     render_mode = str(payload.get("render_mode", "quick"))
     if render_mode not in {"quick", "faithful", "detail"}:
         raise ValueError("Unknown render mode")
+    conditioning_mode = str(payload.get("conditioning_mode", "style"))
+    if conditioning_mode not in {"style", "encoded"}:
+        raise ValueError("Unknown conditioning mode")
     seed_value = payload.get("seed", -1)
     seed = int(seed_value)
     if isinstance(seed_value, bool) or seed != float(seed_value) or not -1 <= seed <= 2**32 - 1:
@@ -273,6 +278,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         schedule=schedule,
         scale=scale,
         num_images=num_images,
+        conditioning_mode=conditioning_mode,
         render_mode=render_mode, seed=seed, prompt=prompt, negative_prompt=negative_prompt,
         max_side=int(clamp(int(payload.get("max_side", 1536)), 512, 2048)),
         detail_strength=clamp(float(payload.get("detail_strength", 0.25)), 0.05, 0.6),
