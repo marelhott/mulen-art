@@ -156,6 +156,39 @@ def make_regularization():
     (folder/'generation.json').write_text(json.dumps(metadata,indent=2));data.commit()
     return metadata
 
+@app.function(image=gpu_image, gpu='L4', cpu=2, memory=24576,
+              volumes={'/models':models,'/sources':sources,'/results':results},
+              timeout=900,max_containers=1,retries=0)
+def diagnose_conditioning(checkpoint_path: str, source_file: str):
+    import torch,time
+    from PIL import Image,ImageOps
+    from diffusers import StableDiffusionXLImg2ImgPipeline
+    from app_runtime.core import make_scheduler
+    checkpoint=Path('/results')/checkpoint_path
+    if '..' in Path(checkpoint_path).parts or not checkpoint.is_file(): raise ValueError('Invalid checkpoint')
+    if Path(source_file).name!=source_file or not source_file.startswith('source_'): raise ValueError('Invalid source')
+    folder=checkpoint.parent/('conditioning-'+checkpoint.stem);folder.mkdir(exist_ok=True)
+    pipe=StableDiffusionXLImg2ImgPipeline.from_single_file(str(checkpoint),torch_dtype=torch.float16,use_safetensors=True).to('cuda')
+    pipe.enable_vae_tiling()
+    try:pipe.enable_xformers_memory_efficient_attention()
+    except Exception:pass
+    with Image.open(Path('/sources')/source_file) as raw:
+        im=ImageOps.exif_transpose(raw).convert('RGB');im.thumbnail((1024,1024),Image.Resampling.LANCZOS)
+        im=im.resize((max(64,im.width//8*8),max(64,im.height//8*8)),Image.Resampling.LANCZOS)
+    im.save(folder/'source.png');start=time.monotonic();samples=[]
+    for mode,negative in [('zero',None),('encoded','')]:
+        for cfg in [1.0,1.8,4.0]:
+            for strength in [.52,.70]:
+                pipe.scheduler=make_scheduler(pipe.scheduler.config,'dpmpp_2m','karras')
+                out=pipe(prompt='',negative_prompt=negative,image=im,strength=strength,
+                    num_inference_steps=28,guidance_scale=cfg,
+                    generator=torch.Generator('cuda').manual_seed(231019)).images[0]
+                name=f'{mode}-cfg{cfg}-d{int(strength*100)}.png';out.save(folder/name)
+                samples.append({'file':name,'negative_prompt':negative,'cfg':cfg,'denoise':strength})
+    meta={'checkpoint':checkpoint_path,'source':source_file,'samples':samples,
+          'prompt':'','seed':231019,'steps':28,'elapsed_seconds':time.monotonic()-start}
+    (folder/'metadata.json').write_text(json.dumps(meta,indent=2));results.commit();return meta
+
 @app.function(image=modal.Image.debian_slim(python_version='3.11'), cpu=0.25, memory=256, timeout=14400,
               volumes={'/results':results},max_containers=1,retries=0)
 def orchestrate(run_id: str, source_files: list[str]):
@@ -199,11 +232,13 @@ def orchestrate(run_id: str, source_files: list[str]):
         status['phase']='failed';status['error']=traceback.format_exc();save();raise
 
 @app.local_entrypoint()
-def main(adapter_path: str = '', regularization: bool = False, checkpoint_path: str = '', watch_run: str = ''):
+def main(adapter_path: str = '', regularization: bool = False, checkpoint_path: str = '', watch_run: str = '', conditioning_test: bool = False):
     if regularization:
         print(json.dumps(make_regularization.remote(),indent=2));return
     records=json.loads((Path(__file__).resolve().parents[1]/'outputs/research/tuymans/source-inputs.json').read_text())
     selected=[records[i]['path'] for i in [0,10,12,16,18,19]]
+    if conditioning_test:
+        print(json.dumps(diagnose_conditioning.remote(checkpoint_path,records[16]['path']),indent=2));return
     if watch_run:
         print(json.dumps(orchestrate.remote(watch_run,selected),indent=2));return
     result=evaluate_checkpoint.remote(checkpoint_path,selected) if checkpoint_path else compare.remote(adapter_path,selected)
