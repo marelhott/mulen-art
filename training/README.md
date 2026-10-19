@@ -5,7 +5,7 @@ This training workflow is independent of the deployed img2img app. It never chan
 - `prepare_dataset.py` uses the reviewed local manifest in `outputs/research/tuymans/review-candidates.json`; it produces dataset-v2, paired content captions, a held-out split, and an exclusion manifest. Embedded color profiles are converted to sRGB. No AI upscaling, sharpening, color augmentation, or aspect-ratio stretching is used. Originals are not modified.
 - `../training_modal.py` pins kohya sd-scripts commit `04ca541746b7667b27eab230db067579f682895e`. A bounded LoRA or full UNet run saves configurations, environment, checkpoints, resumable state and timing on private Modal volumes. Full training requires 12 generic base-SDXL regularization paintings. These are ordinary replay samples at approximately 3% frequency, not an asserted per-image loss weighting. The pinned `sdxl_train.py` does not apply the dataset's `loss_weights` in its loss calculation, so `is_reg` / `prior_loss_weight` is deliberately not used for this full-training configuration.
 - `evaluate_modal.py` evaluates empty-prompt img2img at the app's scheduler, conditioning and defaults, with fixed sources and seed. Full checkpoints also receive six content-only text tests with the style trigger. These text tests are supplemental; promptless img2img is the primary target.
-- `finish_run.py RUN_ID` is a bounded local coordinator. It waits for a remote run, evaluates up to three saved full checkpoints, downloads samples and the latest candidate, and verifies the downloaded safetensors header and SHA256. It does not select the best artistic result automatically. The Mac performs file I/O and coordination only, not training or inference.
+- `evaluate_modal.py --watch-run RUN_ID` coordinates checkpoint evaluations entirely on Modal, independently of the Mac. `finish_run.py RUN_ID` waits for that cloud pipeline, downloads samples and the latest candidate, and verifies the downloaded safetensors header and SHA256. It does not select the best artistic result automatically. The Mac performs file I/O and coordination only, not training or inference.
 
 ## Completed pilot
 
@@ -21,7 +21,8 @@ From the repository root:
 .venv/bin/python training/prepare_dataset.py
 .venv/bin/modal run --detach training/evaluate_modal.py --regularization
 .venv/bin/modal run --detach training_modal.py --kind full --steps 1200 --learning-rate 0.000004
+.venv/bin/modal run --detach training/evaluate_modal.py --watch-run full-unet-YYYYMMDDTHHMMSSZ
 .venv/bin/python training/finish_run.py full-unet-YYYYMMDDTHHMMSSZ
 ```
 
-Run the coordinator only once per training run to avoid duplicate paid evaluations. It has no automatic paid-job retry. Before a new training experiment, choose a bounded configuration based on visual results rather than assuming that more steps, lower loss, more detail, or higher resolution improves the style.
+Run the cloud coordinator only once per training run to avoid duplicate paid evaluations. It has no automatic paid-job retry. Before a new training experiment, choose a bounded configuration based on visual results rather than assuming that more steps, lower loss, more detail, or higher resolution improves the style.

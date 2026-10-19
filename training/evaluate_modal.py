@@ -156,11 +156,55 @@ def make_regularization():
     (folder/'generation.json').write_text(json.dumps(metadata,indent=2));data.commit()
     return metadata
 
+@app.function(image=modal.Image.debian_slim(python_version='3.11'), cpu=0.25, memory=256, timeout=14400,
+              volumes={'/results':results},max_containers=1,retries=0)
+def orchestrate(run_id: str, source_files: list[str]):
+    """Keep the comparison running entirely on Modal, independent of the Mac."""
+    import time, traceback
+    if not run_id.startswith('full-unet-') or '/' in run_id: raise ValueError('Invalid run id')
+    folder=Path('/results')/run_id
+    status={'run_id':run_id,'phase':'waiting_for_training','evaluations':[],'started_unix':time.time()}
+    def save():
+        (folder/'pipeline-status.json').write_text(json.dumps(status,indent=2));results.commit()
+    save()
+    try:
+        deadline=time.monotonic()+7500
+        while time.monotonic()<deadline:
+            results.reload()
+            training=json.loads((folder/'status.json').read_text())
+            if training['status'] in {'completed','failed'}: break
+            time.sleep(60)
+        else: raise TimeoutError('Training status did not finish within bounded wait')
+        candidates=[folder/f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in [400,800,1200]]
+        candidates=[p for p in candidates if p.is_file()]
+        if not candidates: candidates=sorted(folder.glob('mvhpaint_full_unet-step*.safetensors'))[-1:]
+        if not candidates: raise RuntimeError('No saved full checkpoint to evaluate')
+        status['phase']='evaluating_checkpoints';status['training_status']=training['status'];save()
+        for candidate in candidates:
+            try:
+                result=evaluate_checkpoint.remote(str(candidate.relative_to('/results')),source_files)
+                results.reload()
+                status['evaluations'].append({'checkpoint':candidate.name,'status':'completed',
+                    'elapsed_seconds':result['elapsed_seconds']})
+            except Exception:
+                results.reload()
+                status['evaluations'].append({'checkpoint':candidate.name,'status':'failed','error':traceback.format_exc()})
+            save()
+        status['phase']='ready_for_visual_review'
+        status['candidate_checkpoint']=str(candidates[-1].relative_to('/results'))
+        status['finished_unix']=time.time()
+        status['note']='Latest checkpoint is only a candidate. Artistic selection remains pending.'
+        save();return status
+    except Exception:
+        status['phase']='failed';status['error']=traceback.format_exc();save();raise
+
 @app.local_entrypoint()
-def main(adapter_path: str = '', regularization: bool = False, checkpoint_path: str = ''):
+def main(adapter_path: str = '', regularization: bool = False, checkpoint_path: str = '', watch_run: str = ''):
     if regularization:
         print(json.dumps(make_regularization.remote(),indent=2));return
     records=json.loads((Path(__file__).resolve().parents[1]/'outputs/research/tuymans/source-inputs.json').read_text())
     selected=[records[i]['path'] for i in [0,10,12,16,18,19]]
+    if watch_run:
+        print(json.dumps(orchestrate.remote(watch_run,selected),indent=2));return
     result=evaluate_checkpoint.remote(checkpoint_path,selected) if checkpoint_path else compare.remote(adapter_path,selected)
     print(json.dumps(result,indent=2))

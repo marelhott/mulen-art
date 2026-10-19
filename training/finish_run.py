@@ -1,5 +1,5 @@
-"""Bounded local coordinator. GPU work stays on Modal; no local inference/training."""
-import argparse, hashlib, json, subprocess, sys, time
+"""Bounded local coordinator. Wait for the cloud pipeline, then download. No local inference/training."""
+import argparse, hashlib, json, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import modal
@@ -15,42 +15,36 @@ def main():
     if not args.run_id.startswith('full-unet-') or '/' in args.run_id: raise ValueError('Invalid run id')
     run=args.run_id;volume=modal.Volume.from_name('mulen-training-results')
     local=REPORT/run;local.mkdir(exist_ok=True)
-    state={'run_id':run,'phase':'waiting_for_training','evaluations':[],'started_unix':time.time()}
+    state={'run_id':run,'phase':'waiting_for_cloud_pipeline','evaluations':[],'started_unix':time.time()}
     state_path=local/'coordinator-status.json';write_state(state_path,state)
     deadline=time.monotonic()+3*3600
     errors=0
     while time.monotonic()<deadline:
         try:
-            training=json.loads(b''.join(volume.read_file(f'{run}/status.json')))
+            pipeline=json.loads(b''.join(volume.read_file(f'{run}/pipeline-status.json')))
             errors=0
-            write_state(local/'training-status.json',training)
-            if training['status'] in {'completed','failed'}: break
+            write_state(local/'pipeline-status.json',pipeline)
+            if pipeline['phase'] in {'ready_for_visual_review','failed'}: break
         except Exception as exc:
             errors+=1;state['last_read_error']=str(exc);write_state(state_path,state)
             if errors>=10: raise RuntimeError('Repeated remote status failures; stopping coordinator')
         time.sleep(60)
     else: raise TimeoutError('Coordinator training wait reached three-hour deadline')
+    training=json.loads(b''.join(volume.read_file(f'{run}/status.json')))
+    write_state(local/'training-status.json',training)
     files={Path(x.path).name:x.path for x in volume.iterdir(run) if x.path.endswith('.safetensors')}
     selected=[f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in [400,800,1200]]
     selected=[name for name in selected if name in files]
     if not selected:
         selected=sorted(name for name in files if '-step' in name)[-1:]
     if not selected: raise RuntimeError('Training produced no complete candidate checkpoint')
-    state['phase']='evaluating_checkpoints';state['training_status']=training['status'];write_state(state_path,state)
-    for name in selected:
-        log=local/(Path(name).stem+'-evaluation.log')
-        with log.open('w') as out:
-            result=subprocess.run([str(ROOT/'.venv/bin/modal'),'run','--detach',
-                'training/evaluate_modal.py','--checkpoint-path',files[name]],
-                cwd=ROOT,stdout=out,stderr=subprocess.STDOUT,timeout=2400)
-        state['evaluations'].append({'checkpoint':name,'exit_code':result.returncode,'log':str(log)})
-        write_state(state_path,state)
-        # Do not retry paid jobs automatically on ambiguous client/network failure.
-        if result.returncode: state['needs_review']=True
+    state['evaluations']=pipeline.get('evaluations',[])
+    state['training_status']=training['status']
+    state['cloud_pipeline_phase']=pipeline['phase']
     state['phase']='downloading_artifacts';write_state(state_path,state)
     paths=[x.path for x in volume.iterdir(run,recursive=True)
            if ('/evaluation-' in x.path and Path(x.path).suffix in {'.png','.json'})
-           or Path(x.path).name in {'status.json','dataset.toml','train.toml','environment.txt','train.log'}]
+           or Path(x.path).name in {'status.json','dataset.toml','train.toml','environment.txt','train.log','pipeline-status.json'}]
     def download(remote):
         target=local/Path(remote).relative_to(run);target.parent.mkdir(parents=True,exist_ok=True)
         with target.open('wb') as stream:
