@@ -1939,3 +1939,11 @@ input[type="range"]::-moz-range-progress {
 .left-panel .orbit-center span { font-size: 8px; }
 .canvas-actions { display: flex; gap: 12px; align-items: center; margin: 0 0 16px; flex-wrap: wrap; }
 .canvas-actions .help-text { margin: 0; }
+
+.sampling-progress {margin:18px 0; padding-bottom:18px; border-bottom:1px solid var(--border, #ffffff20);}
+.sampling-job {margin-top:12px;}
+.sampling-count {display:flex;justify-content:space-between;gap:8px;font-variant-numeric:tabular-nums;font-size:12px;margin-bottom:8px;}
+.sampling-count strong {font-size:14px;}
+.sampling-track {height:12px;border-radius:3px;overflow:hidden;background:#ffffff12;}
+.sampling-track>div {height:100%;background:repeating-linear-gradient(90deg,#b2c497 0px,#b2c497 7px,transparent 7px,transparent 9px);transition:width .35s ease;}
+.sampling-wait {font-size:11px;opacity:.65;margin:12px 0 0;}

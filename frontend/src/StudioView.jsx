@@ -1124,6 +1124,19 @@ function Progress({
           <small>%</small>
         </strong>
       </div>
+      <div className="sampling-progress" aria-label="Průběh výpočtových kroků">
+        <Label>VÝPOČTOVÉ KROKY</Label>
+        {job.active_steps?.length ? job.active_steps.map((step, index) => {
+          const percent = Math.round(step.current / step.total * 100);
+          return <div className="sampling-job" key={step.id}>
+            <div className="sampling-count"><span>{job.active_steps.length > 1 ? `GPU ${index + 1} · ` : ""}{step.current} / {step.total} kroků</span><strong>{percent}%</strong></div>
+            <div className="sampling-track" role="progressbar" aria-label={`Výpočtové kroky úlohy ${index + 1}`} aria-valuenow={step.current} aria-valuemax={step.total} aria-valuemin={0}>
+              <div style={{width: `${percent}%`}} />
+            </div>
+          </div>;
+        }) : <p className="sampling-wait">{generating ? "Čekání na výpočet · načítání GPU" : job.status === "completed" ? "Výpočet dokončen" : "Kroky se zobrazí při generování"}</p>}
+      </div>
+      <Label>CELKOVÝ POSTUP FRONTY</Label>
       <div
         className="progress-track"
         role="progressbar"

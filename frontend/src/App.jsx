@@ -242,6 +242,11 @@ function App() {
               : "completed"
             : "running",
         progress,
+        active_steps: records.flatMap((record, index) => {
+          if (record.status !== "running") return [];
+          const match = (record.message || "").match(/step (\d+)\/(\d+)/);
+          return match ? [{id: activeJobs[index].job_id, current: Number(match[1]), total: Number(match[2])}] : [];
+        }),
         logs,
         started_at: records
           .map((record) => record.created_at)
