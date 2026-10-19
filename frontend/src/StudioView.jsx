@@ -331,13 +331,6 @@ export default function StudioView(p) {
           <Sparkles size={16} />
           {p.isGenerating ? "PŘIDAT DO FRONTY" : "GENEROVAT"}
         </button>
-        <OverallProgress
-          progress={p.progressValue}
-          job={p.job}
-          active={p.isGenerating || p.isSubmitting}
-          ready={p.readyCount}
-          total={p.outputCount}
-        />
         <div className="control-block">
           <div className="label-row">
             <Label>VARIANTY NA VSTUP</Label>
@@ -994,74 +987,6 @@ function Range({ label, value, min, max, step, onChange, hint }) {
       />
       {hint && <span className="help-text">{hint}</span>}
     </label>
-  );
-}
-function OverallProgress({ progress, job, active, ready, total }) {
-  const idle = job.status === "idle" && !active;
-  const value = idle ? 0 : Math.min(100, Math.max(0, Number(progress) || 0));
-  const circumference = 2 * Math.PI * 74;
-  const complete = job.status === "completed";
-  return (
-    <section
-      className={`overall-progress ${active ? "is-active" : ""} ${complete ? "is-complete" : ""}`}
-      aria-label="Celkový postup dávky"
-    >
-      <div
-        className="overall-orbit"
-        role="progressbar"
-        aria-label="Celkový postup"
-        aria-valuenow={value}
-        aria-valuemin={0}
-        aria-valuemax={100}
-      >
-        <svg viewBox="0 0 200 200" aria-hidden="true">
-          <circle className="orbit-guide" cx="100" cy="100" r="91" />
-          <circle className="orbit-track" cx="100" cy="100" r="74" />
-          <circle
-            className="orbit-fill"
-            cx="100"
-            cy="100"
-            r="74"
-            strokeDasharray={circumference}
-            strokeDashoffset={circumference * (1 - value / 100)}
-          />
-          {active && (
-            <g className="orbit-satellite">
-              <circle cx="100" cy="9" r="3" />
-            </g>
-          )}
-        </svg>
-        <div className="orbit-center">
-          <strong>
-            {Math.round(value)}
-            <small>%</small>
-          </strong>
-          <span>
-            {active
-              ? "PROBÍHÁ"
-              : complete
-                ? "DOKONČENO"
-                : job.status === "failed"
-                  ? "PŘERUŠENO"
-                  : "PŘIPRAVENO"}
-          </span>
-        </div>
-      </div>
-      <p>
-        {idle
-          ? "Prostor pro další nápad"
-          : `${ready} z ${total} obrázků hotovo`}
-      </p>
-      <span className="overall-caption">
-        {active
-          ? "Každý krok blíž výsledku"
-          : complete
-            ? "Výsledky najdeš v galerii"
-            : job.status === "failed"
-              ? "Podrobnosti v průběhu úloh"
-              : "Celkový postup se zobrazí zde"}
-      </span>
-    </section>
   );
 }
 function Progress({
