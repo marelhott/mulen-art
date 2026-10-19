@@ -1203,19 +1203,8 @@ function ImageCard({
       </div>
       {item && (
         <footer>
-          <div
-            className="card-caption"
-            title={
-              item.source_name || item.settings?.source_name || item.filename
-            }
-          >
-            {item.source_name ||
-              item.settings?.source_name ||
-              item.model_id ||
-              "SDXL"}
-            <span>
-              {item.width} × {item.height}
-            </span>
+          <div className="card-caption">
+            <span>{item.width} × {item.height}</span>
           </div>
           <div className="card-actions">
             <IconButton

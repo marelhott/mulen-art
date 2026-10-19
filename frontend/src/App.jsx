@@ -73,9 +73,9 @@ function App() {
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
   const [numImages, setNumImages] = useState(2);
-  const [denoise, setDenoise] = useState(0.45);
+  const [denoise, setDenoise] = useState(0.52);
   const [cfg, setCfg] = useState(5);
-  const [steps, setSteps] = useState(25);
+  const [steps, setSteps] = useState(28);
   const [engine, setEngine] = useState(DEFAULT_ENGINE);
   const [results, setResults] = useState([]);
   const [batchResults, setBatchResults] = useState([]);
@@ -379,9 +379,9 @@ function App() {
     );
     setLoraStrength(Number(preset.loraStrength ?? 0.8));
     setNumImages(Number(preset.numImages ?? 2));
-    setDenoise(Number(preset.denoise ?? 0.45));
+    setDenoise(Number(preset.denoise ?? 0.52));
     setCfg(Number(preset.cfg ?? 5));
-    setSteps(Number(preset.steps ?? 25));
+    setSteps(Number(preset.steps ?? 28));
     setEngine({...DEFAULT_ENGINE, ...(preset.engine || {}), mode: "quick", maxSide: 1536});
     setInputScale(Number(preset.inputScale ?? 1));
     setResizeScale(Math.min(preset.engine?.mode === "detail" ? 2 : 4, Number(preset.resizeScale ?? 2)));
