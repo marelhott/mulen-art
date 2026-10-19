@@ -2,7 +2,7 @@
 
 Datum: 19. 10. 2026
 
-Živá aplikace: https://mailhospodarsky--img2img-studio-web.us-east.modal.run
+Živá aplikace: https://mailhospodarsky--i.modal.run
 
 ## Skutečné generování na NVIDIA L4
 

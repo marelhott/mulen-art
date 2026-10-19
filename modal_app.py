@@ -108,7 +108,7 @@ def web_secret():
     cpu=0.25, memory=512,
 )
 @modal.concurrent(max_inputs=20)
-@modal.asgi_app()
+@modal.asgi_app(label="i")
 def web():
     from app_runtime.cloud_server import create_app, VolumeUsage
     return create_app(
