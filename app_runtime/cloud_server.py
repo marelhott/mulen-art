@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image
-from app_runtime.server import OUTPUTS_DIR, api_library_save, load_history_items, api_library_delete, api_library_order, load_library_items, now_iso
+from app_runtime.server import OUTPUTS_DIR, api_library_save, load_deleted_ids, load_history_items, api_library_delete, api_library_order, load_library_items, now_iso
 
 
 class VolumeUsage:
@@ -252,7 +252,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def history():
         with lock:
             refresh()
-            return {"items": load_history_items()}
+            return {"items": load_history_items(), "deleted_ids": load_deleted_ids()}
 
     @app.post("/api/library/{item_id}")
     def save_to_library(item_id: str):

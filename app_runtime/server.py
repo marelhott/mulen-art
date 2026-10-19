@@ -52,7 +52,7 @@ def api_options():
 
 @app.get("/api/history")
 def api_history():
-    return {"items": load_history_items()}
+    return {"items": load_history_items(), "deleted_ids": load_deleted_ids()}
 
 
 @app.post("/api/library/{item_id}")
@@ -81,6 +81,7 @@ def set_library_membership(item_id: str, saved: bool):
     if not data.get("filename") or not (OUTPUTS_DIR / data["filename"]).is_file():
         raise HTTPException(status_code=404, detail="Image not found.")
     data["saved_to_library"] = saved
+    data["deleted"] = not saved
     temporary = metadata_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
     temporary.replace(metadata_path)
@@ -233,7 +234,7 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
             "model_id": meta.get("model_id"),
             "lora_id": meta.get("lora_id"),
             "settings": meta,
-            "saved_to_library": False,
+            "saved_to_library": True,
         }
         metadata_path = OUTPUTS_DIR / f"{stem}.json"
         metadata_path.write_text(json.dumps(record, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -242,11 +243,25 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
     return saved_items
 
 
+def load_deleted_ids():
+    ids = []
+    for path in OUTPUTS_DIR.glob("*.json"):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(item, dict) and item.get("deleted"):
+                ids.append(item["id"])
+        except (OSError, ValueError, KeyError):
+            continue
+    return ids
+
+
 def load_history_items() -> list[dict[str, Any]]:
     items = []
     for metadata_path in sorted(OUTPUTS_DIR.glob("*.json"), reverse=True):
         try:
             data = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if data.get("deleted", False):
+                continue
             image_path = OUTPUTS_DIR / data["filename"]
             if not image_path.exists():
                 continue
@@ -260,7 +275,7 @@ def load_history_items() -> list[dict[str, Any]]:
 
 def load_library_items() -> list[dict[str, Any]]:
     # Legacy images remain saved; new generations explicitly start on the canvas only.
-    items = [item for item in load_history_items() if item.get("saved_to_library", True)]
+    items = load_history_items()
     try:
         order = json.loads((OUTPUTS_DIR / "library-order.json").read_text(encoding="utf-8"))
         positions = {item_id: index for index, item_id in enumerate(order)}

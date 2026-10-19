@@ -82,7 +82,7 @@ export default function StudioView(p) {
     }
   }
   async function removeSelectedImages() {
-    const targets = p.libraryItems.filter((item) => selection.has(item.id));
+    const targets = (tab === "library" ? p.libraryItems : p.results.filter(Boolean)).filter((item) => selection.has(item.id));
     for (const item of targets) {
       try {
         await p.deleteLibraryItem(item.id);
@@ -645,7 +645,7 @@ export default function StudioView(p) {
               try { for (const item of p.results.filter((item) => item && selection.has(item.id))) await p.saveLibraryItem(item.id); }
               catch (error) { p.setError(error.message); }
             }}><Plus size={13} /> Uložit výběr do knihovny</button>}
-            {tab === "library" && (
+            {(
               <button
                 className="selection-delete"
                 onClick={removeSelectedImages}
@@ -682,7 +682,7 @@ export default function StudioView(p) {
                   }
                   onDownload={() => download(item)}
                   onReuse={() => reuse(item)}
-                  onDelete={tab === "library" ? () => removeImage(item) : undefined}
+                  onDelete={() => removeImage(item)}
                   canDelete={true}
                   onContext={(event) => {
                     event.preventDefault();
@@ -922,13 +922,12 @@ export default function StudioView(p) {
             role="menuitem"
             disabled={false}
             onClick={() => {
-              if (tab === "library") removeImage(context.item);
-              else p.saveLibraryItem(context.item.id).catch((error) => p.setError(error.message));
+              removeImage(context.item);
               setContext(null);
             }}
           >
             <Trash2 />
-            {tab === "library" ? "Odstranit z knihovny" : "Uložit do knihovny"}
+            Smazat obrázek
           </button>
         </div>
       )}

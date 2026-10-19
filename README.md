@@ -93,11 +93,11 @@ frontend host or Vercel account is required.
 
 ## Canvas and saved library
 
-All generated outputs persist in `/api/history`, displayed on the canvas across batches
-and reloads. New outputs enter the library only through explicit Save. Removing an item
-from the library clears its membership, preserving the image in history. Existing records
-without membership metadata retain their previous saved status. Single click opens the
-viewer; clicking the enlarged image closes it. Multi-selection uses a separate mode.
+Generated outputs automatically appear in both persistent canvas history and the library,
+including outputs previously left unsaved. Trash is available on both surfaces and in bulk
+selection. Deletion hides an image from both indexes with a durable metadata tombstone;
+files remain recoverable through explicit API save. Polling cannot restore deleted cards.
+Single click opens the viewer; clicking the enlarged image closes it.
 
 ## Adding work while generating
 

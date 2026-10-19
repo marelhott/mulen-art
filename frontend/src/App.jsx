@@ -63,6 +63,7 @@ function App() {
   const [submittedOutputs, setSubmittedOutputs] = useState(0);
   const [startedAt, setStartedAt] = useState(null);
   const recordsCache = useRef(new Map());
+  const deletedIds = useRef(new Set());
   const previewUrl = inputItems[0]?.url || "";
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
   const [resizeScale, setResizeScale] = useState(2);
@@ -221,11 +222,15 @@ function App() {
         .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
         .slice(-10);
       const ready = slots.filter(Boolean);
+      setLibraryItems((current) => {
+        const ids = new Set(current.map((item) => item.id));
+        return [...ready.filter((item) => !ids.has(item.id) && !deletedIds.current.has(item.id)), ...current];
+      });
       const latest = logs.at(-1)?.message || "Čekání na cloudové GPU";
       setBatchResults(slots);
       setResults((current) => {
         const ids = new Set(ready.map((item) => item.id));
-        return [...slots, ...current.filter((item) => item && !ids.has(item.id))];
+        return [...slots, ...current.filter((item) => item && !ids.has(item.id))].filter((item) => !item || !deletedIds.current.has(item.id));
       });
       const progress =
         records.reduce(
@@ -572,13 +577,14 @@ function App() {
     if (!response.ok) {
       throw new Error(data.detail || "Library load failed.");
     }
-    setLibraryItems(data.items || []);
+    setLibraryItems((data.items || []).filter((item) => !deletedIds.current.has(item.id)));
     const historyResponse = await fetch(`${API_URL}/api/history`);
     if (!historyResponse.ok) throw new Error("Historii se nepodařilo načíst.");
     const history = await historyResponse.json();
+    for (const id of history.deleted_ids || []) deletedIds.current.add(id);
     setResults((current) => {
       const ids = new Set(current.filter(Boolean).map((item) => item.id));
-      return [...current, ...(history.items || []).filter((item) => !ids.has(item.id))];
+      return [...current, ...(history.items || []).filter((item) => !ids.has(item.id))].filter((item) => !item || !deletedIds.current.has(item.id));
     });
   }
 
@@ -598,8 +604,10 @@ function App() {
     if (!response.ok) {
       throw new Error(data.detail || "Delete failed.");
     }
+    deletedIds.current.add(itemId);
+    window.localStorage.setItem("img2img-deleted-ids", JSON.stringify([...deletedIds.current]));
     setLibraryItems((current) => current.filter((item) => item.id !== itemId));
-    setResults((current) => current.map((item) => item?.id === itemId ? {...item, saved_to_library: false} : item));
+    setResults((current) => current.filter((item) => item?.id !== itemId));
     if (selectedImage?.libraryId === itemId) {
       setSelectedImage(null);
     }
