@@ -56,6 +56,7 @@ function App() {
   const restoreRecentAllowed = useRef(true);
   const inputUrls = useRef(new Set());
   const submitting = useRef(false);
+  const pendingSubmissions = useRef(0);
   const plannedCount = useRef(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [plannedOutputs, setPlannedOutputs] = useState(0);
@@ -430,7 +431,7 @@ function App() {
   function handleFileChange(event) {
     const files = Array.from(event.target.files || []);
     event.target.value = "";
-    if (!files.length || isGenerating) return;
+    if (!files.length) return;
     if (
       files.some(
         (file) =>
@@ -450,11 +451,11 @@ function App() {
     setResizeScale(1);
     setSelectedImage(null);
     setError("");
-    setJob(EMPTY_JOB);
+    if (!isGenerating) setJob(EMPTY_JOB);
   }
 
   async function handleGenerate() {
-    if (!inputItems.length || isGenerating) return;
+    if (!inputItems.length) return;
     if (
       !Number.isSafeInteger(numImages) ||
       numImages < 1 ||
@@ -480,24 +481,23 @@ function App() {
     };
     const count = numImages;
     const total = inputItems.length * count;
+    const continuing = submitting.current || activeJobs.length > 0;
+    pendingSubmissions.current += 1;
     submitting.current = true;
-    plannedCount.current = total;
+    plannedCount.current = (continuing ? Math.max(plannedCount.current, activeJobs.reduce((sum, item) => sum + item.expected_images, 0)) : 0) + total;
     setIsSubmitting(true);
-    setPlannedOutputs(total);
-    setSubmittedOutputs(0);
-    setStartedAt(Date.now());
-    recordsCache.current.clear();
+    setPlannedOutputs(plannedCount.current);
+    if (!continuing) {
+      setSubmittedOutputs(0);
+      setStartedAt(Date.now());
+      recordsCache.current.clear();
+      setSubmissionErrors([]);
+      setBatchResults([]);
+      setJob({...EMPTY_JOB, status: "preparing", message: "Odesílání do fronty"});
+      window.localStorage.removeItem("img2img-last-batch");
+    }
     restoreRecentAllowed.current = false;
     setError("");
-    setSubmissionErrors([]);
-    setBatchResults([]);
-    setSelectedImage(null);
-    setJob({
-      ...EMPTY_JOB,
-      status: "preparing",
-      message: `Odesílání ${inputItems.length} samostatných vstupů`,
-    });
-    window.localStorage.removeItem("img2img-last-batch");
     const accepted = [],
       issues = [];
     let sent = 0;
@@ -542,27 +542,23 @@ function App() {
           }));
           accepted.push(...jobs);
           sent += jobs.reduce((sum, job) => sum + job.expected_images, 0);
-          setActiveJobs([...accepted]);
-          setSubmittedOutputs(sent);
+          setActiveJobs((current) => [...current, ...jobs]);
+          setSubmittedOutputs((current) => current + jobs.reduce((sum, job) => sum + job.expected_images, 0));
           issues.push(...(data.errors || []));
         } catch (error) {
           issues.push(`${item.file.name}: ${error.message}`);
         }
       }
     }
-    submitting.current = false;
-    setIsSubmitting(false);
-    setSubmissionErrors(issues);
-    setError(issues.join(" · "));
-    plannedCount.current = sent;
-    setPlannedOutputs(sent);
-    if (accepted.length) setActiveJobs([...accepted]);
-    else
-      setJob({
-        ...EMPTY_JOB,
-        status: "failed",
-        message: "Žádná úloha se nepodařila odeslat.",
-      });
+    pendingSubmissions.current -= 1;
+    submitting.current = pendingSubmissions.current > 0;
+    setIsSubmitting(submitting.current);
+    setSubmissionErrors((current) => [...current, ...issues]);
+    if (issues.length) setError(issues.join(" · "));
+    plannedCount.current -= total - sent;
+    setPlannedOutputs(plannedCount.current);
+    if (!accepted.length && !continuing && !submitting.current)
+      setJob({...EMPTY_JOB, status: "failed", message: "Žádná úloha se nepodařila odeslat."});
   }
 
   async function loadLibrary(restoreRecent = false) {

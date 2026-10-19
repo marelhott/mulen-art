@@ -99,6 +99,14 @@ from the library clears its membership, preserving the image in history. Existin
 without membership metadata retain their previous saved status. Single click opens the
 viewer; clicking the enlarged image closes it. Multi-selection uses a separate mode.
 
+## Adding work while generating
+
+Generate becomes “Přidat do fronty” while jobs run. Inputs and settings remain editable;
+every click captures its own batch and appends accepted jobs without replacing earlier
+ones. Uploads may overlap, aggregate progress includes all accepted/pending submissions,
+and accepted job IDs persist across reloads. There is no application-level queue count
+cap; Modal GPU concurrency and account usage limits still apply.
+
 ## Generation controls
 
 - Quick: original schedule-based step budget (e.g. 25 × 0.45 = 11 denoising steps).

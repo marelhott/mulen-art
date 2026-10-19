@@ -211,7 +211,6 @@ export default function StudioView(p) {
   async function drop(event) {
     event.preventDefault();
     setDragging(false);
-    if (p.isGenerating) return;
     const own = event.dataTransfer.getData("application/x-img2img");
     if (own) {
       try {
@@ -323,20 +322,14 @@ export default function StudioView(p) {
       <aside className="left-panel control-panel">
         <button
           className="primary-button generate"
-          disabled={p.isGenerating || !p.inputItems.length}
+          disabled={!p.inputItems.length}
           onClick={() => {
             setTab("results");
             p.handleGenerate();
           }}
         >
           <Sparkles size={16} />
-          {p.isSubmitting
-            ? "ODESÍLÁM DO FRONTY"
-            : p.isGenerating
-              ? p.job.status === "idle"
-                ? "OBNOVUJI DÁVKU"
-                : "GENERUJI"
-              : "GENEROVAT"}
+          {p.isGenerating ? "PŘIDAT DO FRONTY" : "GENEROVAT"}
         </button>
         <OverallProgress
           progress={p.progressValue}
@@ -357,7 +350,7 @@ export default function StudioView(p) {
           <div className="count-control">
             <button
               aria-label="Méně variant"
-              disabled={p.isGenerating || p.numImages <= 1}
+              disabled={p.numImages <= 1}
               onClick={() => p.setNumImages(Math.max(1, p.numImages - 1))}
             >
               −
@@ -368,7 +361,7 @@ export default function StudioView(p) {
               min="1"
               step="1"
               value={p.numImages}
-              disabled={p.isGenerating}
+              disabled={false}
               onChange={(event) =>
                 p.setNumImages(
                   event.target.value === "" ? "" : Number(event.target.value),
@@ -377,7 +370,7 @@ export default function StudioView(p) {
             />
             <button
               aria-label="Více variant"
-              disabled={p.isGenerating}
+              disabled={false}
               onClick={() => p.setNumImages(Number(p.numImages || 0) + 1)}
             >
               +
@@ -387,7 +380,7 @@ export default function StudioView(p) {
             {[1, 2, 3, 4, 5].map((n) => (
               <button
                 key={n}
-                disabled={p.isGenerating}
+                disabled={false}
                 aria-pressed={p.numImages === n}
                 onClick={() => p.setNumImages(n)}
               >
@@ -416,7 +409,7 @@ export default function StudioView(p) {
               type="file"
               multiple
               accept="image/png,image/jpeg,image/webp"
-              disabled={p.isGenerating}
+              disabled={false}
               aria-label="Přidat vstupní obrázky"
               onChange={p.handleFileChange}
             />
@@ -440,7 +433,7 @@ export default function StudioView(p) {
                     </button>
                     <button
                       className="thumb-remove"
-                      disabled={p.isGenerating}
+                      disabled={false}
                       aria-label={`Odebrat ${item.file.name}`}
                       onClick={() =>
                         p.setInputItems((current) =>
@@ -456,7 +449,7 @@ export default function StudioView(p) {
                 <button
                   className="add-input-tile"
                   aria-label="Přidat další obrázky"
-                  disabled={p.isGenerating}
+                  disabled={false}
                   onClick={() => inputRef.current.click()}
                 >
                   <Plus size={18} />
@@ -465,7 +458,7 @@ export default function StudioView(p) {
             ) : (
               <button
                 className="upload-empty"
-                disabled={p.isGenerating}
+                disabled={false}
                 onClick={() => inputRef.current.click()}
               >
                 <Plus size={23} />
@@ -479,7 +472,7 @@ export default function StudioView(p) {
           {p.inputItems.length > 0 && (
             <button
               className="text-button"
-              disabled={p.isGenerating}
+              disabled={false}
               onClick={() => p.setInputItems([])}
             >
               Vyprázdnit vstupy
@@ -697,7 +690,7 @@ export default function StudioView(p) {
                   onDownload={() => download(item)}
                   onReuse={() => reuse(item)}
                   onDelete={tab === "library" ? () => removeImage(item) : undefined}
-                  canDelete={!p.isGenerating}
+                  canDelete={true}
                   onContext={(event) => {
                     event.preventDefault();
                     if (item)
@@ -905,7 +898,7 @@ export default function StudioView(p) {
                   onDownload={() => download(item)}
                   onReuse={() => reuse(item)}
                   onDelete={() => removeImage(item)}
-                  canDelete={!p.isGenerating}
+                  canDelete={true}
                 />
               ))}
             </div>
@@ -941,7 +934,7 @@ export default function StudioView(p) {
           </button>
           <button
             role="menuitem"
-            disabled={p.isGenerating}
+            disabled={false}
             onClick={() => reuse(context.item)}
           >
             <ImagePlus />
@@ -953,7 +946,7 @@ export default function StudioView(p) {
           </button>
           <button
             role="menuitem"
-            disabled={p.isGenerating}
+            disabled={false}
             onClick={() => {
               if (tab === "library") removeImage(context.item);
               else p.saveLibraryItem(context.item.id).catch((error) => p.setError(error.message));
