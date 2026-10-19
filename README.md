@@ -44,17 +44,15 @@ npm ci
 npm run modal:deploy
 ```
 
-Use the HTTPS URL printed by Modal. Web username/password are in the private,
-Git-ignored `.modal-app-credentials.json` file. Never put this file in Git.
-Deployment injects these values through a Modal Secret; they are not bundled in
-frontend assets. The app provides a sign-in form and a signed HttpOnly/Secure
-session cookie (30 days). HTTP Basic authentication is also supported for tools.
-No separate frontend host or Vercel account is required.
+Use the HTTPS URL printed by Modal. The deployed studio is public and does not
+require a username or password. Anyone with the URL can access gallery images
+and submit image-generation jobs charged to this Modal workspace. No separate
+frontend host or Vercel account is required.
 
 ## Architecture and cost control
 
 - `modal_app.py`: deployable CPU web service and independent GPU function.
-- Web routes require authentication, including gallery images and generation.
+- The production web app is intentionally unauthenticated; protect the URL if you need to restrict access.
 - Models live in `img2img-models` Volume (~26.69 GiB including SDXL Base).
 - Gallery files/metadata live in `img2img-outputs` Volume.
 - Jobs/progress live in a shared Modal Dict so CPU restarts do not lose them.
@@ -118,7 +116,7 @@ npm run build:frontend
 ```
 
 Set `IMG2IMG_DEMO_MODE=true` for demo filters. Local preview is for development;
-production always uses `app_runtime.cloud_server` and its authentication.
+production uses `app_runtime.cloud_server`; the Modal deployment explicitly disables app-level authentication.
 
 ## Návrat k předchozímu vzhledu
 

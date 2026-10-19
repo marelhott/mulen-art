@@ -46,9 +46,9 @@ class VolumeUsage:
 
 
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
-               monthly_limit=None, frontend_dir=None):
-    if not username or not password:
-        raise ValueError("Application credentials are required")
+               monthly_limit=None, frontend_dir=None, auth_enabled=True):
+    if auth_enabled and (not username or not password):
+        raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
     lock = threading.Lock()
 
@@ -86,7 +86,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
-        if request.url.path == "/login":
+        if not auth_enabled or request.url.path == "/login":
             return await call_next(request)
         authorized = session_valid(request.cookies.get("studio_session", ""))
         try:

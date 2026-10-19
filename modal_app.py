@@ -103,7 +103,7 @@ def web_secret():
 
 @app.function(
     image=base_image.add_local_dir("frontend/dist", "/app/frontend/dist"),
-    volumes={"/outputs": outputs, "/state": state}, secrets=[web_secret()],
+    volumes={"/outputs": outputs, "/state": state},
     min_containers=0, max_containers=1, scaledown_window=20,
     cpu=0.25, memory=512,
 )
@@ -114,6 +114,6 @@ def web():
     return create_app(
         jobs=jobs, usage=VolumeUsage("/state/usage.json", state), submit=lambda job_id, payload: generate_image.spawn(job_id, payload).object_id,
         refresh=outputs.reload, commit=outputs.commit,
-        username=os.environ["APP_USERNAME"], password=os.environ["APP_PASSWORD"],
+        username=None, password=None, auth_enabled=False,
         frontend_dir="/app/frontend/dist",
     )
