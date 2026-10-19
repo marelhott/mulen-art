@@ -20,8 +20,6 @@ def resolve_outputs_dir() -> Path:
     configured = os.getenv("OUTPUTS_DIR")
     if configured:
         return Path(configured)
-    if Path("/workspace").exists():
-        return Path("/workspace/outputs")
     return Path(__file__).parent.parent / "outputs"
 
 
@@ -95,7 +93,7 @@ def api_generate(payload: dict):
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "request": {
-            "model_id": payload.get("model_id", "sdxl_base"),
+            "model_id": payload.get("model_id", "tuymans_sdxl"),
             "lora_id": payload.get("lora_id", "none"),
             "num_images": payload.get("num_images", 1),
         },
@@ -215,6 +213,7 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
             "created_at": now_iso(),
             "model_id": meta.get("model_id"),
             "lora_id": meta.get("lora_id"),
+            "settings": meta,
         }
         metadata_path = OUTPUTS_DIR / f"{stem}.json"
         metadata_path.write_text(json.dumps(record, ensure_ascii=True, indent=2), encoding="utf-8")

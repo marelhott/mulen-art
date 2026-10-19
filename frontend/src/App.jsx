@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const API_URL = import.meta.env.VITE_API_URL || "";
-const POLL_INTERVAL = 450;
+const POLL_INTERVAL = 1500;
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
 const DEFAULT_SAMPLER = "dpmpp_2m";
 const DEFAULT_SCHEDULE = "karras";
@@ -47,11 +47,14 @@ function saveStoredPresets(presets) {
 function App() {
   const [models, setModels] = useState([]);
   const [loras, setLoras] = useState([]);
-  const [imageFile, setImageFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState("");
+  const [inputItems, setInputItems] = useState([]);
+  const restoreRecentAllowed = useRef(true);
+  const imageFile = inputItems[0]?.file;
+  const previewUrl = inputItems[0]?.url || "";
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
   const [resizeScale, setResizeScale] = useState(1);
-  const [modelId, setModelId] = useState("sdxl_base");
+  const [modelId, setModelId] = useState("tuymans_sdxl");
+  const [generationMode, setGenerationMode] = useState("checkpoint");
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
   const [numImages, setNumImages] = useState(2);
@@ -66,12 +69,30 @@ function App() {
   const [presetName, setPresetName] = useState("");
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [error, setError] = useState("");
+  const [submissionErrors, setSubmissionErrors] = useState([]);
   const [job, setJob] = useState(EMPTY_JOB);
-  const [jobId, setJobId] = useState("");
+  const [activeJobs, setActiveJobs] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("img2img-active-jobs") || "[]");
+      if (Array.isArray(saved) && saved.length) return saved;
+      const legacy = window.localStorage.getItem("img2img-active-job");
+      if (legacy) return [{ job_id: legacy, source_name: "Input image", expected_images: 1 }];
+      const lastBatch = JSON.parse(window.localStorage.getItem("img2img-last-batch") || "[]");
+      return Array.isArray(lastBatch) ? lastBatch : [];
+    } catch { return []; }
+  });
 
   useEffect(() => {
     setPresets(loadStoredPresets());
   }, []);
+
+  useEffect(() => {
+    if (!previewUrl) return;
+    const probe = new window.Image();
+    probe.onload = () => setImageSize({ width: probe.naturalWidth, height: probe.naturalHeight });
+    probe.src = previewUrl;
+    return () => { probe.onload = null; };
+  }, [previewUrl]);
 
   useEffect(() => {
     fetch(`${API_URL}/api/options`)
@@ -80,82 +101,94 @@ function App() {
         if (!data) return;
         if (data.models?.length) {
           setModels(data.models);
-          setModelId(data.models[0].id);
+          setModelId(data.models.find((item) => item.kind !== "base")?.id || "tuymans_sdxl");
         }
         if (data.loras?.length) {
           setLoras(data.loras);
-          setLoraId(data.loras[0].id);
+          setLoraId(data.loras.find((item) => item.id !== "none")?.id || "none");
         }
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    loadLibrary().catch(() => {});
+    loadLibrary(true).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!jobId) return undefined;
-
-    let isCancelled = false;
+    if (!activeJobs.length) return undefined;
+    let cancelled = false;
+    let timer;
+    const known = new Map();
     const poll = async () => {
-      try {
-        const response = await fetch(`${API_URL}/api/jobs/${jobId}`);
+      const responses = await Promise.allSettled(activeJobs.map(async (item) => {
+        const previous = known.get(item.job_id);
+        if (previous && ["completed", "failed"].includes(previous.status)) return previous;
+        const response = await fetch(`${API_URL}/api/jobs/${item.job_id}`);
+        if (response.status === 401) { window.location.assign("/login"); throw new Error("Sign in required"); }
+        if (response.status === 404) return { id: item.job_id, status: "failed", progress: 0, error: { detail: "Job expired. Saved images remain in the library." } };
         const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.detail || "Job polling failed.");
-        }
-        if (isCancelled) return;
-        setJob(data);
-
-        if (data.status === "completed") {
-          setResults(data.result?.images || []);
-          if (data.result?.library_items?.length) {
-            setLibraryItems((current) => [...data.result.library_items, ...current]);
-          } else {
-            loadLibrary().catch(() => {});
-          }
-          setError("");
-          return;
-        }
-
-        if (data.status === "failed") {
-          setError(data.error?.detail || "Generation failed.");
-          return;
-        }
-
-        window.setTimeout(poll, POLL_INTERVAL);
-      } catch (pollError) {
-        if (!isCancelled) {
-          setError(pollError.message);
-          setJob((current) => ({
-            ...current,
-            status: "failed",
-            message: pollError.message,
-          }));
-        }
+        if (!response.ok) throw new Error(data.detail || "Connection interrupted");
+        return data;
+      }));
+      if (cancelled) return;
+      responses.forEach((response, index) => {
+        if (response.status === "fulfilled") known.set(activeJobs[index].job_id, response.value);
+      });
+      const records = activeJobs.map((item) => known.get(item.job_id) || { status: "queued", progress: 0 });
+      const slots = records.flatMap((record, index) => {
+        const images = record.result?.images || record.partial_images || [];
+        return Array.from({ length: activeJobs[index].expected_images || images.length || 1 }, (_, slot) => images[slot] ? { ...images[slot], source_name: activeJobs[index].source_name } : null);
+      });
+      const finished = records.filter((record) => ["completed", "failed"].includes(record.status)).length;
+      const failed = records.filter((record) => record.status === "failed");
+      const logs = records.flatMap((record) => record.logs || []).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).slice(-10);
+      const ready = slots.filter(Boolean);
+      const latest = logs.at(-1)?.message || "Čekání na cloudové GPU";
+      setResults(slots);
+      setLibraryItems((current) => Array.from(new Map([...ready, ...current].map((item) => [item.id, item])).values()));
+      const progress = records.reduce((sum, record) => sum + (record.status === "completed" ? 1 : record.progress || 0), 0) / records.length;
+      setJob({ ...EMPTY_JOB, status: finished === records.length ? (failed.length ? "failed" : "completed") : "running",
+        progress, logs, message: `${ready.length}/${slots.length} obrázků · ${finished}/${records.length} vstupů hotovo · ${latest}` });
+      const issues = [...submissionErrors, ...failed.map((record) => record.error?.detail || "Generation failed")];
+      if (responses.some((response) => response.status === "rejected")) issues.push("Spojení přerušeno, kontrolu opakuji.");
+      setError(issues.join(" · "));
+      if (finished === records.length) {
+        window.localStorage.setItem("img2img-last-batch", JSON.stringify(activeJobs));
+        setActiveJobs([]); loadLibrary().catch(() => {});
       }
+      else timer = window.setTimeout(poll, POLL_INTERVAL);
     };
-
     poll();
-    return () => {
-      isCancelled = true;
-    };
-  }, [jobId]);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activeJobs, submissionErrors]);
+
+  useEffect(() => {
+    if (activeJobs.length) window.localStorage.setItem("img2img-active-jobs", JSON.stringify(activeJobs));
+    else window.localStorage.removeItem("img2img-active-jobs");
+    window.localStorage.removeItem("img2img-active-job");
+  }, [activeJobs]);
 
   const targetSize = useMemo(() => {
-    const width = normalizeMultipleOfEight(Math.round(imageSize.width * resizeScale));
-    const height = normalizeMultipleOfEight(Math.round(imageSize.height * resizeScale));
+    const ratio = Math.min(1, 1536 / Math.max(imageSize.width, imageSize.height));
+    const baseWidth = Math.max(64, Math.floor(imageSize.width * ratio / 8) * 8);
+    const baseHeight = Math.max(64, Math.floor(imageSize.height * ratio / 8) * 8);
+    const width = Math.round(baseWidth * resizeScale);
+    const height = Math.round(baseHeight * resizeScale);
     return { width, height };
   }, [imageSize, resizeScale]);
 
   const isGenerating =
-    job.status === "preparing" || job.status === "queued" || job.status === "waiting" || job.status === "running";
-  const progressValue = Math.max(0, Math.min(100, Math.round((job.progress || 0) * 100)));
+    Boolean(activeJobs.length) || job.status === "preparing" || job.status === "queued" || job.status === "waiting" || job.status === "running";
+  const progressValue = job.status === "completed" ? 100 : Math.max(0, Math.min(isGenerating ? 99 : 100, Math.round((job.progress || 0) * 100)));
+  const readyCount = results.filter(Boolean).length;
+  const outputCount = results.length || Math.max(1, inputItems.length) * numImages;
+  const sourceCount = inputItems.length || activeJobs.length || new Set(results.filter(Boolean).map((item) => item.source_name)).size || 1;
   const visibleLogs = job.logs?.slice(-10) || [];
 
   function buildPresetPayload() {
     return {
+      generationMode,
       modelId,
       loraId,
       loraStrength,
@@ -168,8 +201,10 @@ function App() {
   }
 
   function applyPreset(preset) {
-    setModelId(preset.modelId || "sdxl_base");
-    setLoraId(preset.loraId || "none");
+    const mode = preset.generationMode || (preset.loraId && preset.loraId !== "none" ? "lora" : "checkpoint");
+    setGenerationMode(mode);
+    setModelId(preset.modelId && preset.modelId !== "sdxl_base" ? preset.modelId : "tuymans_sdxl");
+    setLoraId(preset.loraId && preset.loraId !== "none" ? preset.loraId : (loras.find((item) => item.id !== "none")?.id || "none"));
     setLoraStrength(Number(preset.loraStrength ?? 0.8));
     setNumImages(Number(preset.numImages ?? 2));
     setDenoise(Number(preset.denoise ?? 0.45));
@@ -219,87 +254,66 @@ function App() {
   }
 
   function handleFileChange(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const objectUrl = URL.createObjectURL(file);
-    const probe = new window.Image();
-    probe.onload = () => {
-      setImageSize({ width: probe.naturalWidth, height: probe.naturalHeight });
-      setResizeScale(1);
-    };
-    probe.src = objectUrl;
-
-    setImageFile(file);
-    setPreviewUrl(objectUrl);
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length || isGenerating) return;
+    if (files.length > 10) { setError("Vyber nejvýše 10 vstupních obrázků."); return; }
+    if (files.some((file) => !["image/png", "image/jpeg", "image/webp"].includes(file.type))) {
+      setError("Podporovány jsou PNG, JPEG a WebP."); return;
+    }
+    if (files.reduce((sum, file) => sum + file.size, 0) > 45 * 1024 * 1024) {
+      setError("Vstupy mohou mít dohromady nejvýše 45 MiB."); return;
+    }
+    inputItems.forEach((item) => URL.revokeObjectURL(item.url));
+    restoreRecentAllowed.current = false;
+    const items = files.map((file) => ({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file) }));
+    setInputItems(items);
+    setResizeScale(1);
     setResults([]);
     setSelectedImage(null);
     setError("");
     setJob(EMPTY_JOB);
-    setJobId("");
   }
 
   async function handleGenerate() {
-    if (!imageFile) {
-      setError("Upload image first.");
-      return;
-    }
-
-    setError("");
-    setResults([]);
-    setSelectedImage(null);
-    setJobId("");
-    setJob({
-      ...EMPTY_JOB,
-      status: "preparing",
-      message: "Encoding input image",
-      logs: [{ timestamp: new Date().toISOString(), progress: 0, message: "Encoding input image" }],
-    });
-
+    if (!inputItems.length || isGenerating) return;
+    setError(""); setSubmissionErrors([]); setResults([]); setSelectedImage(null);
+    setJob({ ...EMPTY_JOB, status: "preparing", message: `Příprava ${inputItems.length} samostatných vstupů` });
     try {
-      const imageBase64 = await fileToBase64(imageFile);
-      const response = await fetch(`${API_URL}/api/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image_base64: imageBase64,
-          model_id: modelId,
-          lora_id: loraId,
-          denoise: Number(denoise),
-          lora_strength: Number(loraStrength),
-          cfg: Number(cfg),
-          steps: Number(steps),
-          sampler: DEFAULT_SAMPLER,
-          schedule: DEFAULT_SCHEDULE,
-          scale: Number(resizeScale.toFixed(2)),
-          num_images: Number(numImages),
-        }),
+      const inputs = await Promise.all(inputItems.map(async (item) => ({ name: item.file.name, image_base64: await fileToBase64(item.file) })));
+      const response = await fetch(`${API_URL}/api/generate-batch`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs, settings: {
+          model_id: generationMode === "lora" ? "sdxl_base" : modelId,
+          lora_id: generationMode === "lora" ? loraId : "none",
+          denoise: Number(denoise), lora_strength: Number(loraStrength), cfg: Number(cfg), steps: Number(steps),
+          sampler: DEFAULT_SAMPLER, schedule: DEFAULT_SCHEDULE,
+          scale: Number(resizeScale.toFixed(2)), num_images: Number(numImages),
+        } }),
       });
-
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.error || "Generation failed.");
-      }
-
-      setJobId(data.job_id);
+      if (!response.ok) throw new Error(data.detail || "Generation failed.");
+      setSubmissionErrors(data.errors || []);
+      setActiveJobs(data.jobs);
+      if (data.errors?.length) setError(data.errors.join(" · "));
     } catch (generationError) {
       setError(generationError.message);
-      setJob({
-        ...EMPTY_JOB,
-        status: "failed",
-        message: generationError.message,
-        logs: [{ timestamp: new Date().toISOString(), progress: 1, message: generationError.message }],
-      });
+      setJob({ ...EMPTY_JOB, status: "failed", message: generationError.message });
     }
   }
 
-  async function loadLibrary() {
+  async function loadLibrary(restoreRecent = false) {
     const response = await fetch(`${API_URL}/api/library`);
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.detail || "Library load failed.");
     }
     setLibraryItems(data.items || []);
+    if (restoreRecent && !activeJobs.length && restoreRecentAllowed.current) {
+      setResults((current) => current.length ? current : (data.items || []).slice(0, 20).map((item) => ({
+        ...item, source_name: item.settings?.source_name || item.filename,
+      })));
+    }
   }
 
   async function deleteLibraryItem(itemId) {
@@ -316,10 +330,10 @@ function App() {
 
   function openResultImage(image, index) {
     setSelectedImage({
-      src: buildImageUrl(`data:image/${image.format || "png"};base64,${image.image_base64}`),
+      src: image.url ? buildImageUrl(image.url) : `data:image/${image.format || "png"};base64,${image.image_base64}`,
       width: image.width,
       height: image.height,
-      downloadUrl: `data:image/${image.format || "png"};base64,${image.image_base64}`,
+      downloadUrl: image.url ? buildImageUrl(image.url) : `data:image/${image.format || "png"};base64,${image.image_base64}`,
       filename: `img2img-output-${index + 1}.${image.format || "png"}`,
     });
   }
@@ -337,7 +351,7 @@ function App() {
 
   function downloadDataImage(image, index) {
     const anchor = document.createElement("a");
-    anchor.href = `data:image/${image.format || "png"};base64,${image.image_base64}`;
+    anchor.href = image.url ? buildImageUrl(image.url) : `data:image/${image.format || "png"};base64,${image.image_base64}`;
     anchor.download = `img2img-output-${index + 1}.${image.format || "png"}`;
     anchor.click();
   }
@@ -364,16 +378,16 @@ function App() {
           <div className="section-mark" />
           <div className="intro-copy">
             <h1>IMG2IMG</h1>
-            <p>RUNPOD POD RUNTIME</p>
+            <p>MODAL · SDXL STUDIO</p>
           </div>
         </div>
 
         <div className="panel-divider" />
 
         <section className="control-group upload-group">
-          <SectionTitle title="UPLOAD IMAGE" />
+          <SectionTitle title={`VSTUPY · ${inputItems.length}/10`} />
           <label className="upload-frame">
-            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleFileChange} />
+            <input type="file" multiple disabled={isGenerating} aria-label="Vstupní obrázky (max. 10)" accept="image/png,image/jpeg,image/webp" onChange={handleFileChange} />
             {previewUrl ? <img src={previewUrl} alt="Input" /> : <span className="upload-plus">+</span>}
             <span className="frame-corner frame-corner-tl" />
             <span className="frame-corner frame-corner-tr" />
@@ -381,14 +395,30 @@ function App() {
             <span className="frame-corner frame-corner-br" />
             {previewUrl ? (
               <span className="input-dimensions">
-                {imageSize.width} x {imageSize.height}
+                {inputItems.length > 1 ? `${inputItems.length} samostatných vstupů` : `${imageSize.width} × ${imageSize.height}`}
               </span>
             ) : null}
           </label>
+          {inputItems.length > 0 && <div className="input-thumbnails">
+            {inputItems.map((item) => <div key={item.id} className="input-thumbnail">
+              <img src={item.url} alt={item.file.name} title={item.file.name} />
+              <button type="button" disabled={isGenerating} aria-label={`Odebrat ${item.file.name}`}
+                onClick={() => { URL.revokeObjectURL(item.url); setInputItems((current) => current.filter((other) => other.id !== item.id)); setResults([]); }}>×</button>
+            </div>)}
+          </div>}
+          <span className="batch-hint">Každý vstup samostatně · max. 10 obrázků</span>
         </section>
 
-        <FieldSelect label="MODEL" value={modelId} onChange={setModelId} options={models} />
-        <FieldSelect label="LORA" value={loraId} onChange={setLoraId} options={loras} />
+        <FieldSelect label="REŽIM" value={generationMode} onChange={setGenerationMode} options={[
+          { id: "checkpoint", name: "Checkpoint — vlastní model" },
+          { id: "lora", name: "LoRA — SDXL Base 1.0" },
+        ]} />
+        {generationMode === "checkpoint" ? (
+          <FieldSelect label="CHECKPOINT" value={modelId} onChange={setModelId} options={models.filter((item) => item.kind !== "base")} />
+        ) : (
+          <>
+            <section className="control-group"><SectionTitle title="ZÁKLAD: SDXL BASE 1.0" /></section>
+            <FieldSelect label="LORA" value={loraId} onChange={setLoraId} options={loras.filter((item) => item.id !== "none")} />
 
         <SliderField label="LORA STR" value={loraStrength.toFixed(2)}>
           <input
@@ -400,8 +430,10 @@ function App() {
             onChange={(event) => setLoraStrength(Number(event.target.value))}
           />
         </SliderField>
+          </>
+        )}
 
-        <SliderField label="IMAGES" value={String(numImages)}>
+        <SliderField label="VARIANTY / VSTUP" value={String(numImages)}>
           <input type="range" min="1" max="4" step="1" value={numImages} onChange={(event) => setNumImages(Number(event.target.value))} />
         </SliderField>
 
@@ -411,13 +443,13 @@ function App() {
             <div className="resolution-box">
               <span>SOURCE</span>
               <strong>
-                {imageSize.width} x {imageSize.height}
+                {inputItems.length > 1 ? `${inputItems.length} samostatných vstupů` : `${imageSize.width} × ${imageSize.height}`}
               </strong>
             </div>
             <div className="resolution-box">
               <span>TARGET</span>
               <strong>
-                {targetSize.width} x {targetSize.height}
+                {inputItems.length > 1 ? "Podle každého vstupu" : `${targetSize.width} × ${targetSize.height}`}
               </strong>
             </div>
           </div>
@@ -437,7 +469,7 @@ function App() {
           <div className="workspace-meta">
             <SectionTitle title="OUTPUTS" />
             <span className="workspace-subline">
-              {results.length ? `${results.length} READY` : `${numImages} PLACEHOLDERS`}
+              {`${readyCount}/${outputCount} HOTOVO · ${sourceCount} VSTUPŮ`}
             </span>
           </div>
           <button className="generate-button" disabled={isGenerating || !imageFile} onClick={handleGenerate}>
@@ -449,17 +481,19 @@ function App() {
 
         {error ? <div className="error-line">{error}</div> : null}
 
-        <div className={`output-stage output-stage-${numImages}`}>
-          {Array.from({ length: numImages }).map((_, index) => {
+        <div className="output-stage" style={{ "--preview-columns": outputCount <= 1 ? 1 : outputCount <= 4 ? 2 : outputCount <= 9 ? 3 : outputCount <= 16 ? 4 : outputCount <= 25 ? 5 : 6 }}>
+          {Array.from({ length: outputCount }).map((_, index) => {
             const image = results[index];
-            const imageSrc = image ? `data:image/${image.format || "png"};base64,${image.image_base64}` : "";
+            const imageSrc = image ? (image.url ? buildImageUrl(image.url) : `data:image/${image.format || "png"};base64,${image.image_base64}`) : "";
             return (
-              <button
+              <div
                 key={index}
-                type="button"
+                role="button"
+                tabIndex={image ? 0 : -1}
                 className={`output-tile ${image ? "is-filled" : ""}`}
                 onClick={() => image && openResultImage(image, index)}
-                disabled={!image}
+                onKeyDown={(event) => { if (image && ["Enter", " "].includes(event.key) && event.target === event.currentTarget) { event.preventDefault(); openResultImage(image, index); } }}
+                aria-disabled={!image}
               >
                 <span className="frame-corner frame-corner-tl" />
                 <span className="frame-corner frame-corner-tr" />
@@ -483,7 +517,7 @@ function App() {
                       ↓
                     </button>
                     <span className="output-dimensions">
-                      {image.width} x {image.height}
+                      {image.width} × {image.height}{image.source_name ? ` · ${image.source_name}` : ""}
                     </span>
                   </>
                 ) : (
@@ -492,13 +526,26 @@ function App() {
                     <span>{isGenerating ? "GENERATING..." : "PLACEHOLDER"}</span>
                   </div>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>
       </section>
 
       <aside className="app-panel app-panel-right">
+        <section className={`generation-progress ${isGenerating ? "is-active" : ""} ${job.status === "failed" ? "is-failed" : ""}`}>
+          <div className="generation-progress-heading">
+            <span>PRŮBĚH GENEROVÁNÍ</span>
+            <strong>{progressValue}<small>%</small></strong>
+          </div>
+          <div className="generation-progress-track" role="progressbar" aria-label="Průběh generování"
+            aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressValue} aria-valuetext={`${progressValue} % · ${job.message}`}>
+            <div className="generation-progress-fill" style={{ width: `${progressValue}%` }} />
+          </div>
+          <div className="generation-progress-message" role="status">
+            {job.status === "idle" ? "Připraveno ke generování" : job.status === "completed" ? "Hotovo · obrázky jsou uložené" : job.message}
+          </div>
+        </section>
         <SliderField label="DENOISE" value={denoise.toFixed(2)}>
           <input type="range" min="0.05" max="1" step="0.01" value={denoise} onChange={(event) => setDenoise(Number(event.target.value))} />
         </SliderField>
@@ -510,6 +557,14 @@ function App() {
         <SliderField label="STEPS" value={String(steps)}>
           <input type="range" min="1" max="80" step="1" value={steps} onChange={(event) => setSteps(Number(event.target.value))} />
         </SliderField>
+
+        <FieldSelect label="RYCHLOST" value={steps === 15 ? "preview" : steps === 25 ? "standard" : "custom"}
+          onChange={(value) => { if (value !== "custom") setSteps(value === "preview" ? 15 : 25); }}
+          options={[
+            { id: "preview", name: "Rychlý náhled · 15 kroků" },
+            { id: "standard", name: "Standard · 25 kroků" },
+            ...(steps !== 15 && steps !== 25 ? [{ id: "custom", name: `Vlastní · ${steps} kroků` }] : []),
+          ]} />
 
         <section className="control-group preset-group">
           <SectionTitle title="PRESETS" />
@@ -688,10 +743,6 @@ function SliderField({ label, value, children }) {
       {children}
     </label>
   );
-}
-
-function normalizeMultipleOfEight(value) {
-  return Math.max(64, Math.round(value / 8) * 8);
 }
 
 function formatTime(isoValue) {

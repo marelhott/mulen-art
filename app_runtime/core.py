@@ -51,7 +51,9 @@ class GenerationInput:
     num_images: int
 
 
-def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None,
+             image_callback: Callable | None = None) -> dict[str, Any]:
+    started = time.monotonic()
     generation_input = parse_input(payload)
     report_progress(progress_callback, 0.02, "Input validated")
 
@@ -66,6 +68,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
     report_progress(progress_callback, 0.22, f"Scheduler ready: {generation_input.sampler} / {generation_input.schedule}")
     ensure_lora(pipe, generation_input.lora_id, generation_input.lora_strength)
     report_progress(progress_callback, 0.28, f"LoRA ready: {generation_input.lora_id}")
+    setup_seconds = time.monotonic() - started
 
     source_image = decode_image(generation_input.image_base64)
     source_image = normalize_dimensions(source_image)
@@ -74,11 +77,19 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
     steps = generation_input.steps
     guidance_scale = generation_input.cfg
     output_images = []
+    meta = {
+        "model_id": generation_input.model_id, "lora_id": generation_input.lora_id,
+        "denoise": generation_input.denoise, "lora_strength": generation_input.lora_strength,
+        "steps": steps, "scale": generation_input.scale, "guidance_scale": guidance_scale,
+        "sampler": generation_input.sampler, "schedule": generation_input.schedule,
+        "demo_mode": False,
+    }
 
+    inference_started = time.monotonic()
     for index in range(generation_input.num_images):
         seed = random.randint(0, 2**31 - 1)
         generator = torch.Generator(device="cuda").manual_seed(seed)
-        base_progress = 0.35 + (index / max(1, generation_input.num_images)) * 0.5
+        base_progress = 0.35 + (index / max(1, generation_input.num_images)) * 0.55
         report_progress(progress_callback, base_progress, f"Generating image {index + 1}/{generation_input.num_images}")
         result = pipe(
             prompt="",
@@ -93,30 +104,23 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
 
         result = upscale_if_needed(result, generation_input.scale)
         output_images.append(encode_image(result))
-        report_progress(progress_callback, base_progress + 0.48 / max(1, generation_input.num_images), f"Image {index + 1} encoded")
+        if image_callback is not None:
+            image_callback(output_images[-1], meta)
+        report_progress(progress_callback, base_progress + 0.55 / max(1, generation_input.num_images), f"Image {index + 1}/{generation_input.num_images} saved")
 
+    meta["setup_seconds"] = round(setup_seconds, 2)
+    meta["generation_and_save_seconds"] = round(time.monotonic() - inference_started, 2)
     report_progress(progress_callback, 1.0, "Generation complete")
     return {
         "images": output_images,
-        "meta": {
-            "model_id": generation_input.model_id,
-            "lora_id": generation_input.lora_id,
-            "denoise": generation_input.denoise,
-            "lora_strength": generation_input.lora_strength,
-            "steps": steps,
-            "scale": generation_input.scale,
-            "guidance_scale": guidance_scale,
-            "sampler": generation_input.sampler,
-            "schedule": generation_input.schedule,
-            "demo_mode": False,
-        },
+        "meta": meta,
 }
 
 
 def get_options() -> dict[str, Any]:
     config = load_config()
     return {
-        "models": [{"id": item["id"], "name": item["name"]} for item in config.get("models", [])],
+        "models": [{"id": item["id"], "name": item["name"], "kind": item.get("kind", "checkpoint")} for item in config.get("models", [])],
         "loras": [{"id": item["id"], "name": item["name"]} for item in config.get("loras", [])],
         "samplers": [
             {"id": "dpmpp_2m", "name": "DPM++ 2M"},
@@ -132,8 +136,7 @@ def get_options() -> dict[str, Any]:
 
 def use_demo_mode() -> bool:
     return (
-        os.getenv("RUNPOD_TEST_MODE", "false").lower() == "true"
-        or os.getenv("IMG2IMG_DEMO_MODE", "false").lower() == "true"
+        os.getenv("IMG2IMG_DEMO_MODE", "false").lower() == "true"
     )
 
 
@@ -185,10 +188,19 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     steps = int(clamp(int(payload.get("steps", QUALITY_TO_STEPS[quality])), 1, 150))
     cfg = clamp(float(payload.get("cfg", os.getenv("DEFAULT_GUIDANCE_SCALE", "1.8"))), 1.0, 20.0)
 
+    model_id = str(payload.get("model_id", "tuymans_sdxl"))
+    lora_id = str(payload.get("lora_id", "none"))
+    model = get_config_item("models", model_id)
+    get_config_item("loras", lora_id)
+    if model.get("kind") == "base" and lora_id == "none":
+        raise ValueError("Select a trained LoRA for SDXL Base.")
+    if model.get("kind") != "base" and lora_id != "none":
+        raise ValueError("Trained checkpoints run without LoRA. Use SDXL Base for LoRA mode.")
+
     return GenerationInput(
         image_base64=str(payload["image_base64"]),
-        model_id=str(payload.get("model_id", "sdxl_base")),
-        lora_id=str(payload.get("lora_id", "none")),
+        model_id=model_id,
+        lora_id=lora_id,
         denoise=clamp(float(payload.get("denoise", 0.35)), 0.05, 1.0),
         lora_strength=clamp(float(payload.get("lora_strength", 0.8)), 0.0, 2.0),
         cfg=cfg,
@@ -261,6 +273,7 @@ def ensure_lora(pipe, lora_id: str, lora_strength: float) -> None:
             pipe.unload_lora_weights()
         pipe.load_lora_weights(lora_path, adapter_name="default")
         CURRENT_LORA_ID = lora_id
+        CURRENT_LORA_STRENGTH = None
 
     if CURRENT_LORA_STRENGTH != lora_strength:
         pipe.set_adapters(["default"], adapter_weights=[lora_strength])
@@ -443,11 +456,13 @@ def build_step_callback(progress_callback: ProgressCallback | None, base_progres
     if progress_callback is None:
         return None
 
-    image_span = 0.42 / max(1, total_images)
+    image_span = 0.55 / max(1, total_images)
 
     def step_callback(_pipe, step_index, _timestep, _kwargs):
-        progress = base_progress + ((step_index + 1) / max(1, steps)) * image_span
-        report_progress(progress_callback, progress, f"Image {image_index + 1}: step {step_index + 1}/{steps}")
+        actual_steps = max(1, int(getattr(_pipe, "num_timesteps", steps)))
+        fraction = min(1, (step_index + 1) / actual_steps)
+        progress = base_progress + fraction * image_span
+        report_progress(progress_callback, progress, f"Image {image_index + 1}/{total_images}: step {step_index + 1}/{actual_steps}")
         return _kwargs
 
     return step_callback

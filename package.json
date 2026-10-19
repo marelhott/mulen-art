@@ -1,5 +1,5 @@
 {
-  "name": "sdxl-img2img-pod",
+  "name": "sdxl-img2img-modal",
   "private": true,
   "version": "0.1.0",
   "workspaces": [
@@ -8,7 +8,10 @@
   "scripts": {
     "dev:frontend": "npm run dev --workspace frontend",
     "build:frontend": "npm run build --workspace frontend",
-    "start:local-demo": "IMG2IMG_DEMO_MODE=true python3 -m uvicorn app_runtime.server:app --host 0.0.0.0 --port 8000",
-    "start:local": "python3 -m uvicorn app_runtime.server:app --host 0.0.0.0 --port 8000"
+    "start:local-demo": "IMG2IMG_DEMO_MODE=true .venv/bin/python -m uvicorn app_runtime.server:app --host 127.0.0.1 --port 8000",
+    "start:local": ".venv/bin/python -m uvicorn app_runtime.server:app --host 127.0.0.1 --port 8000",
+    "modal:upload": ".venv/bin/python scripts/upload_models.py",
+    "modal:deploy": "npm run build:frontend && .venv/bin/modal deploy modal_app.py",
+    "test": ".venv/bin/python -m unittest discover -s tests -v"
   }
 }

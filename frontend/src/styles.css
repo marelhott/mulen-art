@@ -574,6 +574,25 @@ input[type="range"]::-moz-range-thumb {
   letter-spacing: 0.16em;
 }
 
+.generation-progress {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(39, 55, 187, 0.16);
+  background: rgba(39, 55, 187, 0.035);
+}
+.generation-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.generation-progress-heading > span { font-size: 0.64rem; font-weight: 600; letter-spacing: 0.06em; }
+.generation-progress-heading strong { font-size: 1.8rem; font-variant-numeric: tabular-nums; color: var(--accent); }
+.generation-progress-heading small { font-size: 0.8rem; margin-left: 3px; }
+.generation-progress-track { height: 12px; overflow: hidden; border-radius: 6px; background: rgba(39, 55, 187, 0.10); }
+.generation-progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width 650ms ease; }
+.generation-progress.is-active .generation-progress-fill { background-image: linear-gradient(110deg, transparent 25%, rgba(255,255,255,.28) 50%, transparent 75%); background-size: 180px 100%; animation: progress-shimmer 1.6s linear infinite; }
+.generation-progress-message { min-height: 2.6em; font-size: 0.69rem; line-height: 1.4; color: var(--muted); }
+.generation-progress.is-failed .generation-progress-fill { background: var(--danger); }
+@keyframes progress-shimmer { from { background-position: -180px 0; } to { background-position: 180px 0; } }
+@media (prefers-reduced-motion: reduce) { .generation-progress-fill { transition: none; animation: none !important; } }
+
 .debug-strip {
   margin-top: 0;
   display: grid;
@@ -924,4 +943,30 @@ input[type="range"]::-moz-range-thumb {
   .debug-strip-line {
     grid-template-columns: 1fr;
   }
+}
+
+/* Output density follows the number of results, independent of batch size. */
+.app-panel-center .output-stage {
+  grid-template-columns: repeat(var(--preview-columns, 2), minmax(0, 1fr));
+  align-content: start;
+  gap: 14px;
+  padding: 16px;
+}
+.app-panel-center .output-tile {
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  aspect-ratio: 1;
+  min-width: 0;
+  justify-self: center;
+}
+.output-dimensions { max-width: 95%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.input-thumbnails { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.input-thumbnail { position: relative; min-width: 0; aspect-ratio: 1; }
+.input-thumbnail img { width: 100%; height: 100%; object-fit: contain; background: #e9eaf0; }
+.input-thumbnail button { position: absolute; top: 0; right: 0; width: 18px; height: 18px; border: 0; color: white; background: #252747; cursor: pointer; }
+.input-thumbnail button:disabled { opacity: .4; cursor: default; }
+.batch-hint { font-size: .64rem; line-height: 1.5; color: var(--muted); }
+@media (max-width: 600px) {
+  .app-panel-center .output-stage { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 8px; gap: 8px; }
 }

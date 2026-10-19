@@ -1,170 +1,117 @@
-# SDXL Img2Img Pod Runtime
+# SDXL Img2Img Studio — Modal
 
-Minimal img2img style-transfer app for RunPod pods.
+Private image-to-image app using your own SDXL checkpoints and LoRAs. React UI,
+FastAPI CPU gateway, and an on-demand NVIDIA L4 worker. No RunPod or local GPU.
 
-No Forge, no Automatic1111, no ComfyUI.
+## Included models
 
-## What it is
+Configured from `/Users/mulenmara/CODE_DISK/models`:
 
-- `frontend/` - small React UI
-- `app_runtime/` - FastAPI + Diffusers runtime
-- `config/models.json` - model and LoRA registry
-- `pod/` - RunPod pod image and start script
+- `checkpoints/Tuymans_SDXL.safetensors`
+- `checkpoints/tuy_small.safetensors`
+- `checkpoints/hofmann_SDXL.safetensors`
+- `lora/lora_tuymans_SDXL.safetensors`
+- `lora/lora_hofmann_SDXL.safetensors`
 
-The app runs as one process on one port and serves both UI and API.
+The upload script maps local `lora/` to cloud `loras/`. It excludes `.bak` files.
+Only SDXL-compatible weights are supported. Models are not retrained.
+The UI has two separate modes: trained checkpoint without LoRA, or official
+SDXL Base 1.0 with a trained LoRA. The API rejects mixed trained-checkpoint/LoRA
+combinations and requires a LoRA when using the base. Old saved LoRA presets
+are migrated to the base-model mode when applied.
 
-## Main flow
+Download the base directly on Modal (not onto the Mac):
+`.venv/bin/modal run scripts/download_sdxl_base.py`.
+The script pins Stability AI's official checkpoint revision and verifies SHA-256
+before committing it. Source: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0
+An optional faster migration from the existing R2 copies is available with
+`.venv/bin/modal run scripts/import_models.py`. It verifies the full SHA-256 of
+every cloud file against the local source before committing it.
 
-```text
-Browser -> FastAPI pod runtime -> Diffusers pipeline -> images
+## Setup and deploy
+
+Run from this repository (Python 3.11 recommended). Modal currently requires a
+payment method on the account before GPU functions can be deployed:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+npm ci
+.venv/bin/python scripts/prepare_modal.py
+.venv/bin/modal token new
+.venv/bin/python scripts/upload_models.py --dry-run
+.venv/bin/python scripts/upload_models.py
+npm run modal:deploy
 ```
 
-## API
+Use the HTTPS URL printed by Modal. Web username/password are in the private,
+Git-ignored `.modal-app-credentials.json` file. Never put this file in Git.
+Deployment injects these values through a Modal Secret; they are not bundled in
+frontend assets. The app provides a sign-in form and a signed HttpOnly/Secure
+session cookie (30 days). HTTP Basic authentication is also supported for tools.
+No separate frontend host or Vercel account is required.
 
-- `GET /health`
-- `GET /api/options`
-- `POST /api/generate`
+## Architecture and cost control
 
-Example payload:
+- `modal_app.py`: deployable CPU web service and independent GPU function.
+- Web routes require authentication, including gallery images and generation.
+- Models live in `img2img-models` Volume (~26.69 GiB including SDXL Base).
+- Gallery files/metadata live in `img2img-outputs` Volume.
+- Jobs/progress live in a shared Modal Dict so CPU restarts do not lose them.
+- Up to 10 independent L4 workers can process different input images concurrently,
+  subject to the account GPU quota and available capacity. Each worker runs one
+  input at a time; it scales to zero after a 20-second idle
+  window. Browsing/polling never starts it. Starts and the idle window can be billed.
+- Select 1–10 separate PNG/JPEG/WebP inputs (45 MiB total in the browser).
+  Each input produces 1–4 variants independently: 10 inputs × 2 variants = 20
+  outputs. Images are never combined into a composite input. The CPU API validates
+  the entire batch and reserves the total output quota before submitting any GPU.
+  Failed submissions refund only their own reservations; accepted jobs continue.
+- Completed images are published immediately while the rest of the batch runs.
+  A responsive output grid supports up to 40 result tiles and shrinks previews as
+  the count increases; full resolution stays available when opened/downloaded.
+- The right-hand progress bar shows aggregate live progress across input jobs,
+  using the actual img2img denoising step count. Active jobs resume after reload.
+- Optional quick preview uses 15 steps instead of the unchanged 25-step standard.
+  Fewer steps can change quality. It does not replace your checkpoint or LoRA.
+- Default monthly safety limit: 200 submitted output images, UTC calendar month.
+  This is an application usage limit, NOT a dollar budget or a platform billing cap.
+  Reservations persist in the separate `img2img-state` Volume even after weeks
+  without access. Failed GPU jobs still consume reservations; failed submissions
+  roll them back.
+  To change it, edit `MONTHLY_IMAGE_LIMIT` in the local credential file and redeploy.
+- Model storage remains allocated when GPU is off. Current advertised storage
+  price beyond the currently included 1 TiB is $0.09/GiB/month; this model
+  inventory fits within that included storage. Consult https://modal.com/pricing
+  for current credits and billing rules. Credits are not a guarantee of zero charges.
+- The first real generation may download/cache SDXL tokenizer/config assets from
+  Hugging Face. Cold starts and checkpoint switches are slower than warm requests.
+- Job records expire according to Modal Dict retention; completed images persist
+  separately in the output Volume until deleted.
 
-```json
-{
-  "image_base64": "...",
-  "model_id": "sdxl_base",
-  "lora_id": "none",
-  "denoise": 0.35,
-  "lora_strength": 0.8,
-  "quality": "balanced",
-  "scale": 1.0,
-  "num_images": 1
-}
-```
+The pipeline uses an empty text prompt, matching the original workflow. Denoise,
+checkpoint and LoRA control the appearance. Output scaling uses Lanczos, not AI
+super-resolution. Inputs are normalized to at most 1536 px on the long side.
 
-## Local demo
+## Verification
 
-Install minimal deps:
-
-```bash
-python3 -m pip install -r app_runtime/requirements-demo.txt
-npm install
+```sh
+npm test
 npm run build:frontend
-npm run start:local-demo
 ```
 
-Then open:
+Tests cover authorization, input rejection before GPU allocation, shared job
+state, quota reservation/rollback, worker error reporting, and persistent gallery
+save/download/delete. Local worker tests use demo filters, not a real GPU.
+A successful build/test does not verify CUDA inference; do a real checkpoint and
+LoRA generation on Modal after upload/deployment.
 
-```text
-http://localhost:8000
-```
+For a local UI preview without GPU inference:
 
-`start:local-demo` uses `IMG2IMG_DEMO_MODE=true`, so you can test the full UI flow without mounted SDXL checkpoints.
-
-## Local real runtime
-
-When you have real models available locally or on a mounted volume:
-
-```bash
-python3 -m pip install -r app_runtime/requirements.txt
+```sh
 npm run build:frontend
-MODEL_CONFIG_PATH=/absolute/path/to/models.json npm run start:local
+.venv/bin/python -m uvicorn app_runtime.server:app --port 8000
 ```
 
-## RunPod pod
-
-Expected mounted volume layout:
-
-```text
-/workspace/models/checkpoints/
-/workspace/models/loras/
-/workspace/models/config/models.json
-/workspace/outputs/
-```
-
-If you want to pre-populate the network volume without launching a Pod, use the S3-compatible API. This repo includes:
-
-```bash
-scripts/sync_runpod_volume.sh
-```
-
-Default target:
-
-- volume id: `pvhq2aariu`
-- region: `EU-RO-1`
-- endpoint: `https://s3api-eu-ro-1.runpod.io`
-
-It uploads:
-
-- `config/models.json` -> `models/config/models.json`
-- `.keep` placeholders for `models/checkpoints`, `models/loras`, `outputs`
-
-Optional env vars for bulk sync:
-
-```bash
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-LOCAL_CHECKPOINT_DIR=/absolute/path/to/checkpoints
-LOCAL_LORA_DIR=/absolute/path/to/loras
-bash scripts/sync_runpod_volume.sh
-```
-
-## Fastest asset transfer
-
-If the models and LoRAs already live in public Cloudflare R2, the fastest path is not:
-
-- local Mac -> upload to RunPod volume
-
-The fastest path is:
-
-- R2 -> temporary RunPod Pod in the same datacenter as the volume -> `/workspace/models/...`
-
-Use:
-
-```bash
-bash scripts/fetch_r2_assets_to_workspace.sh
-```
-
-This downloads directly into the mounted network volume and keeps the files there permanently for future Pods.
-
-Optional:
-
-```bash
-PARALLEL=8 bash scripts/fetch_r2_assets_to_workspace.sh
-INCLUDE_SDXL_BASE=1 HF_TOKEN=hf_xxx bash scripts/fetch_r2_assets_to_workspace.sh
-```
-
-Build image from repo root:
-
-```bash
-docker build -f pod/Dockerfile -t sdxl-img2img-pod .
-```
-
-The pod container starts with:
-
-```bash
-/app/start.sh
-```
-
-That launches:
-
-```bash
-python3 -m uvicorn app_runtime.server:app --host 0.0.0.0 --port 8000
-```
-
-## Runtime env
-
-```bash
-HOST=0.0.0.0
-PORT=8000
-MODEL_CONFIG_PATH=/workspace/models/config/models.json
-DEFAULT_GUIDANCE_SCALE=1.8
-OUTPUT_FORMAT=PNG
-MAX_IMAGE_SIDE=1536
-ENABLE_CPU_OFFLOAD=false
-```
-
-## Notes
-
-- model caching is in-process
-- switching only LoRA is cheap compared to switching checkpoint
-- switching checkpoint reloads the pipeline
-- demo mode is only for local preview and fast validation
+Set `IMG2IMG_DEMO_MODE=true` for demo filters. Local preview is for development;
+production always uses `app_runtime.cloud_server` and its authentication.

@@ -1,29 +1,25 @@
 {
   "models": [
     {
-      "id": "sdxl_base",
-      "name": "SDXL Base",
-      "path": "/workspace/models/checkpoints/sd_xl_base_1.0.safetensors"
-    },
-    {
       "id": "tuymans_sdxl",
       "name": "Tuymans SDXL",
-      "path": "/workspace/models/checkpoints/Tuymans_SDXL.safetensors"
+      "path": "/models/checkpoints/Tuymans_SDXL.safetensors"
     },
     {
       "id": "tuy_small",
       "name": "Tuy Small",
-      "path": "/workspace/models/checkpoints/tuy_small.safetensors"
+      "path": "/models/checkpoints/tuy_small.safetensors"
     },
     {
       "id": "hofmann_sdxl",
       "name": "Hofmann SDXL",
-      "path": "/workspace/models/checkpoints/hofmann_SDXL.safetensors"
+      "path": "/models/checkpoints/hofmann_SDXL.safetensors"
     },
     {
-      "id": "tuymans_hofmann_50_50",
-      "name": "Tuymans Hofmann 50-50",
-      "path": "/workspace/models/checkpoints/Tuymans_Hofmann_50-50.safetensors"
+      "id": "sdxl_base",
+      "name": "SDXL Base 1.0",
+      "kind": "base",
+      "path": "/models/checkpoints/sd_xl_base_1.0.safetensors"
     }
   ],
   "loras": [
@@ -33,29 +29,14 @@
       "path": null
     },
     {
-      "id": "lora_tuymans_style",
-      "name": "Tuymans Style",
-      "path": "/workspace/models/loras/lora_tuymans_style.safetensors"
-    },
-    {
       "id": "lora_tuymans_sdxl",
       "name": "Tuymans SDXL LoRA",
-      "path": "/workspace/models/loras/lora_tuymans_SDXL.safetensors"
-    },
-    {
-      "id": "flux_tuymans_000001400",
-      "name": "Flux Tuymans 000001400",
-      "path": "/workspace/models/loras/flux_tuymans_000001400.safetensors"
-    },
-    {
-      "id": "lora_tuy_small",
-      "name": "Tuy Small LoRA",
-      "path": "/workspace/models/loras/lora_tuy_small.safetensors"
+      "path": "/models/loras/lora_tuymans_SDXL.safetensors"
     },
     {
       "id": "lora_hofmann_sdxl",
       "name": "Hofmann SDXL LoRA",
-      "path": "/workspace/models/loras/lora_hofmann_SDXL.safetensors"
+      "path": "/models/loras/lora_hofmann_SDXL.safetensors"
     }
   ]
 }
