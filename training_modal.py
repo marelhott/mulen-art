@@ -28,12 +28,12 @@ def train_variant(kind: str = "lora", steps: int = 300, learning_rate: float = 0
     import json, subprocess, time, traceback
     from datetime import datetime, timezone
     import torch
-    if kind not in {'lora','full'} or not 1 <= steps <= 1500:
+    if kind not in {'lora','full','approved'} or not 1 <= steps <= 3000:
         raise ValueError('Invalid bounded training configuration')
     if not 1e-7 <= learning_rate <= 1e-4:
         raise ValueError('Learning rate outside reviewed range')
     deadline = 1620 if kind == 'lora' and steps <= 300 else 6600
-    run_id = ('lora64' if kind == 'lora' else 'full-unet') + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    run_id = ('lora64' if kind == 'lora' else ('full-unet-approved' if kind == 'approved' else 'full-unet')) + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     folder = Path('/results') / run_id
     folder.mkdir()
     dataset = '''[general]
@@ -62,6 +62,15 @@ num_repeats = 1
         # At this pinned commit sdxl_train.py does not apply per-image prior loss weights.
         dataset = dataset.replace('num_repeats = 1', 'num_repeats = 4')
         dataset += '\n[[datasets.subsets]]\nimage_dir = "/data/dataset-v1/regularization"\nnum_repeats = 1\ncaption_dropout_rate = 0.0\n'
+    if kind == 'approved':
+        manifest=json.loads(Path('/data/dataset-approved-v3/manifest.json').read_text())
+        if len(manifest)!=247: raise RuntimeError('Expected all 247 approved sources')
+        allowed={'/Users/mulenmara/Pictures/TUY resized-images','/Users/mulenmara/Pictures/Tuymans hi-res'}
+        if any(str(Path(r['path']).parent) not in allowed for r in manifest): raise RuntimeError('Unapproved source in manifest')
+        dataset=dataset.replace('/data/dataset-v2/train','/data/dataset-approved-v3/whole')
+        dataset=dataset.replace('caption_dropout_rate = 0.15','caption_dropout_rate = 0.35')
+        dataset=dataset.replace('num_repeats = 1','num_repeats = 4')
+        dataset+='\n[[datasets.subsets]]\nimage_dir = "/data/dataset-approved-v3/detail"\nnum_repeats = 1\n'
     (folder/'dataset.toml').write_text(dataset)
     config = {
       'pretrained_model_name_or_path':'/models/checkpoints/sd_xl_base_1.0.safetensors',
@@ -77,7 +86,7 @@ num_repeats = 1
       'save_every_n_steps':100 if steps <= 300 else 200,'save_state':True,'save_state_on_train_end':True,'save_last_n_steps':steps,
       'logging_dir':str(folder/'logs'),'log_with':'tensorboard',
     }
-    if kind == 'full':
+    if kind in {'full','approved'}:
         for key in ['network_module','network_dim','network_alpha','network_train_unet_only']:
             config.pop(key)
         config['output_name']='mvhpaint_full_unet'
@@ -127,8 +136,9 @@ num_repeats = 1
 def main(kind: str = "lora", steps: int = 300, learning_rate: float = 0.00005):
     import json
     # Upload only the prepared private dataset; never publish it or modify source images.
-    local=Path(__file__).parent/'outputs/research/tuymans/dataset-v2'
+    dataset_name='dataset-approved-v3' if kind == 'approved' else 'dataset-v2'
+    local=Path(__file__).parent/'outputs/research/tuymans'/dataset_name
     if not (local/'manifest.json').exists(): raise RuntimeError('Prepare and review dataset first')
     with data.batch_upload() as upload:
-        upload.put_directory(local, '/dataset-v2')
+        upload.put_directory(local, '/'+dataset_name)
     print(json.dumps(train_variant.remote(kind, steps, learning_rate),indent=2))

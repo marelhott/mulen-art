@@ -33,7 +33,7 @@ def main():
     training=json.loads(b''.join(volume.read_file(f'{run}/status.json')))
     write_state(local/'training-status.json',training)
     files={Path(x.path).name:x.path for x in volume.iterdir(run) if x.path.endswith('.safetensors')}
-    selected=[f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in [400,800,1200]]
+    selected=[f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in ([800,1600,2400] if run.startswith('full-unet-approved-') else [400,800,1200])]
     selected=[name for name in selected if name in files]
     if not selected:
         selected=sorted(name for name in files if '-step' in name)[-1:]

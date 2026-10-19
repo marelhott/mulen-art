@@ -26,3 +26,11 @@ From the repository root:
 ```
 
 Run the cloud coordinator only once per training run to avoid duplicate paid evaluations. It has no automatic paid-job retry. Before a new training experiment, choose a bounded configuration based on visual results rather than assuming that more steps, lower loss, more detail, or higher resolution improves the style.
+
+## Approved two-folder experiment (v3)
+
+Only `/Users/mulenmara/Pictures/TUY resized-images` and `/Users/mulenmara/Pictures/Tuymans hi-res` are allowed. `prepare_approved_dataset.py` verifies all 247 hashes and produces 247 whole reproductions plus 28 native 1024px detail crops. No aesthetic exclusions; no crops from the 201 Topaz-marked sources. Crops use style-only captions because whole-image subject descriptions could be false for a local detail. Whole images repeat four times and details once, giving details about 2.8% of sampling. Reproductions can depict the same artwork; 247 is a file count, not verified distinct works.
+
+`--kind approved --steps 2400 --learning-rate 0.000004` starts from clean SDXL 1.0 (not the earlier 95-image checkpoint). Full UNet, frozen VAE/text encoders, 35% caption dropout, no generic replay images, all approved sources in training. There is no held-out artwork split in this experiment; novel photograph tests alone cannot prove absence of memorization. Every source has a reviewed content caption in `approved_captions.txt`; source hashes, color handling and crop boxes are saved in the private dataset manifest.
+
+New comparison defaults: empty prompts, 28 scheduler steps, requested CFG 0.5, denoise 0.50/0.55. Approved-run evaluation has no text-to-image tests. The inference metadata records whether classifier-free guidance actually activated at the requested value. Cloud checkpoint comparisons use steps 800/1600/2400. Historical comparison files retain their historical parameters.

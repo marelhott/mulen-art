@@ -28,7 +28,7 @@ def compare(adapter_path: str, source_files: list[str]):
     adapter=Path('/results')/adapter_path
     if not adapter.is_file() or adapter.suffix!='.safetensors': raise ValueError('Missing trained adapter')
     folder=adapter.parent/'comparison';folder.mkdir(exist_ok=True)
-    metadata={'adapter':adapter_path,'prompt':'','negative_prompt':None,'cfg':1.8,
+    metadata={'adapter':adapter_path,'prompt':'','negative_prompt':None,'cfg':0.5,
               'steps':28,'seed':231019,'sampler':'dpmpp_2m','schedule':'karras',
               'conditioning':'empty positive, zero unconditional; same as app style mode',
               'source_files':source_files,'images':[]}
@@ -51,10 +51,10 @@ def compare(adapter_path: str, source_files: list[str]):
                 im=ImageOps.exif_transpose(raw).convert('RGB'); im.thumbnail((1024,1024),Image.Resampling.LANCZOS)
                 im=im.resize((max(64,im.width//8*8),max(64,im.height//8*8)),Image.Resampling.LANCZOS)
             if label=='dreamlook': im.save(folder/f'{i:02d}-source.png')
-            for denoise in [.52,.70]:
+            for denoise in [.50,.55]:
                 pipe.scheduler=make_scheduler(pipe.scheduler.config,'dpmpp_2m','karras')
                 output=pipe(prompt='',negative_prompt=None,image=im,strength=denoise,
-                    guidance_scale=1.8,num_inference_steps=28,
+                    guidance_scale=0.5,num_inference_steps=28,
                     generator=torch.Generator('cuda').manual_seed(231019)).images[0]
                 name_out=f'{i:02d}-{label}-d{int(denoise*100)}.png';output.save(folder/name_out)
                 metadata['images'].append({'file':name_out,'source_index':i,'model':label,'denoise':denoise})
@@ -77,7 +77,7 @@ def evaluate_checkpoint(checkpoint_path: str, source_files: list[str]):
         raise ValueError('Missing or invalid full checkpoint')
     if not 1 <= len(source_files) <= 8: raise ValueError('Invalid evaluation size')
     folder=checkpoint.parent/('evaluation-'+checkpoint.stem);folder.mkdir(exist_ok=True)
-    meta={'checkpoint':checkpoint_path,'prompt':'','negative_prompt':None,'cfg':1.8,
+    meta={'checkpoint':checkpoint_path,'prompt':'','negative_prompt':None,'cfg':0.5,
           'steps':28,'seed':231019,'sampler':'dpmpp_2m','schedule':'karras',
           'source_files':source_files,'images':[]}
     start=time.monotonic()
@@ -92,11 +92,12 @@ def evaluate_checkpoint(checkpoint_path: str, source_files: list[str]):
             im=ImageOps.exif_transpose(raw).convert('RGB');im.thumbnail((1024,1024),Image.Resampling.LANCZOS)
             im=im.resize((max(64,im.width//8*8),max(64,im.height//8*8)),Image.Resampling.LANCZOS)
         im.save(folder/f'{i:02d}-source.png')
-        for denoise in [.52,.70]:
+        for denoise in [.50,.55]:
             pipe.scheduler=make_scheduler(pipe.scheduler.config,'dpmpp_2m','karras')
             output=pipe(prompt='',negative_prompt=None,image=im,strength=denoise,
-                guidance_scale=1.8,num_inference_steps=28,
+                guidance_scale=0.5,num_inference_steps=28,
                 generator=torch.Generator('cuda').manual_seed(231019)).images[0]
+            meta['classifier_free_guidance_active']=bool(pipe.do_classifier_free_guidance)
             name_out=f'{i:02d}-full-d{int(denoise*100)}.png';output.save(folder/name_out)
             meta['images'].append({'file':name_out,'source_index':i,'denoise':denoise})
     txt=StableDiffusionXLPipeline(**pipe.components)
@@ -106,6 +107,7 @@ def evaluate_checkpoint(checkpoint_path: str, source_files: list[str]):
               'a ceramic bowl and a drinking glass on a table',
               'a bird sitting on a bare branch',
               'an empty building facade seen from across a street']
+    if checkpoint.parent.name.startswith('full-unet-approved-'): contents=[]
     for i,content in enumerate(contents):
         prompt='mvhpaint, '+content
         txt.scheduler=make_scheduler(txt.scheduler.config,'dpmpp_2m','karras')
@@ -178,7 +180,7 @@ def diagnose_conditioning(checkpoint_path: str, source_file: str):
     im.save(folder/'source.png');start=time.monotonic();samples=[]
     for mode,negative in [('zero',None),('encoded','')]:
         for cfg in [1.0,1.8,4.0]:
-            for strength in [.52,.70]:
+            for strength in [.50,.55]:
                 pipe.scheduler=make_scheduler(pipe.scheduler.config,'dpmpp_2m','karras')
                 out=pipe(prompt='',negative_prompt=negative,image=im,strength=strength,
                     num_inference_steps=28,guidance_scale=cfg,
@@ -208,7 +210,7 @@ def orchestrate(run_id: str, source_files: list[str]):
             if training['status'] in {'completed','failed'}: break
             time.sleep(60)
         else: raise TimeoutError('Training status did not finish within bounded wait')
-        candidates=[folder/f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in [400,800,1200]]
+        candidates=[folder/f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in ([800,1600,2400] if run_id.startswith('full-unet-approved-') else [400,800,1200])]
         candidates=[p for p in candidates if p.is_file()]
         if not candidates: candidates=sorted(folder.glob('mvhpaint_full_unet-step*.safetensors'))[-1:]
         if not candidates: raise RuntimeError('No saved full checkpoint to evaluate')
