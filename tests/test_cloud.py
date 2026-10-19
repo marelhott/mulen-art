@@ -177,21 +177,56 @@ class CloudFlowTests(unittest.TestCase):
         settings = {"model_id": "tuymans_sdxl", "num_images": 2}
         response = client.post("/api/generate-batch", json={"inputs": inputs, "settings": settings})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.json()["jobs"]), 10)
-        self.assertEqual(len(self.submissions), 10)
+        self.assertEqual(len(response.json()["jobs"]), 20)
+        self.assertEqual(len(self.submissions), 20)
         for index, (_, payload) in enumerate(self.submissions):
-            self.assertEqual(payload["image_base64"], inputs[index]["image_base64"])
-            self.assertEqual(payload["source_name"], inputs[index]["name"])
-            self.assertEqual(payload["num_images"], 2)
+            self.assertEqual(payload["image_base64"], inputs[index // 2]["image_base64"])
+            self.assertEqual(payload["source_name"], inputs[index // 2]["name"])
+            self.assertEqual(payload["num_images"], 1)
         self.assertEqual(sum(self.usage.values()), 20)
 
     def test_batch_rejects_invalid_count_input_and_total_quota_before_gpu(self):
         source = {"image_base64": self.payload["image_base64"]}
-        for inputs in ([], [source] * 11, [source, {"image_base64": "invalid"}]):
+        for inputs in ([], [source, {"image_base64": "invalid"}]):
             self.assertEqual(self.client.post("/api/generate-batch", json={"inputs": inputs}).status_code, 422)
         self.assertEqual(self.client.post("/api/generate-batch", json={"inputs": [source] * 2, "settings": {"num_images": 2}}).status_code, 429)
         self.assertEqual(self.submissions, [])
         self.assertEqual(self.usage, {})
+
+    def test_unlimited_counts_split_variants_and_no_monthly_cap(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client.auth = self.client.auth
+        response = client.post("/api/generate-batch", json={"inputs": [
+            {"name": f"source-{i}", "image_base64": self.payload["image_base64"]} for i in range(12)],
+            "settings": {"num_images": 21}})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["jobs"]), 252)
+        self.assertEqual(sum(self.usage.values()), 252)
+        self.assertIsNone(client.get("/api/usage").json()["limit"])
+        self.assertTrue(all(payload["num_images"] == 1 for _, payload in self.submissions))
+        self.assertEqual({j["source_index"] for j in response.json()["jobs"]}, set(range(12)))
+
+    def test_retained_source_is_private_and_survives_gateway_restart(self):
+        response = self.client.post("/api/generate-batch", json={"inputs": [
+            {"name": "original.png", "image_base64": self.payload["image_base64"]}]})
+        job = self.jobs[response.json()["jobs"][0]["job_id"]]
+        self.assertTrue(job["source_url"].startswith("/library/source_"))
+        self.assertEqual(TestClient(self.app).get(job["source_url"]).status_code, 401)
+        self.assertEqual(self.client.get(job["source_url"]).status_code, 200)
+        client = TestClient(self.make_app(lambda *_: None)); client.auth = self.client.auth
+        self.assertEqual(client.get(job["source_url"]).status_code, 200)
+        self.assertEqual(client.get("/api/library").json()["items"], [])
+
+    def test_waiting_queue_does_not_expire_based_on_submission_age(self):
+        response = self.client.post("/api/generate", json=self.payload)
+        job_id = response.json()["job_id"]
+        self.jobs[job_id]["created_at"] = "2020-01-01T00:00:00+00:00"
+        self.assertEqual(self.client.get(f"/api/jobs/{job_id}").json()["status"], "queued")
+
+    def test_non_positive_and_fractional_variant_counts_are_rejected(self):
+        for count in (0, -1, 1.5, True):
+            self.assertEqual(self.client.post("/api/generate", json={**self.payload, "num_images": count}).status_code, 422)
+        self.assertFalse(self.submissions)
 
     def test_batch_partial_submission_failure_keeps_successful_job_and_refunds_failed(self):
         def submit(key, payload):

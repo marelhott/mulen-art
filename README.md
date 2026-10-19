@@ -62,24 +62,28 @@ No separate frontend host or Vercel account is required.
   subject to the account GPU quota and available capacity. Each worker runs one
   input at a time; it scales to zero after a 20-second idle
   window. Browsing/polling never starts it. Starts and the idle window can be billed.
-- Select 1–10 separate PNG/JPEG/WebP inputs (45 MiB total in the browser).
-  Each input produces 1–4 variants independently: 10 inputs × 2 variants = 20
-  outputs. Images are never combined into a composite input. The CPU API validates
-  the entire batch and reserves the total output quota before submitting any GPU.
-  Failed submissions refund only their own reservations; accepted jobs continue.
-- Completed images are published immediately while the rest of the batch runs.
-  A responsive output grid supports up to 40 result tiles and shrinks previews as
-  the count increases; full resolution stays available when opened/downloaded.
-- The right-hand progress bar shows aggregate live progress across input jobs,
-  using the actual img2img denoising step count. Active jobs resume after reload.
-- Optional quick preview uses 15 steps instead of the unchanged 25-step standard.
-  Fewer steps can change quality. It does not replace your checkpoint or LoRA.
-- Default monthly safety limit: 200 submitted output images, UTC calendar month.
-  This is an application usage limit, NOT a dollar budget or a platform billing cap.
-  Reservations persist in the separate `img2img-state` Volume even after weeks
-  without access. Failed GPU jobs still consume reservations; failed submissions
-  roll them back.
-  To change it, edit `MONTHLY_IMAGE_LIMIT` in the local credential file and redeploy.
+- Input count, variants per input and monthly output count have no application cap.
+  Inputs remain independent; there are no composite inputs. The browser sends small
+  transport batches, and each output has its own GPU job. The worker concurrency
+  setting (10), account capacity, billing limits and per-request byte/time limits
+  still apply; large batches queue instead of increasing one worker's duration.
+- Monthly reservations remain as usage telemetry only. There is no production
+  `MONTHLY_IMAGE_LIMIT`; `/api/usage` reports `limit: null`.
+- Completed images appear while the rest of the batch runs. The gallery renders
+  incrementally while scrolling, with automatic or manually adjusted thumbnail
+  size, multi-selection, ZIP export and reuse of an output as an input.
+- The Mulen Nano design uses the same local Hanken Grotesk / Instrument Serif
+  fonts, moss colors, panel gradients, rounded cards, hover tools, dark/light
+  switch, range controls and slim live progress bars. The viewer includes
+  arrow navigation, Escape, zoom/pan and input/output comparison via slider.
+  New jobs retain authenticated source images for comparison after reload;
+  older outputs without retained sources cannot show comparison.
+- The right progress bar uses real GPU steps, not a simulated countdown.
+  Active and last submitted jobs resume after reload. The history has no 20-image cap.
+- Quick preview uses 15 steps rather than the 25-step standard; fewer steps can
+  change quality. It does not replace the checkpoint or LoRA.
+- Failed submissions do not consume usage reservations. Accepted jobs continue
+  if another submission fails; generation requests are never automatically retried.
 - Model storage remains allocated when GPU is off. Current advertised storage
   price beyond the currently included 1 TiB is $0.09/GiB/month; this model
   inventory fits within that included storage. Consult https://modal.com/pricing
@@ -115,3 +119,17 @@ npm run build:frontend
 
 Set `IMG2IMG_DEMO_MODE=true` for demo filters. Local preview is for development;
 production always uses `app_runtime.cloud_server` and its authentication.
+
+## Návrat k předchozímu vzhledu
+
+Původní nasazená verze je commit `d292249`, označený tagem
+`studio-before-mulen-nano-2026-10-19`. Nová verze vzniká na větvi
+`codex/mulen-nano-studio`. Pro samostatnou obnovu bez změny rozpracovaných souborů:
+
+```sh
+git worktree add ../img2img-original studio-before-mulen-nano-2026-10-19
+```
+
+V obnoveném checkoutu je nutné znovu připravit ignorované závislosti a přihlašovací
+soubor a spustit `npm run modal:deploy`. Tag vrací také tehdejší limity; pokud je
+nechceš obnovit, vrať pouze frontendové soubory z tagu.

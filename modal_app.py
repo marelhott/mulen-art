@@ -46,7 +46,7 @@ def generate_image(job_id: str, payload: dict):
 
     def image_ready(image, meta):
         nonlocal record, first_image_seconds
-        meta = {**meta, "source_name": payload.get("source_name", "Input image")}
+        meta = {**meta, "source_name": payload.get("source_name", "Input image"), "source_url": payload.get("source_url")}
         items = persist_generated_images({"images": [image], "meta": dict(meta)})
         outputs.commit()
         library_items.extend(items)
@@ -73,6 +73,7 @@ def generate_image(job_id: str, payload: dict):
         progress(0.01, "Loading model on cloud GPU")
         result = generate(payload, progress_callback=progress, image_callback=image_ready)
         result["meta"]["source_name"] = payload.get("source_name", "Input image")
+        result["meta"]["source_url"] = payload.get("source_url")
         if not library_items:  # Local demo tests do not emit incremental images.
             library_items = persist_generated_images(result)
             outputs.commit()
@@ -114,6 +115,5 @@ def web():
         jobs=jobs, usage=VolumeUsage("/state/usage.json", state), submit=lambda job_id, payload: generate_image.spawn(job_id, payload).object_id,
         refresh=outputs.reload, commit=outputs.commit,
         username=os.environ["APP_USERNAME"], password=os.environ["APP_PASSWORD"],
-        monthly_limit=int(os.environ.get("MONTHLY_IMAGE_LIMIT", "200")),
         frontend_dir="/app/frontend/dist",
     )

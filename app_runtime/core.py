@@ -197,6 +197,11 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     if model.get("kind") != "base" and lora_id != "none":
         raise ValueError("Trained checkpoints run without LoRA. Use SDXL Base for LoRA mode.")
 
+    raw_count = payload.get("num_images", 1)
+    num_images = int(raw_count)
+    if isinstance(raw_count, bool) or num_images < 1 or str(raw_count).strip() != str(num_images):
+        raise ValueError("num_images must be a positive integer")
+
     return GenerationInput(
         image_base64=str(payload["image_base64"]),
         model_id=model_id,
@@ -208,7 +213,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         sampler=sampler,
         schedule=schedule,
         scale=scale,
-        num_images=int(clamp(int(payload.get("num_images", 1)), 1, 4)),
+        num_images=num_images,
     )
 
 

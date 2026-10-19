@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
-from app_runtime.core import get_options, get_config_item, parse_input
+from app_runtime.core import get_options, get_config_item, parse_input, decode_image
 from app_runtime.server import OUTPUTS_DIR, api_library_delete, load_library_items, now_iso
 
 
@@ -46,7 +46,7 @@ class VolumeUsage:
 
 
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
-               monthly_limit=200, frontend_dir=None):
+               monthly_limit=None, frontend_dir=None):
     if not username or not password:
         raise ValueError("Application credentials are required")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
@@ -144,22 +144,34 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         submitted, errors = [], []
         with lock:
             used = usage.get(month, 0)
-            if used + requested > monthly_limit:
+            if monthly_limit is not None and used + requested > monthly_limit:
                 raise HTTPException(429, f"Monthly safety limit reached ({monthly_limit} images).")
+            # Zdroj uchováme pro porovnání i po obnovení stránky; žádná galerie složených vstupů.
+            refresh()
+            for payload in payloads:
+                digest = hashlib.sha256(payload["image_base64"].encode()).hexdigest()
+                filename = f"source_{digest}.png"
+                path = OUTPUTS_DIR / filename
+                if not path.exists():
+                    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+                    decode_image(payload["image_base64"]).save(path, format="PNG")
+                payload["source_url"] = f"/library/{filename}"
+            commit()
             usage[month] = used + requested
             for index, payload in enumerate(payloads):
                 job_id = uuid.uuid4().hex
                 jobs[job_id] = {
                     "id": job_id, "status": "queued", "progress": 0,
                     "message": "Waiting for cloud GPU (first start can take longer)",
-                    "source_name": payload["source_name"], "expected_images": payload["num_images"],
+                    "source_name": payload["source_name"], "source_url": payload["source_url"], "expected_images": payload["num_images"],
                     "logs": [], "result": None, "error": None,
                     "created_at": now_iso(), "updated_at": now_iso(),
                 }
                 try:
                     submit(job_id, payload)
                     submitted.append({"job_id": job_id, "source_name": payload["source_name"],
-                                      "source_index": index, "expected_images": payload["num_images"]})
+                                      "source_index": payload.get("source_index", index), "variant_index": payload.get("variant_index", 0),
+                                      "expected_images": payload["num_images"]})
                 except Exception:
                     requested -= payload["num_images"]
                     jobs.pop(job_id, None)
@@ -187,8 +199,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             if not isinstance(data, dict):
                 raise ValueError("Expected a JSON object")
             inputs, settings = data.get("inputs"), data.get("settings", {})
-            if not isinstance(inputs, list) or not 1 <= len(inputs) <= 10:
-                raise ValueError("Select between 1 and 10 separate input images")
+            if not isinstance(inputs, list) or not inputs:
+                raise ValueError("Select at least one separate input image")
             if not isinstance(settings, dict):
                 raise ValueError("Invalid settings")
             payloads = [validate_payload({**settings, "image_base64": item["image_base64"],
@@ -196,15 +208,20 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                         for index, item in enumerate(inputs)]
         except Exception as exc:
             raise HTTPException(422, f"Invalid batch input: {exc}") from exc
-        return enqueue(payloads)
+        # Každá varianta má vlastní úlohu, takže velká dávka nepřekročí čas jednoho GPU workeru.
+        expanded = []
+        for source_index, payload in enumerate(payloads):
+            for variant_index in range(payload["num_images"]):
+                expanded.append({**payload, "num_images": 1, "source_index": source_index, "variant_index": variant_index})
+        return enqueue(expanded)
 
     @app.get("/api/jobs/{job_id}")
     def status(job_id: str):
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "Job not found or expired.")
-        if job["status"] in {"queued", "running"}:
-            age = (datetime.now(UTC) - datetime.fromisoformat(job["created_at"])).total_seconds()
+        if job["status"] == "running":
+            age = (datetime.now(UTC) - datetime.fromisoformat(job["updated_at"])).total_seconds()
             if age > 1800:
                 return {**job, "status": "failed", "error": {"detail": "Cloud job timed out. Try again."}}
         return job

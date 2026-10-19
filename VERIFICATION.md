@@ -35,13 +35,13 @@ soubory jsou bajtově shodné s místními originály. Zálohy `.bak` se nepřen
 
 ## Další kontroly
 
-- 15 automatizovaných testů prošlo; frontend se úspěšně sestavil.
+- 19 automatizovaných testů prošlo; frontend se úspěšně sestavil.
 - Chráněné API odmítá nepřihlášené požadavky (401).
 - Nové otevření aplikace načetlo trvalou cloudovou galerii.
 - LoRA test odhalil chybějící PEFT; po doplnění peft==0.14.0 a nasazení oba testy prošly.
 - Výpočet běží na Modalu, místní Mac slouží jen pro správu a prohlížeč.
 - GPU má min_containers=0 a vypíná se po 20 s nečinnosti.
-- Aplikační limit je 200 objednaných obrázků měsíčně; není to finanční strop Modalu.
+- Měsíční aplikační strop byl odstraněn; produkční `/api/usage` ověřeno s `limit: null`.
 
 Přihlášení: uživatel `studio`, heslo v místním souboru `.modal-app-credentials.json`.
 Soubor není součástí Gitu. Zkušební výsledky jsou ponechány v galerii.
@@ -56,7 +56,7 @@ Zdroj: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main
 Stažení lze zopakovat pomocí `scripts/download_sdxl_base.py`.
 Celkem šest modelových souborů, přibližně 26.69 GiB.
 
-## Dávky, mřížka a průběh
+## Původní ověření dávek před změnou designu
 
 - Skutečný UI test: 10 různých samostatných PNG vstupů, 2 varianty na vstup,
   všech 10 úloh dokončeno, 20 jedinečných výstupů. Testovací rozlišení 512 × 512,
@@ -64,14 +64,14 @@ Celkem šest modelových souborů, přibližně 26.69 GiB.
 - Podle časových intervalů pracovních úloh běžely v testu souběžně 4 GPU úlohy.
   Horní limit aplikace je 10 kontejnerů; skutečný souběh určuje i účet a kapacita Modalu.
 - Každá úloha dostává právě jeden originální vstup, společné parametry a vlastní výstupy.
-  Testy kontrolují limit 10 vstupů, odmítnutí vadné dávky před GPU, celkovou kvótu
-  a vrácení rezervace při částečném selhání odeslání.
+  Nové testy ověřují 12 vstupů × 21 variant = 252 samostatných GPU objednávek bez
+  měsíčního stropu, odmítnutí vadného vstupu a vrácení rezervace při selhání odeslání.
 - Výstupy se ukládají a objevují jednotlivě za běhu. Centrální mřížka pro 20 výsledků
   používá na desktopu 5 sloupců; velikost náhledů se mění podle počtu výsledků.
 - Pravý grafický pruh byl ověřen za skutečného běhu (33–45 % při částečných výsledcích).
   Dílčí kroky používají skutečný počet img2img kroků, nikoliv počet před omezením denoise.
 - Po obnově stránky se obnoví aktivní/poslední dávka. Když není uložená, zobrazí
-  centrální mřížka posledních 20 obrázků z trvalé galerie.
+  aktuální centrální mřížka celou trvalou galerii, postupně při posouvání.
 - Srovnání stejného syntetického vstupu 1024 × 1024 a 2 variant: standard 25 kroků
   měl fázi generování a ukládání 16.20 s; náhled 15 kroků 10.82 s.
   Celkové časy nejsou přímo srovnatelné: standard začínal se studeným modelem,
@@ -79,3 +79,26 @@ Celkem šest modelových souborů, přibližně 26.69 GiB.
 
 Podrobnosti: `outputs/verification/batch-10-inputs-20-outputs.json`,
 `batch-20-pixel-check.json`, `speed_25_two_images.json`, `speed_15_two_images.json`.
+
+## Mulen Nano design a odstranění počtových limitů
+
+- Před změnou uložen commit `d292249` a anotovaný tag
+  `studio-before-mulen-nano-2026-10-19`. Nová větev: `codex/mulen-nano-studio`.
+- Produkční `/api/usage` vrací `limit: null`. Počet vstupů, variant a měsíčních
+  výstupů nemá aplikační strop. Souběh workerů zůstává řízený kapacitou Modalu.
+- Automatizovaný test 12 vstupů × 21 variant ověřil 252 samostatných objednávek
+  bez spuštění placené inference; varianty se neomezují na původní čtyři.
+- Skutečný test v novém UI: 12 různých syntetických vstupů, 512 × 512, 15 kroků,
+  Tuymans SDXL bez LoRA, všech 12 výsledků dokončeno. UI zobrazilo 100 % / 12 z 12.
+- V živém detailu ověřen zoom 100 → 150 %, přechod na další obrázek, Escape,
+  zdrojový obrázek a porovnání posuvníkem 50 → 51 %. Zdroj je chráněný stejným
+  přihlášením; test potvrzuje dostupnost po restartu gatewaye a vyloučení z galerie.
+- Test čekající fronty potvrzuje, že úloha neexpiruje pouze kvůli stáří objednávky.
+- Vizuální vzor ověřen v nasazeném Mulen Nano a ve zdrojových komponentách
+  ImageDetailModal, ImageGalleryPanel, LoadingProgress a src/index.css.
+- Druhý skutečný UI test vytvořil 5 variant z jednoho vstupu (512 × 512, 15 kroků),
+  všech 5 dokončeno. Tím ověřeno překročení původní hranice 4 variant.
+- Vybrány dvě miniatury a skutečně stažen ZIP; kontrola `ZipFile.testzip()` bez chyby,
+  v archivu právě 2 obrázky. Ověřen posuvník miniatur na 100 px a světlý režim.
+- Prohlížeč po ověření nehlásil chyby v konzoli. Souhrn ověření 12 vstupů a jejich
+  uložených zdrojů je v `outputs/verification/mulen-nano-design-live.json`.
