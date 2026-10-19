@@ -107,6 +107,17 @@ class GenerationTests(unittest.TestCase):
         expected = decode(small).resize((256, 192), Image.Resampling.LANCZOS)
         self.assertEqual(expected.tobytes(), decode(large).tobytes())
 
+    def test_input_enlargement_precedes_single_diffusion_pass(self):
+        pipe, result, _, _ = self.run_generation(render_mode='quick', input_scale=2, scale=2)
+        self.assertEqual(len(pipe.calls), 1)
+        self.assertEqual(pipe.calls[0]['image'].size, (256, 192))
+        self.assertEqual((result['images'][0]['width'], result['images'][0]['height']), (512, 384))
+        self.assertEqual(result['meta']['input_scale'], 2)
+        self.assertEqual(core.prepare_source(Image.new('RGB', (1000, 800)), 4, 1536).size, (1536, 1224))
+        for size in ((564, 487), (4480, 5696), (128, 96)):
+            image = Image.new('RGB', size)
+            self.assertEqual(core.prepare_source(image, 1, 1536).size, core.normalize_dimensions(image, 1536).size)
+
     def test_ode_and_sde_are_distinct_and_order_is_explicit(self):
         scheduler = Mock()
         with patch.object(core, 'get_diffusers', return_value={'scheduler': scheduler}):

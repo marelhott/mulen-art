@@ -522,14 +522,20 @@ export default function StudioView(p) {
           </>
         )}
         <div className="control-block resolution">
-          <Label>ROZLIŠENÍ</Label>
+          <Label>VSTUP PŘED GENEROVÁNÍM</Label>
+          <Range label="ZVĚTŠENÍ VSTUPU" min={1} max={4} step={0.05} value={p.inputScale} onChange={p.setInputScale}
+            hint="Lanczos před SDXL · vyšší rozměry mohou změnit styl a prodloužit výpočet. Max. strana 1536 px." />
+          <p className="help-text">{p.inputItems.length > 1 ? "Každý vstup se zvětší samostatně." : `${p.imageSize.width} × ${p.imageSize.height} → ${p.generationSize.width} × ${p.generationSize.height} px pro model`}</p>
+        </div>
+        <div className="control-block resolution">
+          <Label>VÝSLEDEK PO GENEROVÁNÍ</Label>
           <div className="resolution-values">
             <span>
-              VSTUP
+              PRO MODEL
               <strong>
                 {p.inputItems.length > 1
                   ? "Každý samostatně"
-                  : `${p.imageSize.width} × ${p.imageSize.height}`}
+                  : `${p.generationSize.width} × ${p.generationSize.height}`}
               </strong>
             </span>
             <ArrowRight size={15} />
@@ -543,12 +549,13 @@ export default function StudioView(p) {
             </span>
           </div>
           <Range
-            label="ZVĚTŠENÍ"
+            label="ZVĚTŠENÍ VÝSLEDKU"
             min={0.5}
-            max={p.engine.mode === "detail" ? 2 : 4}
+            max={4}
             step={0.05}
             value={p.resizeScale}
             onChange={p.setResizeScale}
+            hint="Lanczos až po SDXL · bez AI dokreslování, nemění hotový obraz."
           />
         </div>
         <button className="library-launch" onClick={() => setLibraryOpen(true)}>

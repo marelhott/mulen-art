@@ -67,6 +67,7 @@ function App() {
   const previewUrl = inputItems[0]?.url || "";
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
   const [resizeScale, setResizeScale] = useState(2);
+  const [inputScale, setInputScale] = useState(1);
   const [modelId, setModelId] = useState("tuymans_sdxl");
   const [generationMode, setGenerationMode] = useState("checkpoint");
   const [loraId, setLoraId] = useState("none");
@@ -300,23 +301,11 @@ function App() {
     window.localStorage.removeItem("img2img-active-job");
   }, [activeJobs]);
 
-  const targetSize = useMemo(() => {
-    const ratio = Math.min(
-      1,
-      (engine.mode === "detail" ? Math.min(engine.maxSide, 1024) : engine.maxSide) / Math.max(imageSize.width, imageSize.height),
-    );
-    const baseWidth = Math.max(
-      64,
-      Math.floor((imageSize.width * ratio) / 8) * 8,
-    );
-    const baseHeight = Math.max(
-      64,
-      Math.floor((imageSize.height * ratio) / 8) * 8,
-    );
-    const width = engine.mode === "detail" ? Math.max(64, Math.round(baseWidth * resizeScale / 8) * 8) : Math.round(baseWidth * resizeScale);
-    const height = engine.mode === "detail" ? Math.max(64, Math.round(baseHeight * resizeScale / 8) * 8) : Math.round(baseHeight * resizeScale);
-    return { width, height };
-  }, [imageSize, resizeScale, engine.maxSide, engine.mode]);
+  const generationSize = useMemo(() => {
+    const ratio = Math.min(1, 1536 / Math.max(imageSize.width * inputScale, imageSize.height * inputScale));
+    return {width: Math.max(64, Math.floor(imageSize.width * inputScale * ratio / 8) * 8), height: Math.max(64, Math.floor(imageSize.height * inputScale * ratio / 8) * 8)};
+  }, [imageSize, inputScale]);
+  const targetSize = {width: Math.round(generationSize.width * resizeScale), height: Math.round(generationSize.height * resizeScale)};
 
   const isGenerating =
     isSubmitting ||
@@ -368,6 +357,7 @@ function App() {
       cfg,
       steps,
       resizeScale,
+      inputScale,
       engine,
     };
   }
@@ -393,6 +383,7 @@ function App() {
     setCfg(Number(preset.cfg ?? 5));
     setSteps(Number(preset.steps ?? 25));
     setEngine({...DEFAULT_ENGINE, ...(preset.engine || {}), mode: "quick", maxSide: 1536});
+    setInputScale(Number(preset.inputScale ?? 1));
     setResizeScale(Math.min(preset.engine?.mode === "detail" ? 2 : 4, Number(preset.resizeScale ?? 2)));
   }
 
@@ -487,6 +478,7 @@ function App() {
       render_mode: "quick", seed: Number(engine.seed === "" ? -1 : engine.seed),
       prompt: "", negative_prompt: "",
       max_side: 1536, detail_strength: engine.detailStrength, detail_steps: engine.detailSteps,
+      input_scale: inputScale,
       scale: Number(resizeScale.toFixed(2)),
     };
     const count = numImages;
@@ -710,6 +702,7 @@ function App() {
         engine, setEngine,
         resizeScale,
         setResizeScale,
+        inputScale, setInputScale, generationSize,
         targetSize,
         imageSize,
         results,

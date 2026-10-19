@@ -59,6 +59,7 @@ class GenerationInput:
     detail_strength: float = 0.25
     detail_steps: int = 15
     conditioning_mode: str = "style"
+    input_scale: float = 1.0
 
 
 def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None,
@@ -81,7 +82,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
     setup_seconds = time.monotonic() - started
 
     source_image = decode_image(generation_input.image_base64)
-    source_image = normalize_dimensions(source_image, min(generation_input.max_side, 1024) if generation_input.render_mode == "detail" else generation_input.max_side)
+    source_image = prepare_source(source_image, generation_input.input_scale, min(generation_input.max_side, 1024) if generation_input.render_mode == "detail" else generation_input.max_side)
     report_progress(progress_callback, 0.34, f"Source normalized to {source_image.width}x{source_image.height}")
 
     steps = generation_input.steps
@@ -94,6 +95,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
         "sampler": generation_input.sampler, "schedule": generation_input.schedule,
         "demo_mode": False,
         "render_mode": generation_input.render_mode,
+        "input_scale": generation_input.input_scale,
         "conditioning_mode": generation_input.conditioning_mode,
         "prompt": generation_input.prompt, "negative_prompt": generation_input.negative_prompt,
         "max_side": generation_input.max_side,
@@ -279,6 +281,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         scale=scale,
         num_images=num_images,
         conditioning_mode=conditioning_mode,
+        input_scale=clamp(float(payload.get("input_scale", 1.0)), 1.0, 4.0),
         render_mode=render_mode, seed=seed, prompt=prompt, negative_prompt=negative_prompt,
         max_side=int(clamp(int(payload.get("max_side", 1536)), 512, 2048)),
         detail_strength=clamp(float(payload.get("detail_strength", 0.25)), 0.05, 0.6),
@@ -394,6 +397,13 @@ def normalize_dimensions(image: Image.Image, max_side: int | None = None) -> Ima
     return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def prepare_source(image: Image.Image, scale: float, max_side: int) -> Image.Image:
+    width, height = image.width * scale, image.height * scale
+    ratio = min(1.0, max_side / max(width, height))
+    size = (max(64, math.floor(width * ratio / 8) * 8), max(64, math.floor(height * ratio / 8) * 8))
+    return image.resize(size, Image.Resampling.LANCZOS)
+
+
 def inference_schedule(steps: int, strength: float, actual: bool) -> tuple[int, float]:
     if not actual:
         return max(steps, math.ceil(1 / strength)), strength
@@ -445,7 +455,7 @@ def encode_image(image: Image.Image, metadata: dict | None = None) -> dict[str, 
 
 def build_demo_response(generation_input: GenerationInput, progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
     source_image = decode_image(generation_input.image_base64)
-    source_image = normalize_dimensions(source_image, min(generation_input.max_side, 1024) if generation_input.render_mode == "detail" else generation_input.max_side)
+    source_image = prepare_source(source_image, generation_input.input_scale, min(generation_input.max_side, 1024) if generation_input.render_mode == "detail" else generation_input.max_side)
     report_progress(progress_callback, 0.12, f"Demo source normalized to {source_image.width}x{source_image.height}")
     output_images = []
 

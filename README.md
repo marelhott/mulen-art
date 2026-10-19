@@ -107,6 +107,14 @@ ones. Uploads may overlap, aggregate progress includes all accepted/pending subm
 and accepted job IDs persist across reloads. There is no application-level queue count
 cap; Modal GPU concurrency and account usage limits still apply.
 
+## Input enlargement
+
+`input_scale` (default 1, up to 4) performs one Lanczos resize before diffusion,
+aligning dimensions to 8px and preserving the existing 1536px long-side ceiling.
+This can change the model result and GPU time. The separate output `scale` resizes
+the completed image after diffusion. Both values are captured per queued batch;
+input scale is included in presets and output metadata. Default 1 preserves prior sizing.
+
 ## Studio output enlargement
 
 The studio always uses the original single-pass schedule (`quick`), with original 1536px
