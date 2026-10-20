@@ -63,6 +63,7 @@ class GenerationInput:
     generation_type: str = "img2img"
     atelier_mode: str = "noise"
     atelier_theme: str = "all"
+    atelier_archive: str = "hofmann"
     width: int = 1024
     height: int = 1024
 
@@ -292,6 +293,8 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
             raise ValueError("Invalid atelier mode or theme")
         if not is_atelier_model(model_id) or lora_id != "none":
             raise ValueError("Ateliér uses trained artist checkpoints")
+        if atelier_mode == "archive" and payload.get("atelier_archive", "hofmann") not in {"hofmann", "tuymans"}:
+            raise ValueError("Unknown reference archive")
         dimensions = [payload.get("width", 1024), payload.get("height", 1024)]
         if any(isinstance(v, bool) or int(v) != float(v) or not 512 <= int(v) <= 1536 or int(v) % 8 for v in dimensions):
             raise ValueError("Atelier dimensions must be multiples of 8 from 512 to 1536")
@@ -317,7 +320,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         detail_strength=clamp(float(payload.get("detail_strength", 0.25)), 0.05, 0.6),
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
-        width=width, height=height,
+        width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
     )
 
 

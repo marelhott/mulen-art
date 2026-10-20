@@ -24,7 +24,7 @@ SUBJECTS = [
     ("figure", "Gesto ruky", "a close cropped hand resting against ordinary clothing, no visible face"),
 ]
 THEMES = {"all", "face", "interior", "object", "landscape", "figure"}
-MODES = {"noise", "subject", "photo"}
+MODES = {"noise", "subject", "photo", "archive"}
 
 
 def is_atelier_model(model_id):
@@ -46,6 +46,9 @@ def painting_prompt(model_id, text):
 
 
 def generate_study(spec, progress, image_callback):
+    if spec.atelier_mode == "archive":
+        from .archives import generate_reference
+        return generate_reference(spec, progress, image_callback)
     import time
     from . import core
     started = time.monotonic()

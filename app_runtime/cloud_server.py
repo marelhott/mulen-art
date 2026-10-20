@@ -119,8 +119,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             request.scope["headers"] = [(key, value) for key, value in request.scope["headers"]
                                         if key.lower() not in {b"if-none-match", b"if-modified-since"}]
         response = await call_next(request)
-        if entry:
+        if entry or request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
+        if entry:
             for header in ("etag", "last-modified"):
                 if header in response.headers:
                     del response.headers[header]
@@ -128,7 +129,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
 
     @app.get("/api/options")
     def options():
-        return get_options()
+        from .archives import archive_options
+        refresh()
+        return {**get_options(), "archives": archive_options()}
 
     def validate_payload(payload):
         from dataclasses import asdict
@@ -233,11 +236,17 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 raise ValueError("At most eight studies per transport request")
             # Validate the seed before resolving its random sentinel.
             first = parse_input({**settings, "generation_type": "atelier", "model_id": models[0], "lora_id": "none", "num_images": 1})
+            if first.atelier_mode == "archive":
+                from .archives import reference_for
+                reference_for(first.atelier_archive, 0)
             seed = secrets.randbits(32) if first.seed == -1 else first.seed
             payloads = []
             for index in range(count):
                 variant_seed = (seed + index) % 2**32
                 title = "Volná studie bez námětu" if first.atelier_mode == "noise" else subject_for(variant_seed, first.atelier_theme)[1]
+                if first.atelier_mode == "archive":
+                    archive, reference, _ = reference_for(first.atelier_archive, variant_seed)
+                    title = archive["name"] + " · " + reference["filename"]
                 for model_id in models:
                     payload = validate_payload({**settings, "generation_type": "atelier", "model_id": model_id,
                         "lora_id": "none", "num_images": 1, "seed": variant_seed, "source_name": title})

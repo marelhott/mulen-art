@@ -323,7 +323,7 @@ export default function StudioView(p) {
         </div>
       </header>
       <aside className="left-panel control-panel">
-        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} /> : <>
+        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} /> : <>
         <button
           className="primary-button generate"
           disabled={!p.inputItems.length}
@@ -763,7 +763,7 @@ export default function StudioView(p) {
           <Label>NASTAVENÍ GENEROVÁNÍ</Label>
         </div>
         <p className="engine-hint">{isAtelier ? "Ateliér tvoří nové obrazy. Zvětšení hotového výsledku je pouze Lanczos, bez AI dokreslování. Stejné seedy umožňují porovnat checkpointy." : "Původní generování v jednom průchodu. Hotový obraz se zvětšuje pouze interpolací Lanczos, bez AI dokreslování a přidávání detailů."}</p>
-        {(!isAtelier || p.atelier.mode === "photo") && <Range
+        {(!isAtelier || ["photo", "archive"].includes(p.atelier.mode)) && <Range
           label="DENOISE"
           min={0.05}
           max={isAtelier ? 0.55 : 1}
@@ -1144,16 +1144,17 @@ function AtelierQueue({p}) {
     {p.job.active_steps?.length > 0 && <div className="atelier-queue-steps">{p.job.active_steps.map((step, i) => <div key={step.id}><span>Výpočet {i + 1} · {step.current} / {step.total} kroků</span><div className="atelier-step-track"><div style={{width: `${step.current / step.total * 100}%`}} /></div></div>)}</div>}
   </section>;
 }
-function AtelierControls({atelier: a, update, models, generating, onGenerate}) {
+function AtelierControls({atelier: a, update, models, archives = [], generating, onGenerate}) {
   const choices = models.filter(model => model.id.startsWith("tuymans_") || ["tuy_small", "hofmann_sdxl"].includes(model.id));
   const modes = [
     {id: "noise", name: "Volná studie", description: "Nový obraz přímo z šumu. Bez námětu i bez promptu; obsah vybírá samotný checkpoint."},
     {id: "subject", name: "Automatický námět", description: "Aplikace vybere střídmý námět a vytvoří obraz checkpointem. Nic nepíšeš."},
+    {id: "archive", name: "Archiv → fúze", description: "Náhodný obraz ze zdrojového archivu přemaluje libovolný zvolený checkpoint. Jeden obraz na výstup, bez tréninku."},
     {id: "photo", name: "Foto → malba", description: "SDXL Base vytvoří fotografický předobraz a vybraný checkpoint jej přemaluje. Dva průchody GPU; denoise nejvýše 0,55."},
   ];
   const total = Number(a.count || 0) * a.modelIds.length;
   return <>
-    <button className="primary-button generate" disabled={!a.modelIds.length || !choices.length} onClick={onGenerate}>
+    <button className="primary-button generate" disabled={!a.modelIds.length || !choices.length || (a.mode === "archive" && !archives.some(item => item.id === (a.archive || "hofmann")))} onClick={onGenerate}>
       <Sparkles size={16} />{generating ? "PŘIDAT STUDIE DO FRONTY" : "VYTVOŘIT STUDIE"}
     </button>
     <div className="control-block atelier-modes">
@@ -1166,9 +1167,10 @@ function AtelierControls({atelier: a, update, models, generating, onGenerate}) {
       <input aria-label="Počet studií na model" type="number" min="1" step="1" value={a.count} onChange={event => update({count: event.target.value === "" ? "" : Number(event.target.value)})} />
       <span className="help-text">{a.count || "—"} studií × {a.modelIds.length} modelů = {total} výstupů</span>
     </label>
-    {a.mode !== "noise" && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
+    {a.mode === "archive" && <><Select label="ZDROJOVÝ ARCHIV · OBSAH" value={a.archive || "hofmann"} onChange={archive => update({archive})} items={archives.map(item => ({id:item.id,name:`${item.name} · ${item.count} obrazů`}))} /><p className="help-text">Archiv vybírá předlohu, checkpoint určuje přemalování. Stejná předloha i seed pro všechny modely. Zachovává se poměr stran; rozlišení níže je maximální rámeček.</p></>}
+    {!["noise", "archive"].includes(a.mode) && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
       items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Postavy a gesta"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
-    <div className="control-block"><Label>MODELY · VÝBĚR VÍCE</Label>
+    <div className="control-block"><Label>CHECKPOINTY · MALÍŘSKÉ ZPRACOVÁNÍ</Label>
       <div className="checkpoint-options" role="group" aria-label="Modely Ateliéru">{choices.map(model => <button key={model.id} aria-pressed={a.modelIds.includes(model.id)} onClick={() => update({modelIds: a.modelIds.includes(model.id) ? (a.modelIds.length > 1 ? a.modelIds.filter(id => id !== model.id) : a.modelIds) : [...a.modelIds, model.id]})}>
         <span>{model.name}</span>{a.modelIds.includes(model.id) && <Check size={14} />}
       </button>)}</div>
@@ -1178,8 +1180,8 @@ function AtelierControls({atelier: a, update, models, generating, onGenerate}) {
     <Select label="ROZLIŠENÍ PRO MODEL" value={`${a.width}x${a.height}`} onChange={value => {const [width,height] = value.split("x").map(Number); update({width,height});}}
       items={[{id:"1024x1024",name:"1024 × 1024 · čtverec"},{id:"832x1216",name:"832 × 1216 · na výšku"},{id:"1216x832",name:"1216 × 832 · na šířku"},{id:"1536x1536",name:"1536 × 1536 · experiment"}]} />
     <Range label="ZVĚTŠENÍ HOTOVÉHO OBRAZU" min={1} max={4} step={0.1} value={a.scale} onChange={scale => update({scale})}
-      hint={`${Math.round(a.width*a.scale)} × ${Math.round(a.height*a.scale)} px · pouze Lanczos, bez AI dokreslení`} />
-    <p className="help-text">Náměty zatím nevznikají analýzou 247 obrazů. Tato část ověřuje schopnosti naučených checkpointů.</p>
+      hint={a.mode === "archive" ? `${a.scale}× Lanczos po přemalování · rozměry podle předlohy, bez AI dokreslení` : `${Math.round(a.width*a.scale)} × ${Math.round(a.height*a.scale)} px · pouze Lanczos, bez AI dokreslení`} />
+    <p className="help-text">Archiv používá náhodně vybrané předlohy. Ostatní automatické náměty čerpají ze startovní sady.</p>
   </>;
 }
 
@@ -1590,8 +1592,9 @@ function ImageViewer({
           <div className="detail-section">
             <Label>PARAMETRY GENEROVÁNÍ</Label>
             {[
-              ["Způsob tvorby", settings.generation_type === "atelier" ? ({noise: "Volná studie", subject: "Automatický námět", photo: "Foto → malba"}[settings.atelier_mode]) : undefined],
+              ["Způsob tvorby", settings.generation_type === "atelier" ? ({noise: "Volná studie", subject: "Automatický námět", photo: "Foto → malba", archive: "Archiv → fúze"}[settings.atelier_mode]) : undefined],
               ["Námět", settings.subject_title],
+              ["Zdrojový archiv", settings.archive_name],
               ["Denoise", settings.denoise],
               ["CFG", settings.cfg ?? settings.guidance_scale],
               ["Kroky", settings.steps],

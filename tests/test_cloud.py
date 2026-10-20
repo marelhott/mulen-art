@@ -128,6 +128,24 @@ class CloudFlowTests(unittest.TestCase):
             self.assertEqual(rejected.status_code,422)
         self.assertEqual(len(self.submissions),6)
 
+    def test_archive_fusion_validates_source_before_submitting_and_keeps_models_independent(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client.auth = ("studio", "test-password")
+        request = {"model_ids": ["tuymans_modal_2400", "hofmann_sdxl"], "count": 1,
+                   "settings": {"atelier_mode": "archive", "atelier_archive": "hofmann", "seed": 123,
+                                "denoise": .55, "cfg": .5, "steps": 28}}
+        with patch("app_runtime.archives.reference_for", side_effect=ValueError("Missing reference")):
+            self.assertEqual(client.post("/api/atelier-batch", json=request).status_code, 422)
+        self.assertEqual(self.submissions, [])
+        with patch("app_runtime.archives.reference_for", return_value=({"name":"Julius Hofmann"}, {"filename":"painting.png"}, Path("painting.png"))):
+            response = client.post("/api/atelier-batch", json=request)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(self.submissions), 2)
+        pair = [payload for _, payload in self.submissions]
+        self.assertEqual([p["model_id"] for p in pair], request["model_ids"])
+        self.assertTrue(all(p["atelier_archive"] == "hofmann" and p["seed"] == 123 and p["steps"] == 28 and p["denoise"] == .55 for p in pair))
+        self.assertEqual(pair[0]["source_name"], pair[1]["source_name"])
+
     def test_batch_variant_seeds_and_engine_options_survive_gateway(self):
         settings = {**self.payload, "num_images": 3, "seed": 4294967295,
                     "render_mode": "detail", "detail_steps": 8, "scale": 2}
