@@ -93,11 +93,28 @@ frontend host or Vercel account is required.
 
 ## Canvas and saved library
 
-Generated outputs automatically appear in both persistent canvas history and the library,
-including outputs previously left unsaved. Trash is available on both surfaces and in bulk
-selection. Deletion hides an image from both indexes with a durable metadata tombstone;
-files remain recoverable through explicit API save. Polling cannot restore deleted cards.
-Single click opens the viewer; clicking the enlarged image closes it.
+The canvas and the library are separate surfaces backed by the same files.
+Newly generated outputs appear on the canvas only; they enter the library after an
+explicit save. Records written before the split have no `saved_to_library` flag and
+remain in the library for continuity, while records explicitly saved are kept and
+records explicitly unsaved stay off the library list even though the canvas still
+shows them. Trash is available on both surfaces and in bulk selection. Deletion hides
+an image from both indexes with a durable metadata tombstone; files remain recoverable
+through an explicit API save. Polling cannot restore deleted cards. Single click opens
+the viewer; clicking the enlarged image closes it.
+
+## Thumbnails and asset serving
+
+Every stored image gets a cached WebP preview (800 px wide, about 25–40 KB) served from
+`/thumb/<name>.webp`. Grids, the library dialog and the drag source use that preview;
+the viewer, download and ZIP export use the full file. Images and thumbnails answer
+`HEAD` and send `Cache-Control: public, max-age=31536000, immutable`, so a preview is
+fetched once per browser. Before this change a gallery render pulled full-resolution
+PNGs (about 3.7 MB each) on every view.
+
+Volume reloads are collapsed into a short-lived cache so a burst of polling causes at
+most one reload window, and a GPU job commits its output Volume once per job instead of
+once per generated image.
 
 ## Adding work while generating
 
@@ -163,6 +180,11 @@ state, quota reservation/rollback, worker error reporting, and persistent galler
 save/download/delete. Local worker tests use demo filters, not a real GPU.
 A successful build/test does not verify CUDA inference; do a real checkpoint and
 LoRA generation on Modal after upload/deployment.
+
+`npm test` runs both suites: the Python tests above and the frontend tests
+(`frontend/src/*.test.js` via the Node test runner). CI runs them separately so a
+failure names the surface. The frontend suite covers media URL building, the
+thumbnail-versus-full-resolution split, and local-upload handling.
 
 For a local UI preview without GPU inference:
 

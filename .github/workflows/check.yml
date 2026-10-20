@@ -21,4 +21,5 @@ jobs:
       - run: .venv/bin/python scripts/prepare_modal.py
       - run: npm ci
       - run: npm run build:frontend
-      - run: npm test
+      - run: npm run test:python
+      - run: npm run test:frontend

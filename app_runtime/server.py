@@ -12,6 +12,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
+from PIL import Image, ImageOps
 
 from app_runtime.core import generate, get_options, is_cuda_oom
 
@@ -28,8 +30,13 @@ JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 GENERATION_LOCK = threading.Lock()
 OUTPUTS_URL_PREFIX = "/library"
+THUMBS_URL_PREFIX = "/thumb"
 OUTPUTS_DIR = resolve_outputs_dir()
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+THUMBS_DIR = OUTPUTS_DIR / "thumbs"
+# The gallery slider reaches 440 CSS px, so 800 px stays sharp on a 2x display.
+THUMB_WIDTH = int(os.getenv("THUMB_WIDTH", "800"))
+THUMB_QUALITY = int(os.getenv("THUMB_QUALITY", "78"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -227,6 +234,7 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
             "id": stem,
             "filename": image_name,
             "url": f"{OUTPUTS_URL_PREFIX}/{image_name}",
+            "thumb_url": f"{THUMBS_URL_PREFIX}/{thumb_filename(image_name)}",
             "width": image.get("width"),
             "height": image.get("height"),
             "format": extension,
@@ -234,7 +242,7 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
             "model_id": meta.get("model_id"),
             "lora_id": meta.get("lora_id"),
             "settings": meta,
-            "saved_to_library": True,
+            "saved_to_library": False,
         }
         metadata_path = OUTPUTS_DIR / f"{stem}.json"
         metadata_path.write_text(json.dumps(record, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -255,6 +263,43 @@ def load_deleted_ids():
     return ids
 
 
+def thumb_filename(filename: str) -> str:
+    return f"{Path(filename).stem}.webp"
+
+
+def thumb_path(filename: str) -> Path:
+    return THUMBS_DIR / thumb_filename(filename)
+
+
+def ensure_thumbnail(filename: str) -> Path | None:
+    """Create a small WebP preview once per image. Returns None if the source is missing."""
+    source = OUTPUTS_DIR / filename
+    if not source.is_file():
+        return None
+    target = thumb_path(filename)
+    try:
+        if target.is_file() and target.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+            # Also re-render when the configured preview width changed.
+            with Image.open(target) as cached:
+                width, cached_height = cached.size
+            with Image.open(source) as raw:
+                source_width, _ = raw.size
+            if width == min(THUMB_WIDTH, source_width) and cached_height > 0:
+                return target
+    except OSError:
+        pass
+    THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+    with Image.open(source) as raw:
+        image = ImageOps.exif_transpose(raw).convert("RGB")
+        if image.width > THUMB_WIDTH:
+            ratio = THUMB_WIDTH / image.width
+            image = image.resize((THUMB_WIDTH, max(1, round(image.height * ratio))), Image.Resampling.LANCZOS)
+        temporary = target.with_suffix(".webp.tmp")
+        image.save(temporary, "WEBP", quality=THUMB_QUALITY, method=4)
+    os.replace(temporary, target)
+    return target
+
+
 def load_history_items() -> list[dict[str, Any]]:
     items = []
     for metadata_path in sorted(OUTPUTS_DIR.glob("*.json"), reverse=True):
@@ -267,6 +312,7 @@ def load_history_items() -> list[dict[str, Any]]:
                 continue
             if "url" not in data:
                 data["url"] = f"{OUTPUTS_URL_PREFIX}/{data['filename']}"
+            data["thumb_url"] = f"{THUMBS_URL_PREFIX}/{thumb_filename(data['filename'])}"
             items.append(data)
         except Exception:
             continue
@@ -274,8 +320,9 @@ def load_history_items() -> list[dict[str, Any]]:
 
 
 def load_library_items() -> list[dict[str, Any]]:
-    # Legacy images remain saved; new generations explicitly start on the canvas only.
-    items = load_history_items()
+    # The library holds only what was explicitly saved. Records written before the
+    # canvas/library split have no flag (or null) and stay saved for continuity.
+    items = [item for item in load_history_items() if item.get("saved_to_library") is not False]
     try:
         order = json.loads((OUTPUTS_DIR / "library-order.json").read_text(encoding="utf-8"))
         positions = {item_id: index for index, item_id in enumerate(order)}

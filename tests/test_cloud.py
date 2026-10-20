@@ -221,6 +221,9 @@ class CloudFlowTests(unittest.TestCase):
         self.assertNotIn("image_base64", image)
         self.assertEqual(self.client.get(image["url"]).status_code, 200)
         self.assertEqual(len(self.client.get("/api/history").json()["items"]), 1)
+        # New outputs start on the canvas only; they enter the library after an explicit save.
+        self.assertEqual(len(self.client.get("/api/library").json()["items"]), 0)
+        self.assertEqual(self.client.post(f'/api/library/{image["id"]}').status_code, 200)
         self.assertEqual(len(self.client.get("/api/library").json()["items"]), 1)
         self.assertEqual(self.client.delete(f'/api/library/{image["id"]}').status_code, 200)
         self.assertEqual(self.client.get("/api/history").json()["items"], [])
@@ -228,7 +231,7 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(self.client.post(f'/api/library/{image["id"]}').status_code, 200)
         self.assertEqual(len(self.client.get("/api/history").json()["items"]), 1)
         self.assertEqual(len(self.client.get("/api/library").json()["items"]), 1)
-        self.assertEqual(len(self.commits), 2)
+        self.assertEqual(len(self.commits), 3)
 
     def test_worker_failure_visible_after_gateway_restart(self):
         import modal_app
@@ -252,6 +255,9 @@ class CloudFlowTests(unittest.TestCase):
                 live = self.jobs["stream-job"]
                 self.assertEqual(live["status"], "running")
                 self.assertEqual(len(live["partial_images"]), count)
+                # Each saved image carries a real elapsed-time figure for the cost readout.
+                # A stubbed generator finishes instantly, so only the type is asserted here.
+                self.assertIsInstance(live["partial_images"][-1]["settings"]["worker_seconds"], float)
                 self.assertEqual(self.client.get(live["partial_images"][-1]["url"]).status_code, 200)
             return {"images": [image, image], "meta": meta}
         with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch("app_runtime.core.generate", side_effect=fake_generate):
@@ -259,7 +265,7 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(self.jobs["stream-job"]["status"], "completed")
         self.assertEqual(len(self.jobs["stream-job"]["result"]["images"]), 2)
         self.assertEqual(len(self.client.get("/api/history").json()["items"]), 2)
-        self.assertEqual(len(self.client.get("/api/library").json()["items"]), 2)
+        self.assertEqual(len(self.client.get("/api/library").json()["items"]), 0)
 
     def test_img2img_progress_uses_actual_denoising_steps(self):
         from app_runtime.core import build_step_callback
@@ -344,6 +350,58 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(len(response.json()["errors"]), 1)
         self.assertEqual(sum(self.usage.values()), 1)
         self.assertEqual(len(self.jobs), 1)
+
+    def test_legacy_records_without_saved_flag_stay_in_library_but_unsaved_ones_leave(self):
+        from app_runtime import server
+        import json
+        def write(stem, saved):
+            record = {"id": stem, "filename": f"{stem}.png", "url": f"/library/{stem}.png",
+                      "width": 8, "height": 8, "format": "png", "created_at": "2026-10-19T00:00:00+00:00",
+                      "model_id": "tuymans_sdxl", "lora_id": "none", "settings": {}}
+            if saved is not None:
+                record["saved_to_library"] = saved
+            (self.output / f"{stem}.png").write_bytes(b"stub")
+            (self.output / f"{stem}.json").write_text(json.dumps(record))
+        write("legacy-no-flag", None)
+        write("explicitly-saved", True)
+        write("explicitly-unsaved", False)
+        ids = {item["id"] for item in server.load_library_items()}
+        self.assertEqual(ids, {"legacy-no-flag", "explicitly-saved"})
+        self.assertEqual({item["id"] for item in server.load_history_items()}, {"legacy-no-flag", "explicitly-saved", "explicitly-unsaved"})
+
+    def test_thumbnails_are_generated_small_cached_and_served_with_cache_headers(self):
+        from app_runtime import server
+        from PIL import Image
+        Image.new("RGB", (1200, 800), (10, 20, 30)).save(self.output / "big.png")
+        target = server.ensure_thumbnail("big.png")
+        self.assertIsNotNone(target)
+        with Image.open(target) as thumb:
+            self.assertEqual(thumb.width, server.THUMB_WIDTH)
+            self.assertEqual(thumb.format, "WEBP")
+        self.assertLess(target.stat().st_size, (self.output / "big.png").stat().st_size)
+        again = server.ensure_thumbnail("big.png")
+        self.assertEqual(again, target)
+
+    def test_narrow_sources_keep_their_size_and_missing_sources_return_none(self):
+        from app_runtime import server
+        from PIL import Image
+        Image.new("RGB", (120, 90), (5, 5, 5)).save(self.output / "small.png")
+        target = server.ensure_thumbnail("small.png")
+        with Image.open(target) as thumb:
+            self.assertEqual(thumb.size, (120, 90))
+        self.assertIsNone(server.ensure_thumbnail("does-not-exist.png"))
+
+    def test_image_assets_support_head_and_immutable_caching(self):
+        from PIL import Image
+        Image.new("RGB", (32, 32), (1, 2, 3)).save(self.output / "asset.png")
+        head = self.client.head("/library/asset.png")
+        self.assertEqual(head.status_code, 200)
+        self.assertEqual(int(head.headers["content-length"]), (self.output / "asset.png").stat().st_size)
+        self.assertIn("immutable", head.headers["cache-control"])
+        get = self.client.get("/library/asset.png")
+        self.assertEqual(get.status_code, 200)
+        self.assertIn("immutable", get.headers["cache-control"])
+        self.assertEqual(self.client.head("/library/missing.png").status_code, 404)
 
 
 if __name__ == "__main__":

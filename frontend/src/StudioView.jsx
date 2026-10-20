@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { buildImageUrl, formatDuration, imageUrl, sourceUrl, thumbUrl } from "./api";
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -26,20 +27,10 @@ import {
   ZoomOut,
 } from "lucide-react";
 
-const urlFor = (item) =>
-  item?.src ||
-  (item?.url
-    ? /^(https?:|data:|blob:)/.test(item.url)
-      ? item.url
-      : `${import.meta.env.VITE_API_URL || ""}${item.url}`
-    : item?.image_base64
-      ? `data:image/${item.format || "png"};base64,${item.image_base64}`
-      : "");
-const sourceFor = (item) => item?.source_url || item?.settings?.source_url;
-const duration = (seconds) =>
-  seconds < 60
-    ? `${Math.floor(seconds)} s`
-    : `${Math.floor(seconds / 60)} min ${Math.floor(seconds % 60)} s`;
+const urlFor = imageUrl;
+const sourceFor = sourceUrl;
+const thumbFor = thumbUrl;
+const duration = formatDuration;
 const dateFor = (date) =>
   date
     ? new Date(date).toLocaleString("cs-CZ", {
@@ -917,6 +908,7 @@ export default function StudioView(p) {
           hasNext={viewerIndex >= 0 && viewerIndex < viewerPool.length - 1}
           onReuse={() => reuse(p.selectedImage)}
           onDownload={p.downloadSelectedImage}
+          gpuHourlyUsd={p.gpuHourlyUsd}
         />
       )}
       {context && (
@@ -1276,7 +1268,7 @@ function ImageCard({
       >
         {item ? (
           <img
-            src={urlFor(item)}
+            src={thumbFor(item)}
             alt={
               item.source_name ||
               item.settings?.source_name ||
@@ -1340,6 +1332,7 @@ function ImageViewer({
   hasNext,
   onReuse,
   onDownload,
+  gpuHourlyUsd,
 }) {
   const [mode, setMode] = useState("details"),
     [split, setSplit] = useState(50),
@@ -1510,7 +1503,7 @@ function ImageViewer({
             <>
               <img
                 className="comparison-source"
-                src={`${import.meta.env.VITE_API_URL || ""}${source}`}
+                src={sourceUrl(image)}
                 alt="Původní vstup"
                 style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
                 draggable={false}
@@ -1616,6 +1609,9 @@ function ImageViewer({
               ["Síla LoRA", settings.lora_strength],
               ["Sampler", settings.sampler],
               ["Seed", settings.seed],
+              // Real server-measured GPU/wall seconds for this job, not an estimate.
+              ["Čas na GPU", settings.worker_seconds ? duration(settings.worker_seconds) : undefined],
+              ["Odhad ceny", settings.worker_seconds && gpuHourlyUsd ? `$${(settings.worker_seconds / 3600 * gpuHourlyUsd).toFixed(4)}` : undefined],
             ]
               .filter(([, value]) => value !== undefined && value !== null)
               .map(([key, value]) => (
@@ -1633,7 +1629,7 @@ function ImageViewer({
                 onClick={() => setMode("compare")}
               >
                 <img
-                  src={`${import.meta.env.VITE_API_URL || ""}${source}`}
+                  src={sourceUrl(image)}
                   alt="Zdrojový obrázek"
                 />
                 <span>

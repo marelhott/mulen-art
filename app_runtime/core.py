@@ -181,6 +181,8 @@ def get_options() -> dict[str, Any]:
     return {
         "models": [{"id": item["id"], "name": item["name"], "kind": item.get("kind", "checkpoint")} for item in config.get("models", [])],
         "loras": [{"id": item["id"], "name": item["name"]} for item in config.get("loras", [])],
+        # Only expose a cost rate that was configured; never invent a price.
+        "gpu_hourly_usd": float(os.getenv("GPU_HOURLY_USD", "0")) or None,
         "samplers": [
             {"id": "dpmpp_2m", "name": "DPM++ 2M"},
             {"id": "dpmpp_2m_sde", "name": "DPM++ 2M SDE"},

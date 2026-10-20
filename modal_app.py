@@ -1,6 +1,5 @@
 """Deploy with: .venv/bin/modal deploy modal_app.py (after building frontend)."""
 import os
-from pathlib import Path
 import modal
 
 APP_NAME = "img2img-studio"
@@ -13,7 +12,9 @@ state = modal.Volume.from_name("img2img-state", create_if_missing=True)
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("fastapi==0.115.6", "pillow==11.1.0")
-    .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives"})
+    .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
+          # Published Modal L4 rate ($0.000222/s); the UI labels the derived number an estimate.
+          "GPU_HOURLY_USD": "0.7992"})
     .add_local_python_source("app_runtime")
     .add_local_dir("config", "/app/config")
 )
@@ -24,6 +25,8 @@ gpu_image = (
         "MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
         "HF_HOME": "/models/huggingface-cache", "MAX_IMAGE_SIDE": "1536",
         "TOKENIZERS_PARALLELISM": "false",
+        # Published Modal L4 rate, used only to show a per-image cost estimate in the UI.
+        "GPU_HOURLY_USD": "0.80",
     })
     .add_local_python_source("app_runtime")
     .add_local_dir("config", "/app/config")
@@ -48,8 +51,9 @@ def generate_image(job_id: str, payload: dict):
     def image_ready(image, meta):
         nonlocal record, first_image_seconds
         meta = {**meta, "source_name": meta.get("source_name") or payload.get("source_name", "Input image"), "source_url": meta.get("source_url") or payload.get("source_url")}
+        # Real GPU time up to this saved image, so the library can show cost per file.
+        meta = {**meta, "worker_seconds": round(time.monotonic() - started, 2)}
         items = persist_generated_images({"images": [image], "meta": dict(meta)})
-        outputs.commit()
         library_items.extend(items)
         if first_image_seconds is None:
             first_image_seconds = round(time.monotonic() - started, 2)
@@ -60,12 +64,13 @@ def generate_image(job_id: str, payload: dict):
     def progress(value, message):
         nonlocal last_update, record
         now = time.monotonic()
-        if now - last_update < 1 and value < 1:
+        # Ten workers polling once per second each rewrote the whole job record.
+        if now - last_update < 2 and value < 1:
             return
         last_update = now
         record = {**record, "status": "running", "progress": min(value, 0.98),
                   "message": message, "updated_at": now_iso()}
-        record["logs"] = (record["logs"] + [{"timestamp": now_iso(), "progress": min(value, 0.98), "message": message}])[-30:]
+        record["logs"] = (record["logs"] + [{"timestamp": now_iso(), "progress": min(value, 0.98), "message": message}])[-12:]
         jobs[job_id] = record
 
     try:
@@ -77,29 +82,23 @@ def generate_image(job_id: str, payload: dict):
         result["meta"]["source_url"] = result["meta"].get("source_url") or payload.get("source_url")
         if not library_items:  # Local demo tests do not emit incremental images.
             library_items = persist_generated_images(result)
-            outputs.commit()
         result["images"] = library_items
         result["library_items"] = library_items
         result["meta"]["worker_seconds"] = round(time.monotonic() - started, 2)
         result["meta"]["first_image_seconds"] = first_image_seconds
         jobs[job_id] = {**record, "status": "completed", "progress": 1,
                         "message": "Completed", "updated_at": now_iso(), "result": result}
+        # One volume commit per job instead of one per generated image.
+        outputs.commit()
     except Exception as exc:
+        try:
+            outputs.commit()
+        except Exception:
+            pass
         jobs[job_id] = {**record, "status": "failed",
                         "message": "Failed", "updated_at": now_iso(),
                         "error": {"detail": str(exc)}}
         raise
-
-
-def web_secret():
-    """Only deployment reads the local credential; cloud uses the Modal Secret."""
-    if modal.is_local():
-        import json
-        credentials_path = Path(".modal-app-credentials.json")
-        if not credentials_path.exists():
-            raise RuntimeError("Run .venv/bin/python scripts/prepare_modal.py first.")
-        return modal.Secret.from_dict(json.loads(credentials_path.read_text()))
-    return modal.Secret.from_name("img2img-web")
 
 
 @app.function(

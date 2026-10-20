@@ -4,6 +4,7 @@ import binascii
 from datetime import datetime, UTC
 import hmac
 import hashlib
+import os
 import time
 import io
 import re
@@ -17,7 +18,11 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image
-from app_runtime.server import OUTPUTS_DIR, api_library_save, load_deleted_ids, load_history_items, api_library_delete, api_library_order, load_library_items, now_iso
+from app_runtime.server import (OUTPUTS_DIR, THUMBS_DIR, api_library_save, load_deleted_ids,
+                                load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
+                                ensure_thumbnail)
+
+VOLUME_REFRESH_INTERVAL = float(os.getenv("VOLUME_REFRESH_SECONDS", "2.0"))
 
 
 class VolumeUsage:
@@ -51,6 +56,15 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
     lock = threading.Lock()
+    refresh_state = {"at": 0.0}
+
+    def refresh_cached():
+        """Volume reload is a network call; collapse bursts of polling into one."""
+        now = time.monotonic()
+        if now - refresh_state["at"] < VOLUME_REFRESH_INTERVAL:
+            return
+        refresh_state["at"] = now
+        refresh()
 
     def session_valid(token):
         try:
@@ -102,7 +116,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 return RedirectResponse("/login", status_code=303)
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Img2Img Studio", charset="UTF-8"'})
         response = await call_next(request)
-        response.headers["Cache-Control"] = "private, no-store"
+        # Immutable image/thumbnail responses keep their own long-lived caching.
+        if "cache-control" not in {key.lower() for key in response.headers}:
+            response.headers["Cache-Control"] = "private, no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
@@ -166,7 +182,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             if monthly_limit is not None and used + requested > monthly_limit:
                 raise HTTPException(429, f"Monthly safety limit reached ({monthly_limit} images).")
             # Zdroj uchováme pro porovnání i po obnovení stránky; žádná galerie složených vstupů.
-            refresh()
+            refresh_cached()
             for payload in payloads:
                 if payload["generation_type"] == "atelier":
                     payload["source_url"] = None
@@ -178,7 +194,6 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
                     decode_image(payload["image_base64"]).save(path, format="PNG")
                 payload["source_url"] = f"/library/{filename}"
-            commit()
             usage[month] = used + requested
             for index, payload in enumerate(payloads):
                 job_id = uuid.uuid4().hex
@@ -306,13 +321,13 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     @app.get("/api/history")
     def history():
         with lock:
-            refresh()
+            refresh_cached()
             return {"items": load_history_items(), "deleted_ids": load_deleted_ids()}
 
     @app.post("/api/library/{item_id}")
     def save_to_library(item_id: str):
         with lock:
-            refresh()
+            refresh_cached()
             result = api_library_save(item_id)
             commit()
             return result
@@ -320,27 +335,55 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     @app.get("/api/library")
     def library():
         with lock:
-            refresh()
+            refresh_cached()
             return {"items": load_library_items()}
 
+    def asset_response(path, media_type, request: Request):
+        if request.method == "HEAD":
+            return Response(status_code=200, media_type=media_type,
+                            headers={"Content-Length": str(path.stat().st_size), "Cache-Control": "public, max-age=31536000, immutable"})
+        return Response(path.read_bytes(), media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
     @app.get("/library/{filename}")
-    def asset(filename: str):
+    @app.head("/library/{filename}")
+    def asset(filename: str, request: Request):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+\.(png|webp)", filename):
             raise HTTPException(404, "Image not found.")
         with lock:
-            refresh()
             path = OUTPUTS_DIR / filename
             if not path.is_file():
-                raise HTTPException(404, "Image not found.")
-            # Read while holding the volume lock (FileResponse would read after releasing it).
-            return Response(path.read_bytes(), media_type="image/png" if filename.endswith(".png") else "image/webp")
+                refresh_cached()
+                if not path.is_file():
+                    raise HTTPException(404, "Image not found.")
+            return asset_response(path, "image/png" if filename.endswith(".png") else "image/webp", request)
+
+    @app.get("/thumb/{filename}")
+    @app.head("/thumb/{filename}")
+    def thumbnail(filename: str, request: Request):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+\.(webp|png|jpg|jpeg)", filename):
+            raise HTTPException(404, "Thumbnail not found.")
+        with lock:
+            target = THUMBS_DIR / filename
+            if not target.is_file():
+                stem = Path(filename).stem
+                source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None)
+                if source is None:
+                    refresh_cached()
+                    source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None)
+                if source is None:
+                    raise HTTPException(404, "Thumbnail not found.")
+                target = ensure_thumbnail(source.name)
+                if target is None:
+                    raise HTTPException(404, "Thumbnail not found.")
+            return asset_response(target, "image/webp", request)
 
     @app.delete("/api/library/{item_id}")
     def delete(item_id: str):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", item_id):
             raise HTTPException(404, "Image not found.")
         with lock:
-            refresh()
+            refresh_cached()
             result = api_library_delete(item_id)
             commit()
             return result
@@ -348,7 +391,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     @app.put("/api/library/order")
     def reorder_library(payload: dict):
         with lock:
-            refresh()
+            refresh_cached()
             result = api_library_order(payload.get("ids", []))
             commit()
             return result

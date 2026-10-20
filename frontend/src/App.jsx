@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
+import { API_URL, buildImageUrl } from "./api";
 
-const API_URL = import.meta.env.VITE_API_URL || "";
 const POLL_INTERVAL = 1500;
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
 const DEFAULT_ENGINE = { mode: "quick", conditioningMode: "style", sampler: "dpmpp_2m_sde", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
@@ -24,17 +24,6 @@ function fileToBase64(file) {
   });
 }
 
-function buildImageUrl(path) {
-  if (!path) return "";
-  if (
-    path.startsWith("http://") ||
-    path.startsWith("https://") ||
-    path.startsWith("data:")
-  )
-    return path;
-  return `${API_URL}${path}`;
-}
-
 function loadStoredPresets() {
   try {
     const raw = window.localStorage.getItem(PRESET_STORAGE_KEY);
@@ -51,6 +40,7 @@ function saveStoredPresets(presets) {
 
 function App() {
   const [archives, setArchives] = useState([]);
+  const [gpuHourlyUsd, setGpuHourlyUsd] = useState(null);
   const [optionsRevision, setOptionsRevision] = useState(0);
   const [archiveStatus, setArchiveStatus] = useState("loading");
   const [models, setModels] = useState([]);
@@ -154,6 +144,7 @@ function App() {
         if (cancelled) return;
         if (!data) throw new Error("Options unavailable");
         setArchives(data.archives || []);
+        setGpuHourlyUsd(data.gpu_hourly_usd ?? null);
         setArchiveStatus(data.archives?.length ? "ready" : "error");
         if (!data.archives?.length) retry = setTimeout(() => setOptionsRevision(v => v + 1), 5000);
         if (data.models?.length) {
@@ -241,10 +232,7 @@ function App() {
         .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
         .slice(-10);
       const ready = slots.filter(Boolean);
-      setLibraryItems((current) => {
-        const ids = new Set(current.map((item) => item.id));
-        return [...ready.filter((item) => !ids.has(item.id) && !deletedIds.current.has(item.id)), ...current];
-      });
+      // New outputs stay on the canvas until explicitly saved; the library is refetched after the batch.
       const latest = logs.at(-1)?.message || "Čekání na cloudové GPU";
       setBatchResults(slots);
       setResults((current) => {
@@ -836,6 +824,7 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
+        gpuHourlyUsd,
       }}
     />
   );

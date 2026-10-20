@@ -12,6 +12,8 @@
     "start:local": ".venv/bin/python -m uvicorn app_runtime.server:app --host 127.0.0.1 --port 8000",
     "modal:upload": ".venv/bin/python scripts/upload_models.py",
     "modal:deploy": "npm run build:frontend && .venv/bin/modal deploy modal_app.py",
-    "test": ".venv/bin/python -m unittest discover -s tests -v"
+    "test:python": ".venv/bin/python -m unittest discover -s tests -v",
+    "test:frontend": "node --test frontend/src/*.test.js",
+    "test": "npm run test:python && npm run test:frontend"
   }
 }
