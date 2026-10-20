@@ -56,5 +56,15 @@
       "name": "Hofmann SDXL LoRA",
       "path": "/models/loras/lora_hofmann_SDXL.safetensors"
     }
+  ],
+  "controlnets": [
+    {
+      "id": "canny_sdxl",
+      "name": "ControlNet Canny SDXL",
+      "repo": "diffusers/controlnet-canny-sdxl-1.0",
+      "revision": "eb115a19a10d14909256db740ed109532ab1483c",
+      "path": "/models/controlnet/canny_sdxl",
+      "note": "Official SDXL Canny ControlNet; structure only, no source pixels or palette are passed through."
+    }
   ]
 }

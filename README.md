@@ -238,4 +238,26 @@ The source reference, archive, hash, checkpoint and seed are retained in output 
 
 Ateliér resolution offers **Random**: square, portrait and landscape SDXL formats are chosen deterministically from each study seed, shared by all compared models. Reference archives retain each source composition and its natural aspect ratio within the selected bounding box. Archive options retry automatically after transient load failures and expose an explicit retry button instead of a blank select.
 
+### Structure-only guidance (Archiv → struktura)
+
+Plain fusion still carries the reference painting through the img2img latent, so its palette and
+brushwork partly survive at moderate denoise. **Archiv → struktura** removes that path: the
+reference is reduced to a black-and-white edge map and a desaturated copy is used as the img2img
+latent, then an official SDXL Canny ControlNet holds the outline while the chosen artist
+checkpoint supplies all colour, light and brushwork. Composition comes from the archive; the
+paint comes from the checkpoint.
+
+ControlNet weights live in the model Volume at \`controlnet/canny_sdxl\` and are downloaded on Modal
+by \`scripts/download_controlnet.py\` from \`diffusers/controlnet-canny-sdxl-1.0\` at a pinned revision
+(about 2.5 GB, fp16). They are never stored on the Mac. \`SÍLA OBYSU\` (default 0.8, range 0.1–1.5)
+trades outline fidelity against painterly freedom: high values lock the drawing and suppress the
+brush, low values loosen the motif. Both the reference and the exact edge map are retained beside
+the output for audit. This mode costs more per image than plain fusion because a second network
+runs alongside the checkpoint.
+
+Measured on the same Hofmann reference, seed and denoise 0.9 with Modal 2400: edge correlation with
+the reference rose from +0.14 (fusion) to +0.44 (structure), while colour-distribution distance from
+the reference grew from 0.38 to 0.50 and brush-texture energy stayed below the reference. In short,
+the motif is held more tightly and less of the source palette comes through.
+
 Queue feedback is compact and automatically returns to zero/ready 2.5 seconds after successful completion; generated images and job history are retained. New submissions cancel the display-reset timer.

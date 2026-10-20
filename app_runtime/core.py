@@ -29,6 +29,8 @@ SCHEDULE_OPTIONS = {"karras", "normal"}
 
 CURRENT_MODEL_ID = None
 CURRENT_PIPELINE = None
+CURRENT_CONTROLNET_ID = None
+CURRENT_CONTROLNET_PIPE = None
 CURRENT_LORA_ID = "none"
 CURRENT_LORA_STRENGTH = 0.0
 MODEL_CONFIG = None
@@ -64,6 +66,8 @@ class GenerationInput:
     atelier_mode: str = "noise"
     atelier_theme: str = "all"
     atelier_archive: str = "hofmann"
+    controlnet_id: str = "canny_sdxl"
+    controlnet_scale: float = 0.8
     width: int = 1024
     height: int = 1024
 
@@ -214,7 +218,9 @@ def get_torch():
 def get_diffusers():
     global DIFFUSERS_MODULES
     if DIFFUSERS_MODULES is None:
-        from diffusers import DDIMScheduler, DPMSolverMultistepScheduler, EulerAncestralDiscreteScheduler, StableDiffusionXLImg2ImgPipeline, StableDiffusionXLPipeline
+        from diffusers import (ControlNetModel, DDIMScheduler, DPMSolverMultistepScheduler,
+                               EulerAncestralDiscreteScheduler, StableDiffusionXLControlNetImg2ImgPipeline,
+                               StableDiffusionXLImg2ImgPipeline, StableDiffusionXLPipeline)
 
         DIFFUSERS_MODULES = {
             "scheduler": DPMSolverMultistepScheduler,
@@ -222,6 +228,8 @@ def get_diffusers():
             "euler_a_scheduler": EulerAncestralDiscreteScheduler,
             "pipeline": StableDiffusionXLImg2ImgPipeline,
             "text_pipeline": StableDiffusionXLPipeline,
+            "controlnet_model": ControlNetModel,
+            "controlnet_pipeline": StableDiffusionXLControlNetImg2ImgPipeline,
         }
     return DIFFUSERS_MODULES
 
@@ -295,8 +303,12 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
             raise ValueError("Invalid atelier mode or theme")
         if not is_atelier_model(model_id) or lora_id != "none":
             raise ValueError("Ateliér uses trained artist checkpoints")
-        if atelier_mode == "archive" and payload.get("atelier_archive", "hofmann") not in {"hofmann", "tuymans"}:
+        if atelier_mode in {"archive", "structure"} and payload.get("atelier_archive", "hofmann") not in {"hofmann", "tuymans"}:
             raise ValueError("Unknown reference archive")
+        if atelier_mode == "structure":
+            controlnet_id = str(payload.get("controlnet_id", "canny_sdxl"))
+            if not any(item.get("id") == controlnet_id for item in load_config().get("controlnets", [])):
+                raise ValueError("Unknown controlnet")
         dimensions = [payload.get("width", 1024), payload.get("height", 1024)]
         if any(isinstance(v, bool) or int(v) != float(v) or not 512 <= int(v) <= 1536 or int(v) % 8 for v in dimensions):
             raise ValueError("Atelier dimensions must be multiples of 8 from 512 to 1536")
@@ -323,6 +335,8 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
+        controlnet_id=str(payload.get("controlnet_id", "canny_sdxl")),
+        controlnet_scale=clamp(float(payload.get("controlnet_scale", 0.8)), 0.1, 1.5),
     )
 
 
@@ -363,6 +377,74 @@ def ensure_pipeline(model_id: str):
 
     CURRENT_MODEL_ID = model_id
     CURRENT_PIPELINE = pipe
+    CURRENT_LORA_ID = "none"
+    CURRENT_LORA_STRENGTH = 0.0
+    return pipe
+
+
+def get_controlnet_item(controlnet_id: str) -> dict[str, Any]:
+    for item in load_config().get("controlnets", []):
+        if item.get("id") == controlnet_id:
+            return item
+    raise ValueError(f"Unknown controlnet id: {controlnet_id}")
+
+
+def structure_map(image: Image.Image, low: int = 100, high: int = 200) -> Image.Image:
+    """Reduce a reference painting to edges so only composition reaches the model.
+
+    Colour, contrast and brush texture are discarded here; the ControlNet receives an
+    edge map, so the reference cannot leak its palette or its own brushwork.
+    """
+    edges = image.convert("L").filter(ImageFilter.FIND_EDGES)
+    edges = ImageOps.autocontrast(edges)
+    # Threshold into the black/white edge map the Canny ControlNet was trained on.
+    return edges.point(lambda value: 255 if value >= high else (0 if value <= low else int(value * 255 / max(1, high))))
+
+
+def ensure_controlnet_pipeline(model_id: str, controlnet_id: str):
+    """Build an img2img pipeline driven by a ControlNet edge map for the given checkpoint."""
+    global CURRENT_CONTROLNET_ID, CURRENT_CONTROLNET_PIPE
+
+    if CURRENT_CONTROLNET_PIPE is not None and CURRENT_MODEL_ID == model_id and CURRENT_CONTROLNET_ID == controlnet_id:
+        return CURRENT_CONTROLNET_PIPE
+
+    controlnet = get_controlnet_item(controlnet_id)
+    controlnet_path = controlnet.get("path")
+    if not controlnet_path or not Path(controlnet_path).is_dir():
+        raise FileNotFoundError(f"ControlNet weights not found for '{controlnet_id}': {controlnet_path}")
+
+    model = get_config_item("models", model_id)
+    model_path = model.get("path")
+    if not model_path or not Path(model_path).exists():
+        raise FileNotFoundError(f"Model checkpoint not found for '{model_id}': {model_path}")
+
+    for name in ("CURRENT_PIPELINE", "CURRENT_CONTROLNET_PIPE"):
+        pipeline = globals()[name]
+        if pipeline is not None:
+            globals()[name] = None
+            del pipeline
+    clear_cuda()
+
+    torch = get_torch()
+    diffusers = get_diffusers()
+    controlnet_model = diffusers["controlnet_model"].from_pretrained(controlnet_path, torch_dtype=torch.float16)
+    pipe = diffusers["controlnet_pipeline"].from_single_file(
+        model_path,
+        controlnet=controlnet_model,
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+    )
+    pipe.scheduler = make_scheduler(pipe.scheduler.config, "dpmpp_2m", "karras")
+    pipe = pipe.to("cuda")
+    pipe.enable_vae_tiling()
+    try:
+        pipe.enable_xformers_memory_efficient_attention()
+    except Exception:
+        pass
+
+    CURRENT_MODEL_ID = model_id
+    CURRENT_CONTROLNET_ID = controlnet_id
+    CURRENT_CONTROLNET_PIPE = pipe
     CURRENT_LORA_ID = "none"
     CURRENT_LORA_STRENGTH = 0.0
     return pipe

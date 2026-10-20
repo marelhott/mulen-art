@@ -253,15 +253,22 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 raise ValueError("At most eight studies per transport request")
             # Validate the seed before resolving its random sentinel.
             first = parse_input({**settings, "generation_type": "atelier", "model_id": models[0], "lora_id": "none", "num_images": 1})
-            if first.atelier_mode == "archive":
+            if first.atelier_mode in {"archive", "structure"}:
                 from .archives import reference_for
                 reference_for(first.atelier_archive, 0)
+            if first.atelier_mode == "structure":
+                from .core import get_controlnet_item
+                controlnet = get_controlnet_item(first.controlnet_id)
+                # The CPU gateway does not mount the model Volume; the worker verifies the
+                # files themselves. Here we only reject a controlnet id that is not configured.
+                if not controlnet.get("path"):
+                    raise ValueError("ControlNet weights are not available yet")
             seed = secrets.randbits(32) if first.seed == -1 else first.seed
             payloads = []
             for index in range(count):
                 variant_seed = (seed + index) % 2**32
                 title = "Volná studie bez námětu" if first.atelier_mode == "noise" else subject_for(variant_seed, first.atelier_theme)[1]
-                if first.atelier_mode == "archive":
+                if first.atelier_mode in {"archive", "structure"}:
                     archive, reference, _ = reference_for(first.atelier_archive, variant_seed)
                     title = archive["name"] + " · " + reference["filename"]
                 dimensions = {}

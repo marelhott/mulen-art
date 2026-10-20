@@ -1150,11 +1150,12 @@ function AtelierControls({atelier: a, update, models, archives = [], archiveStat
     {id: "noise", name: "Volná studie", description: "Nový obraz přímo z šumu. Bez námětu i bez promptu; obsah vybírá samotný checkpoint."},
     {id: "subject", name: "Automatický námět", description: "Aplikace vybere střídmý námět a vytvoří obraz checkpointem. Nic nepíšeš."},
     {id: "archive", name: "Archiv → fúze", description: "Náhodný obraz ze zdrojového archivu přemaluje libovolný zvolený checkpoint. Jeden obraz na výstup, bez tréninku."},
+    {id: "structure", name: "Archiv → struktura", description: "Z předlohy se přenese jen obrys. Barvu, světlo a tah štětce určuje výhradně zvolený checkpoint."},
     {id: "photo", name: "Foto → malba", description: "SDXL Base vytvoří fotografický předobraz a vybraný checkpoint jej přemaluje. Dva průchody GPU; denoise až 0,99."},
   ];
   const total = Number(a.count || 0) * a.modelIds.length;
   return <>
-    <button className="primary-button generate" disabled={!a.modelIds.length || !choices.length || (a.mode === "archive" && !archives.some(item => item.id === (a.archive || "hofmann")))} onClick={onGenerate}>
+    <button className="primary-button generate" disabled={!a.modelIds.length || !choices.length || (["archive", "structure"].includes(a.mode) && !archives.some(item => item.id === (a.archive || "hofmann")))} onClick={onGenerate}>
       <Sparkles size={16} />{generating ? "PŘIDAT STUDIE DO FRONTY" : "VYTVOŘIT STUDIE"}
     </button>
     <div className="control-block atelier-modes">
@@ -1166,7 +1167,9 @@ function AtelierControls({atelier: a, update, models, archives = [], archiveStat
     <Range label="POČET STUDIÍ NA MODEL" min={1} max={10} step={1} value={a.count}
       onChange={count => update({count})}
       hint={`${a.count} studií × ${a.modelIds.length} modelů = ${total} výstupů`} />
-    {a.mode === "archive" && <><Select label="ZDROJOVÝ ARCHIV · OBSAH" value={a.archive || "hofmann"} onChange={archive => update({archive})} items={archives.length ? archives.map(item => ({id:item.id,name:`${item.name} · ${item.count} obrazů`})) : [{id:a.archive || "hofmann",name: archiveStatus === "loading" ? "Načítám archivy…" : "Archiv se nepodařilo načíst"}]} />{archiveStatus === "error" && <button className="text-button" onClick={reloadArchives}>Znovu načíst archivy</button>}<p className="help-text">Archiv vybírá předlohu, checkpoint určuje přemalování. Stejná předloha i seed pro všechny modely. Zachovává se poměr stran; rozlišení níže je maximální rámeček.</p></>}
+    {["archive", "structure"].includes(a.mode) && <><Select label="ZDROJOVÝ ARCHIV · OBSAH" value={a.archive || "hofmann"} onChange={archive => update({archive})} items={archives.length ? archives.map(item => ({id:item.id,name:`${item.name} · ${item.count} obrazů`})) : [{id:a.archive || "hofmann",name: archiveStatus === "loading" ? "Načítám archivy…" : "Archiv se nepodařilo načíst"}]} />{archiveStatus === "error" && <button className="text-button" onClick={reloadArchives}>Znovu načíst archivy</button>}<p className="help-text">{a.mode === "structure" ? "Z předlohy se přenese pouze obrys. Paletu, světlo i tah štětce určuje zvolený checkpoint, takže se rukopis předlohy nepropíše." : "Archiv vybírá předlohu, checkpoint určuje přemalování. Stejná předloha i seed pro všechny modely. Zachovává se poměr stran; rozlišení níže je maximální rámeček."}</p>
+      {a.mode === "structure" && <Range label="SÍLA OBYSU" min={0.1} max={1.5} step={0.05} value={a.controlnetScale ?? 0.8} onChange={controlnetScale => update({controlnetScale})} hint="Vyšší hodnota drží obrys pevněji. Příliš vysoká hodnota potlačí malířský tah." />}
+    </>}
     {!["noise", "archive"].includes(a.mode) && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
       items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Postavy a gesta"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
     <div className="control-block"><Label>CHECKPOINTY · MALÍŘSKÉ ZPRACOVÁNÍ</Label>
@@ -1592,9 +1595,10 @@ function ImageViewer({
           <div className="detail-section">
             <Label>PARAMETRY GENEROVÁNÍ</Label>
             {[
-              ["Způsob tvorby", settings.generation_type === "atelier" ? ({noise: "Volná studie", subject: "Automatický námět", photo: "Foto → malba", archive: "Archiv → fúze"}[settings.atelier_mode]) : undefined],
+              ["Způsob tvorby", settings.generation_type === "atelier" ? ({noise: "Volná studie", subject: "Automatický námět", photo: "Foto → malba", archive: "Archiv → fúze", structure: "Archiv → struktura"}[settings.atelier_mode]) : undefined],
               ["Námět", settings.subject_title],
               ["Zdrojový archiv", settings.archive_name],
+              ["Síla obrysu", settings.controlnet_scale],
               ["Denoise", settings.denoise],
               ["CFG", settings.cfg ?? settings.guidance_scale],
               ["Kroky", settings.steps],
