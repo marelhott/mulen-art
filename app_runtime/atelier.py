@@ -27,8 +27,8 @@ THEMES = {"all", "face", "interior", "object", "landscape", "figure"}
 MODES = {"noise", "subject", "photo"}
 
 
-def is_tuymans(model_id):
-    return model_id.startswith("tuymans_") or model_id == "tuy_small"
+def is_atelier_model(model_id):
+    return model_id.startswith("tuymans_") or model_id in {"tuy_small", "hofmann_sdxl"}
 
 
 def subject_for(seed, theme="all"):
@@ -39,6 +39,8 @@ def subject_for(seed, theme="all"):
 
 def painting_prompt(model_id, text):
     # Keep the learned caption prefix for the approved checkpoints; no descriptive style embellishment.
+    if model_id == "hofmann_sdxl":
+        return text  # No verified caption trigger is available for this imported checkpoint.
     trigger = "mvhpaint" if model_id.startswith("tuymans_modal_") else "tuypaint"
     return f"{trigger}, {text}"
 

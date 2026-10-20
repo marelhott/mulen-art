@@ -253,6 +253,12 @@ function App() {
               : "completed"
             : "running",
         progress,
+        queue_counts: {
+          queued: records.filter(record => record.status === "queued").length,
+          running: records.filter(record => record.status === "running").length,
+          completed: records.filter(record => record.status === "completed").length,
+          failed: failed.length,
+        },
         active_steps: records.flatMap((record, index) => {
           if (record.status !== "running") return [];
           const match = (record.message || "").match(/step (\d+)\/(\d+)/);

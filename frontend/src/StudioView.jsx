@@ -601,7 +601,7 @@ export default function StudioView(p) {
             {exporting ? "BALÍM…" : "EXPORTOVAT VŠE"}
           </button>
         </div>
-        {isAtelier && <div className="atelier-intro"><span>EXPERIMENTÁLNÍ ATELIÉR</span><p>Nové obrazy tvoří checkpoint. Nové verze Modal se učily na 247 schválených souborech. Automatické náměty jsou zatím kurátorská startovní sada; obsahová analýza archivu není součástí této verze.</p></div>}
+        {isAtelier && <AtelierQueue p={p} />}
         <div className="gallery-tools">
           <div className="segmented tabs">
             <button
@@ -1115,8 +1115,37 @@ function Progress({
     </section>
   );
 }
+function AtelierQueue({p}) {
+  const counts = p.job.queue_counts || {};
+  const active = p.isGenerating;
+  const waiting = active && !p.isSubmitting && !(counts.running > 0);
+  const failed = p.job.status === "failed";
+  const done = p.job.status === "completed";
+  const total = Math.max(p.outputCount, p.plannedOutputs || 0);
+  const accepted = Math.max(p.submittedOutputs || 0, (counts.queued || 0) + (counts.running || 0) + (counts.completed || 0) + (counts.failed || 0));
+  const title = p.isSubmitting ? "Přijímám tvoje zadání" : waiting ? "Zadání přijato · čekáme na GPU" : active ? "Ateliér právě tvoří" : failed ? "Část úloh se nepodařila" : done ? "Studie jsou hotové" : "Připraveno tvořit";
+  return <section className={`atelier-queue ${active ? "is-active" : ""} ${waiting || p.isSubmitting ? "is-waiting" : ""} ${failed ? "has-error" : ""}`} aria-label="Stav fronty Ateliéru">
+    <div className="atelier-queue-heading">
+      <div className="atelier-queue-symbol">{active ? <Sparkles size={23} /> : <Check size={23} />}</div>
+      <div className="atelier-queue-title" role="status" aria-live="polite"><span>FRONTA ATELIÉRU</span><h2>{title}</h2><p>{p.isSubmitting ? `${accepted} z ${total} výstupů potvrzeno serverem. Můžeš přidávat další zadání.` : waiting ? "Požadavky jsou uložené ve frontě. Nezadávej je znovu; výpočet začne po přidělení GPU." : active ? "Hotové obrazy se průběžně objevují níže a ukládají do knihovny." : failed ? "Podrobnosti chyby najdeš v průběhu úloh. Hotové obrazy zůstávají uložené." : done ? "Všechny úspěšné výsledky jsou na plátně a v knihovně." : "Vyber způsob tvorby a klikni na Vytvořit studie. Přijetí zadání uvidíš zde."}</p></div>
+      <div className="atelier-queue-number"><strong>{active || done || failed ? p.progressValue : "—"}</strong>{(active || done || failed) && <span>%</span>}</div>
+    </div>
+    <div className="atelier-queue-track" role="progressbar" aria-label={p.isSubmitting ? "Přijetí zadání" : waiting ? "Čekání na přidělení GPU" : "Celkový průběh Ateliéru"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={waiting ? undefined : p.isSubmitting ? Math.round(accepted / Math.max(total, 1) * 100) : p.progressValue} aria-valuetext={waiting ? "Zadání přijato, čekání na GPU; výpočet ještě nezačal" : undefined}>
+      <div className="atelier-queue-fill" style={{width: `${p.isSubmitting ? accepted / Math.max(total, 1) * 100 : p.progressValue}%`}} />
+      {(waiting || p.isSubmitting) && <div className="atelier-queue-scan" />}
+    </div>
+    <div className="atelier-queue-stats">
+      <span><i className="queue-dot" />Přijato <b>{accepted}</b></span>
+      <span>Čeká <b>{counts.queued || 0}</b></span>
+      <span>Počítá se <b>{counts.running || 0}</b></span>
+      <span>Hotovo <b>{p.readyCount} / {total}</b></span>
+      {counts.failed > 0 && <span className="queue-failed">Chyba <b>{counts.failed}</b></span>}
+    </div>
+    {p.job.active_steps?.length > 0 && <div className="atelier-queue-steps">{p.job.active_steps.map((step, i) => <div key={step.id}><span>Výpočet {i + 1} · {step.current} / {step.total} kroků</span><div className="atelier-step-track"><div style={{width: `${step.current / step.total * 100}%`}} /></div></div>)}</div>}
+  </section>;
+}
 function AtelierControls({atelier: a, update, models, generating, onGenerate}) {
-  const choices = models.filter(model => model.id.startsWith("tuymans_") || model.id === "tuy_small");
+  const choices = models.filter(model => model.id.startsWith("tuymans_") || ["tuy_small", "hofmann_sdxl"].includes(model.id));
   const modes = [
     {id: "noise", name: "Volná studie", description: "Nový obraz přímo z šumu. Bez námětu i bez promptu; obsah vybírá samotný checkpoint."},
     {id: "subject", name: "Automatický námět", description: "Aplikace vybere střídmý námět a vytvoří obraz checkpointem. Nic nepíšeš."},

@@ -123,7 +123,7 @@ class CloudFlowTests(unittest.TestCase):
             self.assertEqual(len(pair),2)
             self.assertEqual(pair[0]["source_name"],pair[1]["source_name"])
             self.assertTrue(all(payload["cfg"]==.5 and not payload["image_base64"] and payload["source_url"] is None for payload in pair))
-        for invalid in ({"model_ids":["hofmann_sdxl"]}, {"count":9}, {"settings":{"atelier_mode":"missing"}}):
+        for invalid in ({"model_ids":["sdxl_base"]}, {"count":9}, {"settings":{"atelier_mode":"missing"}}):
             rejected = client.post("/api/atelier-batch", json={"model_ids":["tuymans_modal_800"], "count":1, **invalid})
             self.assertEqual(rejected.status_code,422)
         self.assertEqual(len(self.submissions),6)

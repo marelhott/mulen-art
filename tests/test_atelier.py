@@ -33,7 +33,7 @@ class AtelierTests(unittest.TestCase):
         parsed = core.parse_input(self.payload)
         self.assertEqual(parsed.image_base64, '')
         self.assertEqual(parsed.cfg, .5)
-        for invalid in ({'generation_type':'img2img'}, {'model_id':'hofmann_sdxl'},
+        for invalid in ({'generation_type':'img2img'}, {'model_id':'sdxl_base'},
                         {'atelier_mode':'unknown'}, {'atelier_theme':'unknown'},
                         {'width':513}, {'width':2048}, {'height':True}, {'render_mode':'detail'}):
             with self.assertRaises(ValueError):
@@ -55,6 +55,13 @@ class AtelierTests(unittest.TestCase):
                 lambda image,meta: emitted.append(meta))
             sources = list(Path(tmp).glob('source_atelier_*.png'))
         return text, painting, ensure, result, updates, emitted, sources
+
+    def test_hofmann_supports_autonomous_subjects_without_tuymans_trigger(self):
+        text, painting, ensure, result, updates, emitted, sources = self.run_study(model_id="hofmann_sdxl", atelier_mode="subject")
+        self.assertEqual(ensure.call_args.args[0], "hofmann_sdxl")
+        self.assertEqual(emitted[0]["model_id"], "hofmann_sdxl")
+        self.assertEqual(text.calls[0]["prompt"], emitted[0]["subject_text"])
+        self.assertNotIn("mvhpaint", text.calls[0]["prompt"])
 
     def test_noise_is_true_text_to_image_with_empty_prompt_and_lossless_metadata(self):
         text, painting, ensure, result, updates, emitted, sources = self.run_study(num_images=2)

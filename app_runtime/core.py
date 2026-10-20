@@ -287,11 +287,11 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     atelier_theme = str(payload.get("atelier_theme", "all"))
     width, height = 1024, 1024
     if generation_type == "atelier":
-        from .atelier import MODES, THEMES, is_tuymans
+        from .atelier import MODES, THEMES, is_atelier_model
         if atelier_mode not in MODES or atelier_theme not in THEMES:
             raise ValueError("Invalid atelier mode or theme")
-        if not is_tuymans(model_id) or lora_id != "none":
-            raise ValueError("Ateliér uses trained Tuymans checkpoints")
+        if not is_atelier_model(model_id) or lora_id != "none":
+            raise ValueError("Ateliér uses trained artist checkpoints")
         dimensions = [payload.get("width", 1024), payload.get("height", 1024)]
         if any(isinstance(v, bool) or int(v) != float(v) or not 512 <= int(v) <= 1536 or int(v) % 8 for v in dimensions):
             raise ValueError("Atelier dimensions must be multiples of 8 from 512 to 1536")

@@ -196,10 +196,12 @@ Select one or more checkpoint buttons. Every input is submitted separately to ev
 
 ## Ateliér: autonomous studies
 
-The far-left **Ateliér** tab creates images without uploading a photograph. It shares the existing queue, progress, canvas history, library, viewer, and export. Select multiple Tuymans checkpoints to compare matching seeds. Any positive study count is submitted in transport chunks of eight, without an overall application count limit.
+The far-left **Ateliér** tab creates images without uploading a photograph. It shares the existing queue, progress, canvas history, library, viewer, and export. Select multiple Tuymans or Hofmann checkpoints to compare matching seeds. Any positive study count is submitted in transport chunks of eight, without an overall application count limit.
 
 - **Volná studie**: text-to-image from noise with an empty prompt.
-- **Automatický námět**: a deterministic seed selects a restrained subject from the curated starter set in `app_runtime/atelier.py`. New Modal checkpoints receive their learned `mvhpaint` caption prefix.
+- **Automatický námět**: a deterministic seed selects a restrained subject from the curated starter set in `app_runtime/atelier.py`. New Modal checkpoints receive their learned `mvhpaint` caption prefix. Hofmann uses the subject text without an unverified trigger.
 - **Foto → malba**: SDXL Base first generates a photographic precursor, then the selected checkpoint repaints it with an empty prompt, denoise at most 0.55. The actual precursor is retained for comparison. This mode uses two generation passes and model loading.
 
 Automatic subjects are not an analysis of the 247 training files. No external language/image API is used. Default Ateliér settings are 28 steps, CFG 0.5, and 1024×1024 generation, followed by 2× Lanczos interpolation only. Post-enlargement adds no AI detail. Generation metadata records the mode, subject provenance, actual prompts, seed, checkpoint, dimensions, and optional precursor. The existing photograph workflow retains its own settings.
+
+Ateliér replaces its introduction with a prominent queue panel: submission acknowledgment, accepted/waiting/running/completed counts, real aggregate percentage, and per-worker step bars. Waiting for GPU has an indeterminate animation rather than invented completion. Motion respects the reduced-motion preference.

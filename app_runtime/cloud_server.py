@@ -225,7 +225,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             settings = data.get("settings", {})
             models = data.get("model_ids")
             if not isinstance(models, list) or not models or any(not isinstance(item, str) for item in models):
-                raise ValueError("Select Tuymans checkpoints")
+                raise ValueError("Select artist checkpoints")
             models = list(dict.fromkeys(models))
             count = data.get("count", 1)
             # Transport chunks only; the frontend can enqueue an unlimited number of chunks.
