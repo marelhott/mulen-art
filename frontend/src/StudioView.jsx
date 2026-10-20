@@ -332,7 +332,7 @@ export default function StudioView(p) {
             <Label>VARIANTY NA VSTUP</Label>
             <span>
               {p.inputItems.length
-                ? `${p.inputItems.length} × ${p.numImages || "—"}`
+                ? `${p.inputItems.length} × ${p.numImages || "—"} × ${p.generationMode === "lora" ? 1 : p.selectedModelIds.length} modelů`
                 : "na každý obrázek"}
             </span>
           </div>
@@ -486,12 +486,18 @@ export default function StudioView(p) {
           </div>
         </div>
         {p.generationMode === "checkpoint" ? (
-          <Select
-            label="VLASTNÍ CHECKPOINT"
-            value={p.modelId}
-            onChange={p.setModelId}
-            items={p.models.filter((item) => item.kind !== "base")}
-          />
+          <div className="control-block">
+            <Label>MODELY · VÝBĚR VÍCE</Label>
+            <div className="checkpoint-options" role="group" aria-label="Checkpointy">
+              {p.models.filter(item => item.kind !== "base").map(item => {
+                const active = p.selectedModelIds.includes(item.id);
+                return <button key={item.id} aria-pressed={active} onClick={() => p.setSelectedModelIds(current => active ? (current.length > 1 ? current.filter(id => id !== item.id) : current) : [...current, item.id])}>
+                  <span>{item.name}</span>{active && <Check size={14} />}
+                </button>;
+              })}
+            </div>
+            <p className="help-text">Každý vstup × každý model. Stejný seed; více modelů = více výpočtů.</p>
+          </div>
         ) : (
           <>
             <div className="base-model">
@@ -666,6 +672,7 @@ export default function StudioView(p) {
                 <ImageCard
                   key={item?.id || `pending-${index}`}
                   item={item}
+                  modelName={p.models.find(model => model.id === (item?.model_id || item?.settings?.model_id))?.name}
                   index={index}
                   generating={p.isGenerating}
                   progress={p.progressValue}
@@ -757,7 +764,7 @@ export default function StudioView(p) {
         />
         <Range
           label="CFG"
-          min={1}
+          min={0.5}
           max={20}
           step={0.1}
           value={p.cfg}
@@ -870,6 +877,7 @@ export default function StudioView(p) {
                 <ImageCard
                   key={item.id}
                   item={item}
+                  modelName={p.models.find(model => model.id === (item?.model_id || item?.settings?.model_id))?.name}
                   index={index}
                   onOpen={() => p.openLibraryImage(item)}
                   onDownload={() => download(item)}
@@ -1099,6 +1107,7 @@ function Progress({
 }
 function ImageCard({
   item,
+  modelName,
   index,
   generating,
   progress,
@@ -1117,6 +1126,8 @@ function ImageCard({
   onContext,
 }) {
   const libraryMode = isLibrary || Boolean(onLibraryDrop);
+  const checkpointName = modelName || item?.settings?.model_name || item?.model_id || "";
+  const modalStep = (item?.model_id || item?.settings?.model_id || "").match(/^tuymans_modal_(\d+)$/)?.[1];
   return (
     <article
       className={`image-card ${selected ? "selected" : ""} ${libraryMode ? "is-library-card" : ""}`}
@@ -1196,11 +1207,13 @@ function ImageCard({
           </div>
         )}
         {item && <span className="card-number">{index + 1}</span>}
+        {modalStep && <span className="card-model-badge" title={checkpointName}>Modal {modalStep}</span>}
       </div>
       {item && (
         <footer>
           <div className="card-caption">
             <span>{item.width} × {item.height}</span>
+            <small className="card-model" title={checkpointName}>{modalStep ? `Modal ${modalStep}` : checkpointName}</small>
           </div>
           <div className="card-actions">
             <IconButton
@@ -1488,7 +1501,7 @@ function ImageViewer({
           <div className="detail-tags">
             {[
               image.width && `${image.width} × ${image.height}`,
-              image.model_id || settings.model_id,
+              settings.model_name || image.model_id || settings.model_id,
               image.lora_id && image.lora_id !== "none" ? image.lora_id : null,
             ]
               .filter(Boolean)

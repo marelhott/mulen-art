@@ -89,7 +89,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
     guidance_scale = generation_input.cfg
     output_images = []
     meta = {
-        "model_id": generation_input.model_id, "lora_id": generation_input.lora_id,
+        "model_id": generation_input.model_id, "model_name": get_config_item("models", generation_input.model_id)["name"], "lora_id": generation_input.lora_id,
         "denoise": generation_input.denoise, "lora_strength": generation_input.lora_strength,
         "steps": steps, "scale": generation_input.scale, "guidance_scale": guidance_scale,
         "sampler": generation_input.sampler, "schedule": generation_input.schedule,

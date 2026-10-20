@@ -1965,3 +1965,12 @@ input[type="range"]::-moz-range-progress {
   .card-actions .icon-button {width:12px;height:22px;}
   .card-actions .icon-button svg {width:10px;height:10px;}
 }
+
+.checkpoint-options { display: grid; gap: 3px; margin-top: 8px; }
+.checkpoint-options button { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; min-height: 24px; text-align: left; padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 11px; line-height: 16px; cursor: pointer; }
+.checkpoint-options button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.card-model { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; color: var(--muted); }
+
+.card-caption { display: flex; align-items: center; gap: 6px; }
+.card-caption > span { flex-shrink: 0; }
+.card-model-badge { position: absolute; top: 7px; left: 7px; padding: 3px 5px; border-radius: 4px; color: #fff; background: #111b; font-size: 9px; line-height: 12px; pointer-events: none; }

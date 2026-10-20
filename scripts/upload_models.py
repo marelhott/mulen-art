@@ -12,7 +12,7 @@ def inventory(source):
     result = []
     for section in ("models", "loras"):
         for item in config[section]:
-            if item.get("kind") == "base":
+            if item.get("kind") == "base" or item.get("origin") == "modal-training":
                 continue  # Downloaded directly on Modal by download_sdxl_base.py.
             if not item.get("path"):
                 continue

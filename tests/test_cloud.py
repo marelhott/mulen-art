@@ -88,10 +88,27 @@ class CloudFlowTests(unittest.TestCase):
 
     def test_options_and_polling_do_not_submit_gpu(self):
         data = self.client.get("/api/options").json()
-        self.assertEqual(len(data["models"]), 4)
+        self.assertTrue({"tuymans_sdxl", "tuy_small", "hofmann_sdxl", "sdxl_base", "tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"}.issubset({item["id"] for item in data["models"]}))
         self.assertEqual(len(data["loras"]), 3)
         self.assertEqual(self.client.get("/api/jobs/missing").status_code, 404)
         self.assertEqual(len(self.submissions), 0)
+
+    def test_multiple_checkpoints_keep_inputs_separate_and_seeds_comparable(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client.auth = ("studio", "test-password")
+        for model in ("tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"):
+            response = client.post("/api/generate-batch", json={
+                "inputs": [{"name": name, "image_base64": self.payload["image_base64"]} for name in ("first.png", "second.png")],
+                "settings": {"model_id": model, "num_images": 2, "seed": 4294967295},
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(len(response.json()["jobs"]), 4)
+        self.assertEqual(len(self.submissions), 12)
+        for model in ("tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"):
+            for name in ("first.png", "second.png"):
+                payloads = [payload for _, payload in self.submissions if payload["model_id"] == model and payload["source_name"] == name]
+                self.assertEqual([payload["seed"] for payload in payloads], [4294967295, 0])
+                self.assertTrue(all(payload["num_images"] == 1 for payload in payloads))
 
     def test_batch_variant_seeds_and_engine_options_survive_gateway(self):
         settings = {**self.payload, "num_images": 3, "seed": 4294967295,

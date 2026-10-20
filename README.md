@@ -187,3 +187,9 @@ git worktree add ../img2img-original studio-before-mulen-nano-2026-10-19
 V obnoveném checkoutu je nutné znovu připravit ignorované závislosti a přihlašovací
 soubor a spustit `npm run modal:deploy`. Tag vrací také tehdejší limity; pokud je
 nechceš obnovit, vrať pouze frontendové soubory z tagu.
+
+## Tuymans Modal checkpoints and model comparisons
+
+The selector includes **Tuymans Modal — 800 / 1600 / 2400 kroků**, from the completed approved 247-file run `full-unet-approved-20261019T203404Z`. These are separate checkpoints, not quality levels. They are copied privately into `img2img-models` using `.venv/bin/modal run scripts/promote_tuymans.py`; the copy validates the tensor payload size and full SHA-256 before publishing each file. Their hashes are recorded locally in `outputs/verification/tuymans-promoted.json`. Standard source-model import/upload skips these cloud-trained entries.
+
+Select one or more checkpoint buttons. Every input is submitted separately to every selected checkpoint, with the same parameters and matching seeds across models. Variants still receive distinct incremented seeds. For example, 2 inputs × 3 models × 2 variants produces 12 outputs; GPU concurrency remains managed by Modal. Results identify the checkpoint beside their dimensions and retain it in saved metadata. Presets save multiple selections and continue to support older single-model presets. LoRA mode continues to use SDXL Base and one LoRA.

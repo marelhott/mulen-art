@@ -77,7 +77,7 @@ def main():
     manifest = []
     for section in ("models", "loras"):
         for item in config[section]:
-            if item.get("kind") == "base":
+            if item.get("kind") == "base" or item.get("origin") == "modal-training":
                 continue
             if not item.get("path"):
                 continue

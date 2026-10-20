@@ -6,6 +6,24 @@
       "path": "/models/checkpoints/Tuymans_SDXL.safetensors"
     },
     {
+      "id": "tuymans_modal_800",
+      "name": "Tuymans Modal — 800 kroků",
+      "path": "/models/checkpoints/tuymans_modal_800.safetensors",
+      "origin": "modal-training"
+    },
+    {
+      "id": "tuymans_modal_1600",
+      "name": "Tuymans Modal — 1600 kroků",
+      "path": "/models/checkpoints/tuymans_modal_1600.safetensors",
+      "origin": "modal-training"
+    },
+    {
+      "id": "tuymans_modal_2400",
+      "name": "Tuymans Modal — 2400 kroků",
+      "path": "/models/checkpoints/tuymans_modal_2400.safetensors",
+      "origin": "modal-training"
+    },
+    {
       "id": "tuy_small",
       "name": "Tuy Small",
       "path": "/models/checkpoints/tuy_small.safetensors"

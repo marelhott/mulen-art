@@ -68,7 +68,9 @@ function App() {
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
   const [resizeScale, setResizeScale] = useState(2);
   const [inputScale, setInputScale] = useState(1);
-  const [modelId, setModelId] = useState("tuymans_sdxl");
+  const [selectedModelIds, setSelectedModelIds] = useState(["tuymans_sdxl"]);
+  const modelId = selectedModelIds[0];
+  const setModelId = (id) => setSelectedModelIds([id]);
   const [generationMode, setGenerationMode] = useState("checkpoint");
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
@@ -350,6 +352,7 @@ function App() {
     return {
       generationMode,
       modelId,
+      selectedModelIds,
       loraId,
       loraStrength,
       numImages,
@@ -372,6 +375,10 @@ function App() {
         ? preset.modelId
         : "tuymans_sdxl",
     );
+    if (Array.isArray(preset.selectedModelIds)) {
+      const ids = [...new Set(preset.selectedModelIds)].filter(id => models.some(model => model.id === id && model.kind !== "base"));
+      if (ids.length) setSelectedModelIds(ids);
+    }
     setLoraId(
       preset.loraId && preset.loraId !== "none"
         ? preset.loraId
@@ -457,10 +464,12 @@ function App() {
 
   async function handleGenerate() {
     if (!inputItems.length) return;
+    const modelIds = generationMode === "lora" ? ["sdxl_base"] : [...new Set(selectedModelIds)];
+    if (!modelIds.length) { setError("Vyber alespoň jeden checkpoint."); return; }
     if (
       !Number.isSafeInteger(numImages) ||
       numImages < 1 ||
-      !Number.isSafeInteger(numImages * inputItems.length)
+      !Number.isSafeInteger(numImages * inputItems.length * modelIds.length)
     ) {
       setError("Počet variant musí být kladné celé číslo.");
       return;
@@ -482,7 +491,7 @@ function App() {
       scale: Number(resizeScale.toFixed(2)),
     };
     const count = numImages;
-    const total = inputItems.length * count;
+    const total = inputItems.length * count * modelIds.length;
     const continuing = submitting.current || activeJobs.length > 0;
     pendingSubmissions.current += 1;
     submitting.current = true;
@@ -512,43 +521,48 @@ function App() {
         issues.push(`${item.file.name}: obrázek nelze načíst.`);
         continue;
       }
-      for (let offset = 0; offset < count; offset += 8) {
-        try {
-          const response = await fetch(`${API_URL}/api/generate-batch`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              inputs: [{ name: item.file.name, image_base64: image }],
-              settings: {
-                ...settings,
-                seed: settings.seed === -1 ? -1 : (settings.seed + offset) % 4294967296,
-                num_images: Math.min(8, count - offset),
-              },
-            }),
-          });
-          if (response.status === 401) {
-            window.location.assign("/login");
-            throw new Error("Přihlášení vypršelo.");
+      // One random seed per input, shared across models for a fair comparison.
+      const inputSeed = settings.seed === -1 ? crypto.getRandomValues(new Uint32Array(1))[0] : settings.seed;
+      for (const selectedModelId of modelIds) {
+        for (let offset = 0; offset < count; offset += 8) {
+          try {
+            const response = await fetch(`${API_URL}/api/generate-batch`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                inputs: [{ name: item.file.name, image_base64: image }],
+                settings: {
+                  ...settings,
+                  model_id: selectedModelId,
+                  seed: (inputSeed + offset) % 4294967296,
+                  num_images: Math.min(8, count - offset),
+                },
+              }),
+            });
+            if (response.status === 401) {
+              window.location.assign("/login");
+              throw new Error("Přihlášení vypršelo.");
+            }
+            const data = await response.json();
+            if (!response.ok)
+              throw new Error(
+                typeof data.detail === "string"
+                  ? data.detail
+                  : "Odeslání se nezdařilo.",
+              );
+            const jobs = data.jobs.map((job) => ({
+              ...job,
+              source_id: item.id,
+              source_name: item.file.name,
+            }));
+            accepted.push(...jobs);
+            sent += jobs.reduce((sum, job) => sum + job.expected_images, 0);
+            setActiveJobs((current) => [...current, ...jobs]);
+            setSubmittedOutputs((current) => current + jobs.reduce((sum, job) => sum + job.expected_images, 0));
+            issues.push(...(data.errors || []));
+          } catch (error) {
+            issues.push(`${item.file.name} / ${models.find(model => model.id === selectedModelId)?.name || selectedModelId}: ${error.message}`);
           }
-          const data = await response.json();
-          if (!response.ok)
-            throw new Error(
-              typeof data.detail === "string"
-                ? data.detail
-                : "Odeslání se nezdařilo.",
-            );
-          const jobs = data.jobs.map((job) => ({
-            ...job,
-            source_id: item.id,
-            source_name: item.file.name,
-          }));
-          accepted.push(...jobs);
-          sent += jobs.reduce((sum, job) => sum + job.expected_images, 0);
-          setActiveJobs((current) => [...current, ...jobs]);
-          setSubmittedOutputs((current) => current + jobs.reduce((sum, job) => sum + job.expected_images, 0));
-          issues.push(...(data.errors || []));
-        } catch (error) {
-          issues.push(`${item.file.name}: ${error.message}`);
         }
       }
     }
@@ -698,6 +712,8 @@ function App() {
         setInputItems,
         modelId,
         setModelId,
+        selectedModelIds,
+        setSelectedModelIds,
         generationMode,
         setGenerationMode,
         loraId,
