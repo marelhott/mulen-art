@@ -130,7 +130,6 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     @app.get("/api/options")
     def options():
         from .archives import archive_options
-        refresh()
         return {**get_options(), "archives": archive_options()}
 
     def validate_payload(payload):
@@ -226,6 +225,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             if not isinstance(data, dict) or not isinstance(data.get("settings", {}), dict):
                 raise ValueError("Invalid atelier request")
             settings = data.get("settings", {})
+            ratio_mode = settings.get("atelier_ratio", "fixed")
+            if ratio_mode not in {"fixed", "random"}:
+                raise ValueError("Unknown aspect ratio mode")
             models = data.get("model_ids")
             if not isinstance(models, list) or not models or any(not isinstance(item, str) for item in models):
                 raise ValueError("Select artist checkpoints")
@@ -247,8 +249,13 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 if first.atelier_mode == "archive":
                     archive, reference, _ = reference_for(first.atelier_archive, variant_seed)
                     title = archive["name"] + " · " + reference["filename"]
+                dimensions = {}
+                if ratio_mode == "random":
+                    import random
+                    width, height = random.Random(f"atelier-ratio:{variant_seed}").choice([(1024,1024), (832,1216), (1216,832), (896,1152), (1152,896)])
+                    dimensions = {"width": width, "height": height}
                 for model_id in models:
-                    payload = validate_payload({**settings, "generation_type": "atelier", "model_id": model_id,
+                    payload = validate_payload({**settings, **dimensions, "generation_type": "atelier", "model_id": model_id,
                         "lora_id": "none", "num_images": 1, "seed": variant_seed, "source_name": title})
                     payload.update(source_index=index, variant_index=index)
                     payloads.append(payload)

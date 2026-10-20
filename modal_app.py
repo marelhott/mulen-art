@@ -6,13 +6,14 @@ import modal
 APP_NAME = "img2img-studio"
 app = modal.App(APP_NAME)
 models = modal.Volume.from_name("img2img-models", create_if_missing=True)
+archives = modal.Volume.from_name("img2img-archives")
 outputs = modal.Volume.from_name("img2img-outputs", create_if_missing=True)
 jobs = modal.Dict.from_name("img2img-jobs", create_if_missing=True)
 state = modal.Volume.from_name("img2img-state", create_if_missing=True)
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("fastapi==0.115.6", "pillow==11.1.0")
-    .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs"})
+    .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives"})
     .add_local_python_source("app_runtime")
     .add_local_dir("config", "/app/config")
 )
@@ -20,7 +21,7 @@ gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install_from_requirements("app_runtime/requirements.txt")
     .env({
-        "MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs",
+        "MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
         "HF_HOME": "/models/huggingface-cache", "MAX_IMAGE_SIDE": "1536",
         "TOKENIZERS_PARALLELISM": "false",
     })
@@ -30,7 +31,7 @@ gpu_image = (
 
 @app.function(
     image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=16384,
-    volumes={"/models": models, "/outputs": outputs},
+    volumes={"/models": models, "/outputs": outputs, "/archives": archives},
     min_containers=0, max_containers=10, scaledown_window=20,
     timeout=1200, retries=0,
 )
@@ -103,7 +104,7 @@ def web_secret():
 
 @app.function(
     image=base_image.add_local_dir("frontend/dist", "/app/frontend/dist"),
-    volumes={"/outputs": outputs, "/state": state},
+    volumes={"/outputs": outputs, "/state": state, "/archives": archives},
     min_containers=0, max_containers=1, scaledown_window=20,
     cpu=0.25, memory=512,
 )

@@ -146,6 +146,21 @@ class CloudFlowTests(unittest.TestCase):
         self.assertTrue(all(p["atelier_archive"] == "hofmann" and p["seed"] == 123 and p["steps"] == 28 and p["denoise"] == .55 for p in pair))
         self.assertEqual(pair[0]["source_name"], pair[1]["source_name"])
 
+    def test_random_ratios_are_varied_reproducible_and_shared_between_models(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client.auth = ("studio", "test-password")
+        request = {"model_ids": ["tuymans_modal_2400", "hofmann_sdxl"], "count": 8,
+                   "settings": {"atelier_mode":"noise", "atelier_ratio":"random", "seed":20261020}}
+        self.assertEqual(client.post("/api/atelier-batch", json=request).status_code, 200)
+        first = [p for _,p in self.submissions]
+        self.assertGreater(len({(p["width"],p["height"]) for p in first}), 1)
+        for i in range(0,16,2):
+            self.assertEqual((first[i]["width"],first[i]["height"]), (first[i+1]["width"],first[i+1]["height"]))
+        self.assertEqual(client.post("/api/atelier-batch", json=request).status_code, 200)
+        self.assertEqual([(p["width"],p["height"]) for p in first], [(p["width"],p["height"]) for _,p in self.submissions[16:]])
+        request["settings"]["atelier_ratio"] = "bad"
+        self.assertEqual(client.post("/api/atelier-batch", json=request).status_code, 422)
+
     def test_batch_variant_seeds_and_engine_options_survive_gateway(self):
         settings = {**self.payload, "num_images": 3, "seed": 4294967295,
                     "render_mode": "detail", "detail_steps": 8, "scale": 2}

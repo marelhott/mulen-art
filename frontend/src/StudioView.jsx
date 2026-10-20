@@ -323,7 +323,7 @@ export default function StudioView(p) {
         </div>
       </header>
       <aside className="left-panel control-panel">
-        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} /> : <>
+        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} /> : <>
         <button
           className="primary-button generate"
           disabled={!p.inputItems.length}
@@ -1144,7 +1144,7 @@ function AtelierQueue({p}) {
     {p.job.active_steps?.length > 0 && <div className="atelier-queue-steps">{p.job.active_steps.map((step, i) => <div key={step.id}><span>Výpočet {i + 1} · {step.current} / {step.total} kroků</span><div className="atelier-step-track"><div style={{width: `${step.current / step.total * 100}%`}} /></div></div>)}</div>}
   </section>;
 }
-function AtelierControls({atelier: a, update, models, archives = [], generating, onGenerate}) {
+function AtelierControls({atelier: a, update, models, archives = [], archiveStatus, reloadArchives, generating, onGenerate}) {
   const choices = models.filter(model => model.id.startsWith("tuymans_") || ["tuy_small", "hofmann_sdxl"].includes(model.id));
   const modes = [
     {id: "noise", name: "Volná studie", description: "Nový obraz přímo z šumu. Bez námětu i bez promptu; obsah vybírá samotný checkpoint."},
@@ -1167,7 +1167,7 @@ function AtelierControls({atelier: a, update, models, archives = [], generating,
       <input aria-label="Počet studií na model" type="number" min="1" step="1" value={a.count} onChange={event => update({count: event.target.value === "" ? "" : Number(event.target.value)})} />
       <span className="help-text">{a.count || "—"} studií × {a.modelIds.length} modelů = {total} výstupů</span>
     </label>
-    {a.mode === "archive" && <><Select label="ZDROJOVÝ ARCHIV · OBSAH" value={a.archive || "hofmann"} onChange={archive => update({archive})} items={archives.map(item => ({id:item.id,name:`${item.name} · ${item.count} obrazů`}))} /><p className="help-text">Archiv vybírá předlohu, checkpoint určuje přemalování. Stejná předloha i seed pro všechny modely. Zachovává se poměr stran; rozlišení níže je maximální rámeček.</p></>}
+    {a.mode === "archive" && <><Select label="ZDROJOVÝ ARCHIV · OBSAH" value={a.archive || "hofmann"} onChange={archive => update({archive})} items={archives.length ? archives.map(item => ({id:item.id,name:`${item.name} · ${item.count} obrazů`})) : [{id:a.archive || "hofmann",name: archiveStatus === "loading" ? "Načítám archivy…" : "Archiv se nepodařilo načíst"}]} />{archiveStatus === "error" && <button className="text-button" onClick={reloadArchives}>Znovu načíst archivy</button>}<p className="help-text">Archiv vybírá předlohu, checkpoint určuje přemalování. Stejná předloha i seed pro všechny modely. Zachovává se poměr stran; rozlišení níže je maximální rámeček.</p></>}
     {!["noise", "archive"].includes(a.mode) && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
       items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Postavy a gesta"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
     <div className="control-block"><Label>CHECKPOINTY · MALÍŘSKÉ ZPRACOVÁNÍ</Label>
@@ -1177,10 +1177,10 @@ function AtelierControls({atelier: a, update, models, archives = [], generating,
       <button className="text-button" onClick={() => update({modelIds: ["tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"].filter(id => choices.some(model => model.id === id))})}>Porovnat 800 / 1600 / 2400</button>
       <p className="help-text">Každý námět i seed se použije na všechny vybrané modely. Výsledky se ukládají také na plátno a do knihovny.</p>
     </div>
-    <Select label="ROZLIŠENÍ PRO MODEL" value={`${a.width}x${a.height}`} onChange={value => {const [width,height] = value.split("x").map(Number); update({width,height});}}
-      items={[{id:"1024x1024",name:"1024 × 1024 · čtverec"},{id:"832x1216",name:"832 × 1216 · na výšku"},{id:"1216x832",name:"1216 × 832 · na šířku"},{id:"1536x1536",name:"1536 × 1536 · experiment"}]} />
+    <Select label="ROZLIŠENÍ PRO MODEL" value={a.ratio === "random" ? "random" : `${a.width}x${a.height}`} onChange={value => {if(value === "random") {update({ratio:"random"}); return;} const [width,height] = value.split("x").map(Number); update({width,height,ratio:"fixed"});}}
+      items={[{id:"random",name:"Random · různé poměry stran"},{id:"1024x1024",name:"1024 × 1024 · čtverec"},{id:"832x1216",name:"832 × 1216 · na výšku"},{id:"1216x832",name:"1216 × 832 · na šířku"},{id:"1536x1536",name:"1536 × 1536 · experiment"}]} />
     <Range label="ZVĚTŠENÍ HOTOVÉHO OBRAZU" min={1} max={4} step={0.1} value={a.scale} onChange={scale => update({scale})}
-      hint={a.mode === "archive" ? `${a.scale}× Lanczos po přemalování · rozměry podle předlohy, bez AI dokreslení` : `${Math.round(a.width*a.scale)} × ${Math.round(a.height*a.scale)} px · pouze Lanczos, bez AI dokreslení`} />
+      hint={a.ratio === "random" ? "Náhodné čtvercové, svislé i vodorovné formáty · bez AI zvětšování" : a.mode === "archive" ? `${a.scale}× Lanczos po přemalování · rozměry podle předlohy, bez AI dokreslení` : `${Math.round(a.width*a.scale)} × ${Math.round(a.height*a.scale)} px · pouze Lanczos, bez AI dokreslení`} />
     <p className="help-text">Archiv používá náhodně vybrané předlohy. Ostatní automatické náměty čerpají ze startovní sady.</p>
   </>;
 }

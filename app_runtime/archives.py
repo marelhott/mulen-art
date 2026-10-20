@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def archive_root():
-    return Path(os.environ.get('OUTPUTS_DIR', '/outputs')) / 'atelier-archives'
+    return Path(os.environ.get('ARCHIVE_ROOT', str(Path(os.environ.get('OUTPUTS_DIR', '/outputs')) / 'atelier-archives')))
 
 
 def load_manifest():

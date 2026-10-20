@@ -51,6 +51,8 @@ function saveStoredPresets(presets) {
 
 function App() {
   const [archives, setArchives] = useState([]);
+  const [optionsRevision, setOptionsRevision] = useState(0);
+  const [archiveStatus, setArchiveStatus] = useState("loading");
   const [models, setModels] = useState([]);
   const [loras, setLoras] = useState([]);
   const [inputItems, setInputItems] = useState([]);
@@ -143,11 +145,17 @@ function App() {
   }, [previewUrl]);
 
   useEffect(() => {
+    let cancelled = false;
+    let retry;
+    setArchiveStatus("loading");
     fetch(`${API_URL}/api/options`, {cache: "no-store"})
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
-        if (!data) return;
+        if (cancelled) return;
+        if (!data) throw new Error("Options unavailable");
         setArchives(data.archives || []);
+        setArchiveStatus(data.archives?.length ? "ready" : "error");
+        if (!data.archives?.length) retry = setTimeout(() => setOptionsRevision(v => v + 1), 5000);
         if (data.models?.length) {
           setModels(data.models);
           setModelId(
@@ -162,8 +170,11 @@ function App() {
           );
         }
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {
+        if (!cancelled) {setArchiveStatus("error"); retry = setTimeout(() => setOptionsRevision(v => v + 1), 5000);}
+      });
+    return () => {cancelled = true; clearTimeout(retry);};
+  }, [optionsRevision]);
 
   useEffect(() => {
     loadLibrary(true).catch(() => {});
@@ -596,7 +607,7 @@ function App() {
     if (!modelIds.length || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(total)) {
       setError("Vyber checkpoint a kladný celý počet studií."); return;
     }
-    const settings = {generation_type: "atelier", atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_archive: atelier.archive || "hofmann",
+    const settings = {generation_type: "atelier", atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_archive: atelier.archive || "hofmann", atelier_ratio: atelier.ratio || "fixed",
       width: atelier.width, height: atelier.height, scale: Number(atelier.scale), cfg: Number(atelier.cfg),
       steps: Number(atelier.steps), sampler: atelier.sampler, schedule: atelier.schedule, denoise: Number(atelier.denoise), render_mode: "quick"};
     const requestedSeed = Number(atelier.seed === "" ? -1 : atelier.seed);
@@ -772,7 +783,7 @@ function App() {
         setSelectedModelIds,
         generationMode,
         setGenerationMode,
-        atelier, setAtelier, handleGenerateAtelier, archives,
+        atelier, setAtelier, handleGenerateAtelier, archives, archiveStatus, reloadArchives: () => setOptionsRevision(v => v + 1),
         loraId,
         setLoraId,
         loraStrength,
