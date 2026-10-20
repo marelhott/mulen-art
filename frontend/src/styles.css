@@ -2011,3 +2011,18 @@ input[type="range"]::-moz-range-progress {
 @keyframes atelier-queue-pulse { 50% { opacity:.3; } }
 @media (max-width:700px) { .atelier-queue { padding:17px; } .atelier-queue-symbol { display:none; } .atelier-queue-heading { gap:10px; } }
 @media (prefers-reduced-motion:reduce) { .atelier-queue-scan,.atelier-queue.is-active .queue-dot { animation:none; } .atelier-queue-scan { opacity:.5; left:34%; } .atelier-queue-fill,.atelier-step-track > div { transition:none; } }
+
+/* Compact queue: preserve real step feedback without taking over the canvas. */
+.atelier-queue { margin:8px 0 16px; padding:12px 16px 10px; border-radius:12px; }
+.atelier-queue-heading { gap:10px; }
+.atelier-queue-symbol { width:28px; height:28px; border-radius:8px; }
+.atelier-queue-symbol svg { width:15px; height:15px; }
+.atelier-queue-title > span { font-size:9px; letter-spacing:.12em; }
+.atelier-queue-title h2 { font-size:15px; margin:2px 0; }
+.atelier-queue-title p { display:none; }
+.atelier-queue-number strong { font-size:26px; }
+.atelier-queue-number > span { font-size:12px; }
+.atelier-queue-track { height:4px; margin-top:10px; }
+.atelier-queue-stats { gap:8px 16px; margin-top:8px; font-size:10px; }
+.atelier-queue-steps { margin-top:8px; gap:8px; }
+@media (max-width:700px) { .atelier-queue { padding:10px 12px; } }

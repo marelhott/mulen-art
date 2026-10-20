@@ -305,7 +305,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         image_base64=str(payload.get("image_base64", "")),
         model_id=model_id,
         lora_id=lora_id,
-        denoise=clamp(float(payload.get("denoise", 0.35)), 0.05, 0.55 if generation_type == "atelier" else 1.0),
+        denoise=clamp(float(payload.get("denoise", 0.35)), 0.05, 0.99 if generation_type == "atelier" else 1.0),
         lora_strength=clamp(float(payload.get("lora_strength", 0.8)), 0.0, 2.0),
         cfg=cfg,
         steps=steps,

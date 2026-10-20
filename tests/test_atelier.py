@@ -82,13 +82,21 @@ class AtelierTests(unittest.TestCase):
         self.assertEqual(emitted[0]['subject_title'], subject_for(231020, 'face')[1])
         self.assertEqual(emitted[0]['subject_origin'], 'curated-starter-v1')
 
+    def test_atelier_allows_requested_high_denoise_without_changing_defaults(self):
+        from app_runtime.core import parse_input
+        for mode in ("photo", "archive"):
+            spec = parse_input({"generation_type":"atelier", "atelier_mode":mode, "model_id":"tuymans_modal_2400", "denoise":.99})
+            self.assertEqual(spec.denoise, .99)
+            capped = parse_input({"generation_type":"atelier", "atelier_mode":mode, "model_id":"tuymans_modal_2400", "denoise":1})
+            self.assertEqual(capped.denoise, .99)
+
     def test_photo_is_separate_base_generation_then_single_paint_pass(self):
         text, painting, ensure, _, updates, emitted, sources = self.run_study(atelier_mode='photo', denoise=.9)
         self.assertEqual([call.args[0] for call in ensure.call_args_list], ['sdxl_base','tuymans_modal_2400'])
         self.assertEqual(len(text.calls),1);self.assertEqual(len(painting.calls),1)
         self.assertTrue(text.calls[0]['prompt'].startswith('An ordinary documentary photograph'))
         self.assertEqual(painting.calls[0]['prompt'],'')
-        self.assertEqual(painting.calls[0]['strength'],.55)
+        self.assertEqual(painting.calls[0]['strength'],.9)
         self.assertEqual(len(sources),1)
         self.assertTrue(emitted[0]['source_url'].startswith('/library/source_atelier_'))
         self.assertEqual(updates, sorted(updates))

@@ -55,6 +55,14 @@ export default function StudioView(p) {
     () => localStorage.getItem("img2img-theme") || "dark",
   );
   const [rightOpen, setRightOpen] = useState(true);
+  const [progressReset, setProgressReset] = useState(false);
+  useEffect(() => {
+    if (p.isGenerating || p.job.status !== "completed") {setProgressReset(false); return;}
+    const timer = setTimeout(() => setProgressReset(true), 2500);
+    return () => clearTimeout(timer);
+  }, [p.isGenerating, p.job.status, p.job.id]);
+  const progressState = progressReset ? {...p, job: {...p.job, status:"idle", progress:0, queue_counts:{}, active_steps:[]}, progressValue:0, readyCount:0, outputCount:0, plannedOutputs:0, submittedOutputs:0} : p;
+
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [tab, setTab] = useState("results");
   const isAtelier = tab === "atelier";
@@ -601,7 +609,7 @@ export default function StudioView(p) {
             {exporting ? "BALÍM…" : "EXPORTOVAT VŠE"}
           </button>
         </div>
-        {isAtelier && <AtelierQueue p={p} />}
+        {isAtelier && <AtelierQueue p={progressState} />}
         <div className="gallery-tools">
           <div className="segmented tabs">
             <button
@@ -748,15 +756,15 @@ export default function StudioView(p) {
       </main>
       <aside className="right-panel control-panel">
         <Progress
-          progress={p.progressValue}
-          job={p.job}
+          progress={progressState.progressValue}
+          job={progressState.job}
           generating={p.isGenerating}
           startedAt={p.startedAt}
-          ready={p.readyCount}
-          total={p.outputCount}
+          ready={progressState.readyCount}
+          total={progressState.outputCount}
           submitting={p.isSubmitting}
-          submitted={p.submittedOutputs}
-          planned={p.plannedOutputs}
+          submitted={progressState.submittedOutputs}
+          planned={progressState.plannedOutputs}
         />
         <div className="settings-heading">
           <SlidersHorizontal size={13} />
@@ -766,7 +774,7 @@ export default function StudioView(p) {
         {(!isAtelier || ["photo", "archive"].includes(p.atelier.mode)) && <Range
           label="DENOISE"
           min={0.05}
-          max={isAtelier ? 0.55 : 1}
+          max={isAtelier ? 0.99 : 1}
           step={0.01}
           value={isAtelier ? p.atelier.denoise : p.denoise}
           onChange={value => isAtelier ? updateAtelier({denoise: value}) : p.setDenoise(value)}
@@ -1128,7 +1136,7 @@ function AtelierQueue({p}) {
     <div className="atelier-queue-heading">
       <div className="atelier-queue-symbol">{active ? <Sparkles size={23} /> : <Check size={23} />}</div>
       <div className="atelier-queue-title" role="status" aria-live="polite"><span>FRONTA ATELIÉRU</span><h2>{title}</h2><p>{p.isSubmitting ? `${accepted} z ${total} výstupů potvrzeno serverem. Můžeš přidávat další zadání.` : waiting ? "Požadavky jsou uložené ve frontě. Nezadávej je znovu; výpočet začne po přidělení GPU." : active ? "Hotové obrazy se průběžně objevují níže a ukládají do knihovny." : failed ? "Podrobnosti chyby najdeš v průběhu úloh. Hotové obrazy zůstávají uložené." : done ? "Všechny úspěšné výsledky jsou na plátně a v knihovně." : "Vyber způsob tvorby a klikni na Vytvořit studie. Přijetí zadání uvidíš zde."}</p></div>
-      <div className="atelier-queue-number"><strong>{active || done || failed ? p.progressValue : "—"}</strong>{(active || done || failed) && <span>%</span>}</div>
+      <div className="atelier-queue-number"><strong>{active || done || failed ? p.progressValue : 0}</strong><span>%</span></div>
     </div>
     <div className="atelier-queue-track" role="progressbar" aria-label={p.isSubmitting ? "Přijetí zadání" : waiting ? "Čekání na přidělení GPU" : "Celkový průběh Ateliéru"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={waiting ? undefined : p.isSubmitting ? Math.round(accepted / Math.max(total, 1) * 100) : p.progressValue} aria-valuetext={waiting ? "Zadání přijato, čekání na GPU; výpočet ještě nezačal" : undefined}>
       <div className="atelier-queue-fill" style={{width: `${p.isSubmitting ? accepted / Math.max(total, 1) * 100 : p.progressValue}%`}} />
@@ -1150,7 +1158,7 @@ function AtelierControls({atelier: a, update, models, archives = [], archiveStat
     {id: "noise", name: "Volná studie", description: "Nový obraz přímo z šumu. Bez námětu i bez promptu; obsah vybírá samotný checkpoint."},
     {id: "subject", name: "Automatický námět", description: "Aplikace vybere střídmý námět a vytvoří obraz checkpointem. Nic nepíšeš."},
     {id: "archive", name: "Archiv → fúze", description: "Náhodný obraz ze zdrojového archivu přemaluje libovolný zvolený checkpoint. Jeden obraz na výstup, bez tréninku."},
-    {id: "photo", name: "Foto → malba", description: "SDXL Base vytvoří fotografický předobraz a vybraný checkpoint jej přemaluje. Dva průchody GPU; denoise nejvýše 0,55."},
+    {id: "photo", name: "Foto → malba", description: "SDXL Base vytvoří fotografický předobraz a vybraný checkpoint jej přemaluje. Dva průchody GPU; denoise až 0,99."},
   ];
   const total = Number(a.count || 0) * a.modelIds.length;
   return <>
@@ -1163,10 +1171,9 @@ function AtelierControls({atelier: a, update, models, archives = [], archiveStat
         <span>{mode.name}</span><small>{mode.description}</small>
       </button>)}
     </div>
-    <label className="control-block engine-field"><Label>POČET STUDIÍ NA MODEL</Label>
-      <input aria-label="Počet studií na model" type="number" min="1" step="1" value={a.count} onChange={event => update({count: event.target.value === "" ? "" : Number(event.target.value)})} />
-      <span className="help-text">{a.count || "—"} studií × {a.modelIds.length} modelů = {total} výstupů</span>
-    </label>
+    <Range label="POČET STUDIÍ NA MODEL" min={1} max={10} step={1} value={a.count}
+      onChange={count => update({count})}
+      hint={`${a.count} studií × ${a.modelIds.length} modelů = ${total} výstupů`} />
     {a.mode === "archive" && <><Select label="ZDROJOVÝ ARCHIV · OBSAH" value={a.archive || "hofmann"} onChange={archive => update({archive})} items={archives.length ? archives.map(item => ({id:item.id,name:`${item.name} · ${item.count} obrazů`})) : [{id:a.archive || "hofmann",name: archiveStatus === "loading" ? "Načítám archivy…" : "Archiv se nepodařilo načíst"}]} />{archiveStatus === "error" && <button className="text-button" onClick={reloadArchives}>Znovu načíst archivy</button>}<p className="help-text">Archiv vybírá předlohu, checkpoint určuje přemalování. Stejná předloha i seed pro všechny modely. Zachovává se poměr stran; rozlišení níže je maximální rámeček.</p></>}
     {!["noise", "archive"].includes(a.mode) && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
       items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Postavy a gesta"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
