@@ -35,7 +35,9 @@ def main():
         raise RuntimeError('Cloud comparison failed; refusing to mark an incomplete model ready')
     training=json.loads(b''.join(volume.read_file(f'{run}/status.json')))
     write_state(local/'training-status.json',training)
-    if training['status']!='completed':raise RuntimeError('Training is not complete')
+    if training['status']!='completed':
+        state.update(phase='failed',training_status=training['status'],error='Training is not complete');write_state(state_path,state)
+        raise RuntimeError('Training is not complete')
     files={Path(x.path).name:x.path for x in volume.iterdir(run) if x.path.endswith('.safetensors')}
     selected=[f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in ([800,1600,2400] if run.startswith('full-unet-approved-') else [400,800,1200])]
     selected=[name for name in selected if name in files]
@@ -69,6 +71,10 @@ def main():
         length=struct.unpack('<Q',stream.read(8))[0]
         if not 1 <= length <= 100_000_000: raise RuntimeError('Invalid safetensors header length')
         header=json.loads(stream.read(length))
+    body_bytes=count-8-length
+    offsets=[value['data_offsets'] for key,value in header.items() if key!='__metadata__']
+    if not offsets or any(not 0<=begin<=end<=body_bytes for begin,end in offsets) or max(end for _,end in offsets)!=body_bytes:
+        raise RuntimeError('Safetensors payload size does not match tensor offsets')
     temp.replace(target)
     state.update(phase='ready_for_visual_review',candidate_model=str(target),model_bytes=count,
                  model_sha256=digest.hexdigest(),tensor_count=len(header)-int('__metadata__' in header),
