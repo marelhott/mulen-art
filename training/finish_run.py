@@ -30,8 +30,12 @@ def main():
             if errors>=10: raise RuntimeError('Repeated remote status failures; stopping coordinator')
         time.sleep(60)
     else: raise TimeoutError('Coordinator training wait reached three-hour deadline')
+    if pipeline['phase']!='ready_for_visual_review' or not pipeline.get('evaluations') or any(e.get('status')!='completed' for e in pipeline['evaluations']):
+        state.update(phase='failed',cloud_pipeline_phase=pipeline['phase'],error=pipeline.get('error','Evaluation did not complete'));write_state(state_path,state)
+        raise RuntimeError('Cloud comparison failed; refusing to mark an incomplete model ready')
     training=json.loads(b''.join(volume.read_file(f'{run}/status.json')))
     write_state(local/'training-status.json',training)
+    if training['status']!='completed':raise RuntimeError('Training is not complete')
     files={Path(x.path).name:x.path for x in volume.iterdir(run) if x.path.endswith('.safetensors')}
     selected=[f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in ([800,1600,2400] if run.startswith('full-unet-approved-') else [400,800,1200])]
     selected=[name for name in selected if name in files]
@@ -59,13 +63,13 @@ def main():
         for chunk in volume.read_file(files[latest]):
             stream.write(chunk);digest.update(chunk);count+=len(chunk)
     if count < 1024**3: raise RuntimeError('Full checkpoint unexpectedly small')
-    temp.replace(target)
     # Structural header check, without importing Torch or running inference on the Mac.
     import struct
-    with target.open('rb') as stream:
+    with temp.open('rb') as stream:
         length=struct.unpack('<Q',stream.read(8))[0]
         if not 1 <= length <= 100_000_000: raise RuntimeError('Invalid safetensors header length')
         header=json.loads(stream.read(length))
+    temp.replace(target)
     state.update(phase='ready_for_visual_review',candidate_model=str(target),model_bytes=count,
                  model_sha256=digest.hexdigest(),tensor_count=len(header)-int('__metadata__' in header),
                  finished_unix=time.time(),note='Latest candidate is not automatically the best model. Visual comparison required.')

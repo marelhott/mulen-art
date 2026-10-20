@@ -24,7 +24,7 @@ image = (
 @app.function(image=image, gpu='A100-80GB', cpu=4, memory=65536,
               volumes={'/models':models,'/data':data,'/results':results},
               timeout=7200, max_containers=1, retries=0)
-def train_variant(kind: str = "lora", steps: int = 300, learning_rate: float = 0.00005):
+def train_variant(kind: str = "lora", steps: int = 300, learning_rate: float = 0.00005, run_id: str = ""):
     import json, subprocess, time, traceback
     from datetime import datetime, timezone
     import torch
@@ -33,8 +33,10 @@ def train_variant(kind: str = "lora", steps: int = 300, learning_rate: float = 0
     if not 1e-7 <= learning_rate <= 1e-4:
         raise ValueError('Learning rate outside reviewed range')
     deadline = 1620 if kind == 'lora' and steps <= 300 else 6600
-    run_id = ('lora64' if kind == 'lora' else ('full-unet-approved' if kind == 'approved' else 'full-unet')) + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    run_id = run_id or ('lora64' if kind == 'lora' else ('full-unet-approved' if kind == 'approved' else 'full-unet')) + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    if '/' in run_id or '..' in run_id: raise ValueError('Invalid run ID')
     folder = Path('/results') / run_id
+    if folder.exists(): raise RuntimeError('Run ID already exists: automatic restart is refused; inspect preserved checkpoints before resuming')
     folder.mkdir()
     dataset = '''[general]
 caption_extension = ".txt"
@@ -123,8 +125,8 @@ num_repeats = 1
             if code: raise RuntimeError(f'Training exited with {code}; see train.log')
         status['status']='completed'
         status['artifacts']=[str(p.relative_to(folder)) for p in folder.rglob('*.safetensors')]
-    except Exception:
-        status['status']='failed'; status['error']=traceback.format_exc()
+    except BaseException:
+        status['status']='interrupted_or_failed'; status['error']=traceback.format_exc()
         raise
     finally:
         status['elapsed_seconds']=round(time.monotonic()-started,2)
@@ -141,4 +143,7 @@ def main(kind: str = "lora", steps: int = 300, learning_rate: float = 0.00005):
     if not (local/'manifest.json').exists(): raise RuntimeError('Prepare and review dataset first')
     with data.batch_upload() as upload:
         upload.put_directory(local, '/'+dataset_name)
-    print(json.dumps(train_variant.remote(kind, steps, learning_rate),indent=2))
+    from datetime import datetime, timezone
+    prefix='lora64' if kind=='lora' else ('full-unet-approved' if kind=='approved' else 'full-unet')
+    run_id=prefix+'-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    print(json.dumps(train_variant.remote(kind, steps, learning_rate, run_id),indent=2))

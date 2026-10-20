@@ -207,7 +207,7 @@ def orchestrate(run_id: str, source_files: list[str]):
         while time.monotonic()<deadline:
             results.reload()
             training=json.loads((folder/'status.json').read_text())
-            if training['status'] in {'completed','failed'}: break
+            if training['status'] in {'completed','failed','interrupted_or_failed'}: break
             time.sleep(60)
         else: raise TimeoutError('Training status did not finish within bounded wait')
         candidates=[folder/f'mvhpaint_full_unet-step{step:08d}.safetensors' for step in ([800,1600,2400] if run_id.startswith('full-unet-approved-') else [400,800,1200])]
@@ -225,6 +225,8 @@ def orchestrate(run_id: str, source_files: list[str]):
                 results.reload()
                 status['evaluations'].append({'checkpoint':candidate.name,'status':'failed','error':traceback.format_exc()})
             save()
+        if training['status']!='completed' or any(e['status']!='completed' for e in status['evaluations']):
+            raise RuntimeError('Training or checkpoint evaluation failed; review is incomplete')
         status['phase']='ready_for_visual_review'
         status['candidate_checkpoint']=str(candidates[-1].relative_to('/results'))
         status['finished_unix']=time.time()
