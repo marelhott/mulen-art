@@ -24,9 +24,7 @@ SUBJECTS = [
     ("figure", "Gesto ruky", "a close cropped hand resting against ordinary clothing, no visible face"),
 ]
 THEMES = {"all", "face", "interior", "object", "landscape", "figure"}
-# "structure" reuses an archive reference but passes only an edge map to the model,
-# so the reference contributes composition and the checkpoint contributes the paint.
-MODES = {"noise", "subject", "photo", "archive", "structure"}
+MODES = {"noise", "subject", "photo", "archive"}
 
 
 def is_atelier_model(model_id):
@@ -47,111 +45,10 @@ def painting_prompt(model_id, text):
     return f"{trigger}, {text}"
 
 
-def generate_structure_study(spec, progress, image_callback):
-    """Etch the reference composition with the artist checkpoint's own brushwork.
-
-    The model is driven by an edge map, so the reference cannot donate its palette or
-    its brush texture. Denoise controls only how much of the edge map survives.
-    """
-    import base64, hashlib, io, time
-    from PIL import Image, ImageOps
-    from . import core
-    from .archives import reference_for
-    from .server import OUTPUTS_DIR
-
-    started = time.monotonic()
-    torch = core.get_torch()
-    output_images = []
-    last_meta = {}
-    for index in range(spec.num_images):
-        seed = random.randint(0, 2**32 - 1) if spec.seed == -1 else (spec.seed + index) % 2**32
-        archive, item, path = reference_for(spec.atelier_archive, seed)
-        base = index / spec.num_images
-        span = 1 / spec.num_images
-
-        def notify(value, message):
-            core.report_progress(progress, .02 + .98 * (base + value * span), "Struktura · " + message)
-
-        with Image.open(path) as raw_reference:
-            reference = ImageOps.exif_transpose(raw_reference).convert("RGB")
-        reference.thumbnail((spec.width, spec.height), Image.Resampling.LANCZOS)
-        reference = core.prepare_source(reference, 1, max(spec.width, spec.height))
-        # The img2img latent must not carry the source palette either. Feeding a
-        # desaturated copy keeps luminance structure while the checkpoint supplies
-        # all colour, so the reference cannot donate its own tones.
-        neutral = ImageOps.grayscale(reference).convert("RGB")
-        edges = core.structure_map(reference)
-
-        # Persist both the reference and the exact edge map so the result stays auditable.
-        def save_png(image):
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-            data = buffer.getvalue()
-            name = "source_structure_" + hashlib.sha256(data).hexdigest() + ".png"
-            OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-            (OUTPUTS_DIR / name).write_bytes(data)
-            return name
-
-        reference_name = save_png(reference)
-        edge_name = save_png(edges)
-        neutral_name = save_png(neutral)
-
-        notify(.10, "načítání modelu a ControlNetu")
-        pipe = core.ensure_controlnet_pipeline(spec.model_id, spec.controlnet_id)
-        core.ensure_lora(pipe, "none", 0)
-        pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
-        generator = torch.Generator(device="cuda").manual_seed(seed)
-
-        # img2img keeps the requested composition while the control map locks the outline.
-        schedule_steps, strength = core.inference_schedule(spec.steps, spec.denoise, False)
-        notify(.22, "vedení strukturou a malba")
-        result = pipe(
-            prompt="", negative_prompt=None, image=neutral, control_image=edges,
-            controlnet_conditioning_scale=spec.controlnet_scale, strength=strength,
-            guidance_scale=spec.cfg, num_inference_steps=schedule_steps, generator=generator,
-            callback_on_step_end=core.build_step_callback(notify, .22, 1, 0, spec.steps, span=.72, stage="Struktura"),
-            callback_on_step_end_tensor_inputs=[],
-        ).images[0]
-        actual_steps = int(pipe.num_timesteps)
-        result = core.upscale_if_needed(result, spec.scale)
-
-        meta = {
-            "generation_type": "atelier", "atelier_mode": "structure",
-            "atelier_archive": archive["id"], "archive_name": archive["name"],
-            "reference_id": item["id"], "reference_filename": item["filename"],
-            "reference_sha256": item["sha256"], "subject_origin": "reference-archive",
-            "subject_title": archive["name"] + " · " + item["filename"],
-            "subject_text": "", "controlnet_id": spec.controlnet_id,
-            "controlnet_scale": spec.controlnet_scale,
-            "source_name": item["filename"],
-            "source_url": "/library/" + reference_name,
-            "structure_url": "/library/" + edge_name,
-            "neutral_url": "/library/" + neutral_name,
-            "model_id": spec.model_id,
-            "model_name": core.get_config_item("models", spec.model_id)["name"],
-            "lora_id": "none", "seed": seed, "steps": spec.steps, "actual_steps": actual_steps,
-            "guidance_scale": spec.cfg, "cfg": spec.cfg, "sampler": spec.sampler,
-            "schedule": spec.schedule, "generation_width": spec.width, "generation_height": spec.height,
-            "output_width": result.width, "output_height": result.height, "scale": spec.scale,
-            "upscaler": "lanczos", "render_mode": "quick", "prompt": "", "negative_prompt": "",
-            "denoise": spec.denoise, "demo_mode": False,
-            "generation_and_save_seconds": round(time.monotonic() - started, 2),
-        }
-        image = {**core.encode_image(result, meta), "generation_meta": meta}
-        output_images.append(image)
-        if image_callback:
-            image_callback(image, meta)
-        last_meta = meta
-        notify(1, "obraz uložen")
-    return {"images": output_images, "meta": last_meta}
-
-
 def generate_study(spec, progress, image_callback):
     if spec.atelier_mode == "archive":
         from .archives import generate_reference
         return generate_reference(spec, progress, image_callback)
-    if spec.atelier_mode == "structure":
-        return generate_structure_study(spec, progress, image_callback)
     import time
     from . import core
     started = time.monotonic()

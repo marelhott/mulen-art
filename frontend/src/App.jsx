@@ -66,7 +66,7 @@ function App() {
   const setModelId = (id) => setSelectedModelIds([id]);
   const [generationMode, setGenerationMode] = useState("checkpoint");
   const [atelier, setAtelier] = useState({mode: "noise", theme: "all", archive: "hofmann", modelIds: ["tuymans_modal_2400"], count: 4,
-    width: 1024, height: 1024, scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.52, controlnetScale: 0.8,
+    width: 1024, height: 1024, scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.52,
     sampler: "dpmpp_2m", schedule: "karras"});
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
@@ -596,7 +596,6 @@ function App() {
       setError("Vyber checkpoint a kladný celý počet studií."); return;
     }
     const settings = {generation_type: "atelier", atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_archive: atelier.archive || "hofmann", atelier_ratio: atelier.ratio || "fixed",
-      controlnet_scale: Number(atelier.controlnetScale ?? 0.8),
       width: atelier.width, height: atelier.height, scale: Number(atelier.scale), cfg: Number(atelier.cfg),
       steps: Number(atelier.steps), sampler: atelier.sampler, schedule: atelier.schedule, denoise: Number(atelier.denoise), render_mode: "quick"};
     const requestedSeed = Number(atelier.seed === "" ? -1 : atelier.seed);
