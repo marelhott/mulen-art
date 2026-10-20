@@ -72,6 +72,9 @@ function App() {
   const modelId = selectedModelIds[0];
   const setModelId = (id) => setSelectedModelIds([id]);
   const [generationMode, setGenerationMode] = useState("checkpoint");
+  const [atelier, setAtelier] = useState({mode: "noise", theme: "all", modelIds: ["tuymans_modal_2400"], count: 4,
+    width: 1024, height: 1024, scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.52,
+    sampler: "dpmpp_2m", schedule: "karras"});
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
   const [numImages, setNumImages] = useState(2);
@@ -351,6 +354,7 @@ function App() {
   function buildPresetPayload() {
     return {
       generationMode,
+      atelier,
       modelId,
       selectedModelIds,
       loraId,
@@ -370,6 +374,7 @@ function App() {
       preset.generationMode ||
       (preset.loraId && preset.loraId !== "none" ? "lora" : "checkpoint");
     setGenerationMode(mode);
+    if (preset.atelier) setAtelier(current => ({...current, ...preset.atelier}));
     setModelId(
       preset.modelId && preset.modelId !== "sdxl_base"
         ? preset.modelId
@@ -577,6 +582,49 @@ function App() {
       setJob({...EMPTY_JOB, status: "failed", message: "Žádná úloha se nepodařila odeslat."});
   }
 
+  async function handleGenerateAtelier() {
+    const modelIds = [...new Set(atelier.modelIds)].filter(id => models.some(model => model.id === id && model.kind !== "base"));
+    const count = Number(atelier.count), total = count * modelIds.length;
+    if (!modelIds.length || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(total)) {
+      setError("Vyber checkpoint a kladný celý počet studií."); return;
+    }
+    const settings = {generation_type: "atelier", atelier_mode: atelier.mode, atelier_theme: atelier.theme,
+      width: atelier.width, height: atelier.height, scale: Number(atelier.scale), cfg: Number(atelier.cfg),
+      steps: Number(atelier.steps), sampler: atelier.sampler, schedule: atelier.schedule, denoise: Number(atelier.denoise), render_mode: "quick"};
+    const requestedSeed = Number(atelier.seed === "" ? -1 : atelier.seed);
+    if (!Number.isInteger(requestedSeed) || requestedSeed < -1 || requestedSeed > 4294967295) {setError("Seed musí být celé číslo od −1 do 4294967295."); return;}
+    const seed = requestedSeed === -1 ? crypto.getRandomValues(new Uint32Array(1))[0] : requestedSeed;
+    const continuing = submitting.current || activeJobs.length > 0;
+    pendingSubmissions.current += 1; submitting.current = true;
+    plannedCount.current = (continuing ? Math.max(plannedCount.current, activeJobs.reduce((sum, item) => sum + item.expected_images, 0)) : 0) + total;
+    setIsSubmitting(true); setPlannedOutputs(plannedCount.current);
+    if (!continuing) {
+      setSubmittedOutputs(0); setStartedAt(Date.now()); recordsCache.current.clear();
+      setSubmissionErrors([]); setBatchResults([]); setJob({...EMPTY_JOB, status: "preparing", message: "Ateliér: odesílání do fronty"});
+      window.localStorage.removeItem("img2img-last-batch");
+    }
+    restoreRecentAllowed.current = false; setError("");
+    let sent = 0;
+    const issues = [];
+    for (let offset = 0; offset < count; offset += 8) {
+      try {
+        const response = await fetch(`${API_URL}/api/atelier-batch`, {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({model_ids: modelIds, count: Math.min(8, count - offset), settings: {...settings, seed: (seed + offset) % 4294967296}})});
+        const data = await response.json();
+        if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Ateliér: odeslání se nezdařilo.");
+        const jobs = data.jobs.map(job => ({...job, source_id: `atelier-${seed}-${offset + job.source_index}`, generation_type: "atelier"}));
+        const accepted = jobs.reduce((sum, job) => sum + job.expected_images, 0); sent += accepted;
+        setActiveJobs(current => [...current, ...jobs]); setSubmittedOutputs(current => current + accepted);
+        issues.push(...(data.errors || []));
+      } catch (error) { issues.push(error.message); }
+    }
+    pendingSubmissions.current -= 1; submitting.current = pendingSubmissions.current > 0;
+    setIsSubmitting(submitting.current); setSubmissionErrors(current => [...current, ...issues]);
+    if (issues.length) setError(issues.join(" · "));
+    plannedCount.current -= total - sent; setPlannedOutputs(plannedCount.current);
+    if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: "Ateliér: žádná úloha nebyla přijata."});
+  }
+
   async function loadLibrary(restoreRecent = false) {
     const response = await fetch(`${API_URL}/api/library`);
     const data = await response.json();
@@ -716,6 +764,7 @@ function App() {
         setSelectedModelIds,
         generationMode,
         setGenerationMode,
+        atelier, setAtelier, handleGenerateAtelier,
         loraId,
         setLoraId,
         loraStrength,

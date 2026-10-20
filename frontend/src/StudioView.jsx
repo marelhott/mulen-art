@@ -57,6 +57,8 @@ export default function StudioView(p) {
   const [rightOpen, setRightOpen] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [tab, setTab] = useState("results");
+  const isAtelier = tab === "atelier";
+  const updateAtelier = patch => p.setAtelier(current => ({...current, ...patch}));
   const [thumbSize, setThumbSize] = useState(
     () => Number(localStorage.getItem("img2img-thumb-size")) || 0,
   );
@@ -115,7 +117,8 @@ export default function StudioView(p) {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [libraryOpen]);
-  const items = tab === "library" ? p.libraryItems : p.results;
+  const atelierItems = p.results.filter(item => item?.settings?.generation_type === "atelier");
+  const items = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : p.results;
   const count = items.length;
   const workspaceRef = useRef(null);
   const [workspaceWidth, setWorkspaceWidth] = useState(600);
@@ -200,6 +203,7 @@ export default function StudioView(p) {
       ]);
       p.setSelectedImage(null);
       setLibraryOpen(false);
+      if (isAtelier) setTab("results");
     } catch (error) {
       p.setError(error.message);
     }
@@ -251,7 +255,7 @@ export default function StudioView(p) {
   const viewerPool =
     p.selectedImage?.context === "library"
       ? p.libraryItems
-      : p.results.filter(Boolean);
+      : (isAtelier ? atelierItems : p.results.filter(Boolean));
   const viewerIndex = viewerPool.findIndex(
     (item) => item.id === p.selectedImage?.id,
   );
@@ -285,6 +289,9 @@ export default function StudioView(p) {
           <Images />
           <span>KNIHOVNA</span>
         </button>
+        <button className={isAtelier ? "active" : ""} onClick={() => setTab("atelier")} title="Ateliér — tvorba bez vstupní fotografie">
+          <Sparkles /><span>ATELIÉR</span>
+        </button>
         <div className="rail-bottom">
           <span className="online-dot" />
           <span>MODAL</span>
@@ -316,6 +323,7 @@ export default function StudioView(p) {
         </div>
       </header>
       <aside className="left-panel control-panel">
+        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} /> : <>
         <button
           className="primary-button generate"
           disabled={!p.inputItems.length}
@@ -567,20 +575,21 @@ export default function StudioView(p) {
           </span>
           <ChevronRight size={15} />
         </button>
+        </>}
       </aside>
       <main className="workspace" ref={workspaceRef}>
         <div className="workspace-toolbar">
           <div>
             <h1>
               <span className="heading-glow" />
-              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : "PLÁTNO · HISTORIE GENEROVÁNÍ"}
+              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : isAtelier ? "ATELIÉR · NOVÉ STUDIE" : "PLÁTNO · HISTORIE GENEROVÁNÍ"}
             </h1>
             <p>
               {tab === "library"
                 ? `${items.length} uložených obrázků`
                 : p.isGenerating
-                  ? `${p.readyCount} / ${p.outputCount} hotovo · ${p.sourceCount} vstupů`
-                  : `${p.results.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
+                  ? `Celá fronta: ${p.readyCount} / ${p.outputCount} hotovo`
+                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : `${p.results.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
             </p>
           </div>
           <button
@@ -592,6 +601,7 @@ export default function StudioView(p) {
             {exporting ? "BALÍM…" : "EXPORTOVAT VŠE"}
           </button>
         </div>
+        {isAtelier && <div className="atelier-intro"><span>EXPERIMENTÁLNÍ ATELIÉR</span><p>Nové obrazy tvoří checkpoint. Nové verze Modal se učily na 247 schválených souborech. Automatické náměty jsou zatím kurátorská startovní sada; obsahová analýza archivu není součástí této verze.</p></div>}
         <div className="gallery-tools">
           <div className="segmented tabs">
             <button
@@ -606,6 +616,7 @@ export default function StudioView(p) {
             >
               Knihovna <span>{p.libraryItems.length}</span>
             </button>
+            <button aria-pressed={isAtelier} onClick={() => setTab("atelier")}>Ateliér <span>{atelierItems.length}</span></button>
           </div>
           <div className="density-control">
             <Grid2X2 size={13} />
@@ -716,15 +727,14 @@ export default function StudioView(p) {
               Prostor pro <em>nové obrazy.</em>
             </h2>
             <p>
-              Přidej vstupní obrázky, vyber checkpoint nebo LoRA
-              <br />a nech své modely pracovat v cloudu.
+              {isAtelier ? <>Vyber způsob tvorby a checkpoint v levém panelu.<br />Vlastní fotografie ani psaní zadání nejsou potřeba.</> : <>Přidej vstupní obrázky, vyber checkpoint nebo LoRA<br />a nech své modely pracovat v cloudu.</>}
             </p>
             <button
               className="toolbar-button"
-              onClick={() => inputRef.current.click()}
+              onClick={() => isAtelier ? p.handleGenerateAtelier() : inputRef.current?.click()}
             >
               <Upload size={14} />
-              PŘIDAT OBRÁZKY
+              {isAtelier ? "VYTVOŘIT STUDIE" : "PŘIDAT OBRÁZKY"}
             </button>
           </div>
         )}
@@ -752,41 +762,41 @@ export default function StudioView(p) {
           <SlidersHorizontal size={13} />
           <Label>NASTAVENÍ GENEROVÁNÍ</Label>
         </div>
-        <p className="engine-hint">Původní generování v jednom průchodu. Hotový obraz se zvětšuje pouze interpolací Lanczos, bez AI dokreslování a přidávání detailů.</p>
-        <Range
+        <p className="engine-hint">{isAtelier ? "Ateliér tvoří nové obrazy. Zvětšení hotového výsledku je pouze Lanczos, bez AI dokreslování. Stejné seedy umožňují porovnat checkpointy." : "Původní generování v jednom průchodu. Hotový obraz se zvětšuje pouze interpolací Lanczos, bez AI dokreslování a přidávání detailů."}</p>
+        {(!isAtelier || p.atelier.mode === "photo") && <Range
           label="DENOISE"
           min={0.05}
-          max={1}
+          max={isAtelier ? 0.55 : 1}
           step={0.01}
-          value={p.denoise}
-          onChange={p.setDenoise}
-          hint="Méně zachová vstup · více jej promění"
-        />
+          value={isAtelier ? p.atelier.denoise : p.denoise}
+          onChange={value => isAtelier ? updateAtelier({denoise: value}) : p.setDenoise(value)}
+          hint="Méně zachová předlohu · více ji promění"
+        />}
         <Range
           label="CFG"
           min={0.5}
           max={20}
           step={0.1}
-          value={p.cfg}
-          onChange={p.setCfg}
+          value={isAtelier ? p.atelier.cfg : p.cfg}
+          onChange={value => isAtelier ? updateAtelier({cfg: value}) : p.setCfg(value)}
         />
         <Range
           label="KROKY"
           min={1}
           max={80}
           step={1}
-          value={p.steps}
-          onChange={p.setSteps}
+          value={isAtelier ? p.atelier.steps : p.steps}
+          onChange={value => isAtelier ? updateAtelier({steps: value}) : p.setSteps(value)}
         />
-        <Select label="SAMPLER" value={p.engine.sampler}
-          onChange={(sampler) => p.setEngine((e)=>({...e, sampler, schedule: ["euler_a","ddim"].includes(sampler) ? "normal" : e.schedule}))}
+        <Select label="SAMPLER" value={isAtelier ? p.atelier.sampler : p.engine.sampler}
+          onChange={(sampler) => isAtelier ? updateAtelier({sampler, schedule: ["euler_a","ddim"].includes(sampler) ? "normal" : p.atelier.schedule}) : p.setEngine((e)=>({...e, sampler, schedule: ["euler_a","ddim"].includes(sampler) ? "normal" : e.schedule}))}
           items={[{id:"dpmpp_2m",name:"DPM++ 2M"},{id:"dpmpp_2m_sde",name:"DPM++ 2M SDE"},{id:"euler_a",name:"Euler a"},{id:"ddim",name:"DDIM"}]} />
-        {["dpmpp_2m", "dpmpp_2m_sde"].includes(p.engine.sampler) && <Select label="ROZVRH ŠUMU" value={p.engine.schedule}
-          onChange={(schedule)=>p.setEngine((e)=>({...e,schedule}))}
+        {["dpmpp_2m", "dpmpp_2m_sde"].includes(isAtelier ? p.atelier.sampler : p.engine.sampler) && <Select label="ROZVRH ŠUMU" value={isAtelier ? p.atelier.schedule : p.engine.schedule}
+          onChange={(schedule)=>isAtelier ? updateAtelier({schedule}) : p.setEngine((e)=>({...e,schedule}))}
           items={[{id:"karras",name:"Karras"},{id:"normal",name:"Normal"}]} />}
         <label className="control-block engine-field"><Label>SEED · −1 = NÁHODNÝ</Label>
-          <input aria-label="Seed" type="number" min="-1" max="4294967295" step="1" value={p.engine.seed}
-            onChange={(event)=>p.setEngine((e)=>({...e,seed:event.target.value}))} />
+          <input aria-label="Seed" type="number" min="-1" max="4294967295" step="1" value={isAtelier ? p.atelier.seed : p.engine.seed}
+            onChange={(event)=>isAtelier ? updateAtelier({seed:event.target.value}) : p.setEngine((e)=>({...e,seed:event.target.value}))} />
         </label>
         <section className="control-block preset-block">
           <Label>ULOŽENÁ NASTAVENÍ</Label>
@@ -1105,6 +1115,45 @@ function Progress({
     </section>
   );
 }
+function AtelierControls({atelier: a, update, models, generating, onGenerate}) {
+  const choices = models.filter(model => model.id.startsWith("tuymans_") || model.id === "tuy_small");
+  const modes = [
+    {id: "noise", name: "Volná studie", description: "Nový obraz přímo z šumu. Bez námětu i bez promptu; obsah vybírá samotný checkpoint."},
+    {id: "subject", name: "Automatický námět", description: "Aplikace vybere střídmý námět a vytvoří obraz checkpointem. Nic nepíšeš."},
+    {id: "photo", name: "Foto → malba", description: "SDXL Base vytvoří fotografický předobraz a vybraný checkpoint jej přemaluje. Dva průchody GPU; denoise nejvýše 0,55."},
+  ];
+  const total = Number(a.count || 0) * a.modelIds.length;
+  return <>
+    <button className="primary-button generate" disabled={!a.modelIds.length || !choices.length} onClick={onGenerate}>
+      <Sparkles size={16} />{generating ? "PŘIDAT STUDIE DO FRONTY" : "VYTVOŘIT STUDIE"}
+    </button>
+    <div className="control-block atelier-modes">
+      <Label>ZPŮSOB TVORBY</Label>
+      {modes.map(mode => <button key={mode.id} className="atelier-mode" aria-pressed={a.mode === mode.id} onClick={() => update({mode: mode.id})}>
+        <span>{mode.name}</span><small>{mode.description}</small>
+      </button>)}
+    </div>
+    <label className="control-block engine-field"><Label>POČET STUDIÍ NA MODEL</Label>
+      <input aria-label="Počet studií na model" type="number" min="1" step="1" value={a.count} onChange={event => update({count: event.target.value === "" ? "" : Number(event.target.value)})} />
+      <span className="help-text">{a.count || "—"} studií × {a.modelIds.length} modelů = {total} výstupů</span>
+    </label>
+    {a.mode !== "noise" && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
+      items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Postavy a gesta"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
+    <div className="control-block"><Label>MODELY · VÝBĚR VÍCE</Label>
+      <div className="checkpoint-options" role="group" aria-label="Modely Ateliéru">{choices.map(model => <button key={model.id} aria-pressed={a.modelIds.includes(model.id)} onClick={() => update({modelIds: a.modelIds.includes(model.id) ? (a.modelIds.length > 1 ? a.modelIds.filter(id => id !== model.id) : a.modelIds) : [...a.modelIds, model.id]})}>
+        <span>{model.name}</span>{a.modelIds.includes(model.id) && <Check size={14} />}
+      </button>)}</div>
+      <button className="text-button" onClick={() => update({modelIds: ["tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"].filter(id => choices.some(model => model.id === id))})}>Porovnat 800 / 1600 / 2400</button>
+      <p className="help-text">Každý námět i seed se použije na všechny vybrané modely. Výsledky se ukládají také na plátno a do knihovny.</p>
+    </div>
+    <Select label="ROZLIŠENÍ PRO MODEL" value={`${a.width}x${a.height}`} onChange={value => {const [width,height] = value.split("x").map(Number); update({width,height});}}
+      items={[{id:"1024x1024",name:"1024 × 1024 · čtverec"},{id:"832x1216",name:"832 × 1216 · na výšku"},{id:"1216x832",name:"1216 × 832 · na šířku"},{id:"1536x1536",name:"1536 × 1536 · experiment"}]} />
+    <Range label="ZVĚTŠENÍ HOTOVÉHO OBRAZU" min={1} max={4} step={0.1} value={a.scale} onChange={scale => update({scale})}
+      hint={`${Math.round(a.width*a.scale)} × ${Math.round(a.height*a.scale)} px · pouze Lanczos, bez AI dokreslení`} />
+    <p className="help-text">Náměty zatím nevznikají analýzou 247 obrazů. Tato část ověřuje schopnosti naučených checkpointů.</p>
+  </>;
+}
+
 function ImageCard({
   item,
   modelName,
@@ -1512,6 +1561,8 @@ function ImageViewer({
           <div className="detail-section">
             <Label>PARAMETRY GENEROVÁNÍ</Label>
             {[
+              ["Způsob tvorby", settings.generation_type === "atelier" ? ({noise: "Volná studie", subject: "Automatický námět", photo: "Foto → malba"}[settings.atelier_mode]) : undefined],
+              ["Námět", settings.subject_title],
               ["Denoise", settings.denoise],
               ["CFG", settings.cfg ?? settings.guidance_scale],
               ["Kroky", settings.steps],

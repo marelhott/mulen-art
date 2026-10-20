@@ -135,9 +135,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if not isinstance(payload, dict):
             raise ValueError("Expected a JSON object")
         parsed = parse_input(payload)
-        image_data = base64.b64decode(parsed.image_base64.split(",")[-1], validate=True)
-        with Image.open(io.BytesIO(image_data)) as image:
-            image.verify()
+        if parsed.generation_type == "img2img":
+            image_data = base64.b64decode(parsed.image_base64.split(",")[-1], validate=True)
+            with Image.open(io.BytesIO(image_data)) as image:
+                image.verify()
         result = asdict(parsed)
         result["source_name"] = str(payload.get("source_name", "Input image"))[:120]
         return result
@@ -165,6 +166,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             # Zdroj uchováme pro porovnání i po obnovení stránky; žádná galerie složených vstupů.
             refresh()
             for payload in payloads:
+                if payload["generation_type"] == "atelier":
+                    payload["source_url"] = None
+                    continue
                 digest = hashlib.sha256(payload["image_base64"].encode()).hexdigest()
                 filename = f"source_{digest}.png"
                 path = OUTPUTS_DIR / filename
@@ -180,6 +184,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     "id": job_id, "status": "queued", "progress": 0,
                     "message": "Waiting for cloud GPU (first start can take longer)",
                     "source_name": payload["source_name"], "source_url": payload["source_url"], "expected_images": payload["num_images"],
+                    "generation_type": payload["generation_type"], "model_id": payload["model_id"],
                     "logs": [], "result": None, "error": None,
                     "created_at": now_iso(), "updated_at": now_iso(),
                 }
@@ -188,6 +193,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     submitted.append({"job_id": job_id, "source_name": payload["source_name"],
                                       "source_index": payload.get("source_index", index), "variant_index": payload.get("variant_index", 0),
                                       "expected_images": payload["num_images"]})
+                    submitted[-1].update(generation_type=payload["generation_type"], model_id=payload["model_id"])
                 except Exception:
                     requested -= payload["num_images"]
                     jobs.pop(job_id, None)
@@ -207,6 +213,39 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             raise HTTPException(422, f"Invalid generation input: {exc}") from exc
         result = enqueue([payload])
         return {"job_id": result["jobs"][0]["job_id"], "status": "queued"}
+
+    @app.post("/api/atelier-batch")
+    async def atelier_batch(request: Request):
+        import secrets
+        from .atelier import subject_for
+        data = await read_payload(request, 64 * 1024)
+        try:
+            if not isinstance(data, dict) or not isinstance(data.get("settings", {}), dict):
+                raise ValueError("Invalid atelier request")
+            settings = data.get("settings", {})
+            models = data.get("model_ids")
+            if not isinstance(models, list) or not models or any(not isinstance(item, str) for item in models):
+                raise ValueError("Select Tuymans checkpoints")
+            models = list(dict.fromkeys(models))
+            count = data.get("count", 1)
+            # Transport chunks only; the frontend can enqueue an unlimited number of chunks.
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 8:
+                raise ValueError("At most eight studies per transport request")
+            # Validate the seed before resolving its random sentinel.
+            first = parse_input({**settings, "generation_type": "atelier", "model_id": models[0], "lora_id": "none", "num_images": 1})
+            seed = secrets.randbits(32) if first.seed == -1 else first.seed
+            payloads = []
+            for index in range(count):
+                variant_seed = (seed + index) % 2**32
+                title = "Volná studie bez námětu" if first.atelier_mode == "noise" else subject_for(variant_seed, first.atelier_theme)[1]
+                for model_id in models:
+                    payload = validate_payload({**settings, "generation_type": "atelier", "model_id": model_id,
+                        "lora_id": "none", "num_images": 1, "seed": variant_seed, "source_name": title})
+                    payload.update(source_index=index, variant_index=index)
+                    payloads.append(payload)
+        except Exception as exc:
+            raise HTTPException(422, f"Invalid atelier request: {exc}") from exc
+        return enqueue(payloads)
 
     @app.post("/api/generate-batch")
     async def generate_batch(request: Request):

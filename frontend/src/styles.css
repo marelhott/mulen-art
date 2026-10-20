@@ -1974,3 +1974,12 @@ input[type="range"]::-moz-range-progress {
 .card-caption { display: flex; align-items: center; gap: 6px; }
 .card-caption > span { flex-shrink: 0; }
 .card-model-badge { position: absolute; top: 7px; left: 7px; padding: 3px 5px; border-radius: 4px; color: #fff; background: #111b; font-size: 9px; line-height: 12px; pointer-events: none; }
+
+.atelier-modes { display: grid; gap: 6px; }
+.atelier-mode { display: grid; gap: 5px; text-align: left; padding: 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
+.atelier-mode[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.atelier-mode span { font-size: 12px; }
+.atelier-mode small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.atelier-intro { padding: 14px 0; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.atelier-intro > span { font-size: 9px; letter-spacing: .15em; color: var(--accent); }
+.atelier-intro p { color: var(--muted); font-size: 11px; line-height: 1.6; max-width: 720px; margin-bottom: 0; }

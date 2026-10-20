@@ -193,3 +193,13 @@ nechceš obnovit, vrať pouze frontendové soubory z tagu.
 The selector includes **Tuymans Modal — 800 / 1600 / 2400 kroků**, from the completed approved 247-file run `full-unet-approved-20261019T203404Z`. These are separate checkpoints, not quality levels. They are copied privately into `img2img-models` using `.venv/bin/modal run scripts/promote_tuymans.py`; the copy validates the tensor payload size and full SHA-256 before publishing each file. Their hashes are recorded locally in `outputs/verification/tuymans-promoted.json`. Standard source-model import/upload skips these cloud-trained entries.
 
 Select one or more checkpoint buttons. Every input is submitted separately to every selected checkpoint, with the same parameters and matching seeds across models. Variants still receive distinct incremented seeds. For example, 2 inputs × 3 models × 2 variants produces 12 outputs; GPU concurrency remains managed by Modal. Results identify the checkpoint beside their dimensions and retain it in saved metadata. Presets save multiple selections and continue to support older single-model presets. LoRA mode continues to use SDXL Base and one LoRA.
+
+## Ateliér: autonomous studies
+
+The far-left **Ateliér** tab creates images without uploading a photograph. It shares the existing queue, progress, canvas history, library, viewer, and export. Select multiple Tuymans checkpoints to compare matching seeds. Any positive study count is submitted in transport chunks of eight, without an overall application count limit.
+
+- **Volná studie**: text-to-image from noise with an empty prompt.
+- **Automatický námět**: a deterministic seed selects a restrained subject from the curated starter set in `app_runtime/atelier.py`. New Modal checkpoints receive their learned `mvhpaint` caption prefix.
+- **Foto → malba**: SDXL Base first generates a photographic precursor, then the selected checkpoint repaints it with an empty prompt, denoise at most 0.55. The actual precursor is retained for comparison. This mode uses two generation passes and model loading.
+
+Automatic subjects are not an analysis of the 247 training files. No external language/image API is used. Default Ateliér settings are 28 steps, CFG 0.5, and 1024×1024 generation, followed by 2× Lanczos interpolation only. Post-enlargement adds no AI detail. Generation metadata records the mode, subject provenance, actual prompts, seed, checkpoint, dimensions, and optional precursor. The existing photograph workflow retains its own settings.

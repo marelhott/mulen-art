@@ -110,6 +110,24 @@ class CloudFlowTests(unittest.TestCase):
                 self.assertEqual([payload["seed"] for payload in payloads], [4294967295, 0])
                 self.assertTrue(all(payload["num_images"] == 1 for payload in payloads))
 
+    def test_atelier_queues_no_source_files_and_compares_all_models_on_same_studies(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client.auth = ("studio", "test-password")
+        response = client.post("/api/atelier-batch", json={"model_ids": ["tuymans_modal_800", "tuymans_modal_2400"], "count": 3,
+            "settings": {"atelier_mode": "subject", "atelier_theme": "face", "seed": 231020, "cfg": .5, "steps": 28}})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["jobs"]), 6)
+        self.assertEqual(list(self.output.glob('source_*')), [])
+        for index in range(3):
+            pair = [payload for _,payload in self.submissions if payload["seed"] == 231020+index]
+            self.assertEqual(len(pair),2)
+            self.assertEqual(pair[0]["source_name"],pair[1]["source_name"])
+            self.assertTrue(all(payload["cfg"]==.5 and not payload["image_base64"] and payload["source_url"] is None for payload in pair))
+        for invalid in ({"model_ids":["hofmann_sdxl"]}, {"count":9}, {"settings":{"atelier_mode":"missing"}}):
+            rejected = client.post("/api/atelier-batch", json={"model_ids":["tuymans_modal_800"], "count":1, **invalid})
+            self.assertEqual(rejected.status_code,422)
+        self.assertEqual(len(self.submissions),6)
+
     def test_batch_variant_seeds_and_engine_options_survive_gateway(self):
         settings = {**self.payload, "num_images": 3, "seed": 4294967295,
                     "render_mode": "detail", "detail_steps": 8, "scale": 2}

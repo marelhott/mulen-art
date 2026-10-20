@@ -60,6 +60,11 @@ class GenerationInput:
     detail_steps: int = 15
     conditioning_mode: str = "style"
     input_scale: float = 1.0
+    generation_type: str = "img2img"
+    atelier_mode: str = "noise"
+    atelier_theme: str = "all"
+    width: int = 1024
+    height: int = 1024
 
 
 def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None,
@@ -67,6 +72,12 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
     started = time.monotonic()
     generation_input = parse_input(payload)
     report_progress(progress_callback, 0.02, "Input validated")
+
+    if generation_input.generation_type == "atelier":
+        if use_demo_mode():
+            raise ValueError("Ateliér requires a cloud GPU; demo filters cannot verify this mode.")
+        from .atelier import generate_study
+        return generate_study(generation_input, progress_callback, image_callback)
 
     if use_demo_mode():
         return build_demo_response(generation_input, progress_callback)
@@ -200,13 +211,14 @@ def get_torch():
 def get_diffusers():
     global DIFFUSERS_MODULES
     if DIFFUSERS_MODULES is None:
-        from diffusers import DDIMScheduler, DPMSolverMultistepScheduler, EulerAncestralDiscreteScheduler, StableDiffusionXLImg2ImgPipeline
+        from diffusers import DDIMScheduler, DPMSolverMultistepScheduler, EulerAncestralDiscreteScheduler, StableDiffusionXLImg2ImgPipeline, StableDiffusionXLPipeline
 
         DIFFUSERS_MODULES = {
             "scheduler": DPMSolverMultistepScheduler,
             "ddim_scheduler": DDIMScheduler,
             "euler_a_scheduler": EulerAncestralDiscreteScheduler,
             "pipeline": StableDiffusionXLImg2ImgPipeline,
+            "text_pipeline": StableDiffusionXLPipeline,
         }
     return DIFFUSERS_MODULES
 
@@ -216,7 +228,10 @@ def is_cuda_oom(exc: Exception) -> bool:
 
 
 def parse_input(payload: dict[str, Any]) -> GenerationInput:
-    if not payload.get("image_base64"):
+    generation_type = str(payload.get("generation_type", "img2img"))
+    if generation_type not in {"img2img", "atelier"}:
+        raise ValueError("Unknown generation type")
+    if generation_type == "img2img" and not payload.get("image_base64"):
         raise ValueError("image_base64 is required.")
 
     scale = clamp(float(payload.get("scale", 1.0)), MIN_SCALE, MAX_SCALE)
@@ -234,7 +249,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         schedule = "karras"
 
     steps = int(clamp(int(payload.get("steps", QUALITY_TO_STEPS[quality])), 1, 150))
-    cfg = clamp(float(payload.get("cfg", os.getenv("DEFAULT_GUIDANCE_SCALE", "1.8"))), 1.0, 20.0)
+    cfg = clamp(float(payload.get("cfg", os.getenv("DEFAULT_GUIDANCE_SCALE", "1.8"))), 0.5, 20.0)
 
     model_id = str(payload.get("model_id", "tuymans_sdxl"))
     lora_id = str(payload.get("lora_id", "none"))
@@ -268,11 +283,26 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     negative_prompt = str(payload.get("negative_prompt", ""))
     if max(len(prompt), len(negative_prompt)) > 4000:
         raise ValueError("Prompt is too long")
+    atelier_mode = str(payload.get("atelier_mode", "noise"))
+    atelier_theme = str(payload.get("atelier_theme", "all"))
+    width, height = 1024, 1024
+    if generation_type == "atelier":
+        from .atelier import MODES, THEMES, is_tuymans
+        if atelier_mode not in MODES or atelier_theme not in THEMES:
+            raise ValueError("Invalid atelier mode or theme")
+        if not is_tuymans(model_id) or lora_id != "none":
+            raise ValueError("Ateliér uses trained Tuymans checkpoints")
+        dimensions = [payload.get("width", 1024), payload.get("height", 1024)]
+        if any(isinstance(v, bool) or int(v) != float(v) or not 512 <= int(v) <= 1536 or int(v) % 8 for v in dimensions):
+            raise ValueError("Atelier dimensions must be multiples of 8 from 512 to 1536")
+        width, height = map(int, dimensions)
+        if render_mode != "quick":
+            raise ValueError("Ateliér does not use AI detail enhancement")
     return GenerationInput(
-        image_base64=str(payload["image_base64"]),
+        image_base64=str(payload.get("image_base64", "")),
         model_id=model_id,
         lora_id=lora_id,
-        denoise=clamp(float(payload.get("denoise", 0.35)), 0.05, 1.0),
+        denoise=clamp(float(payload.get("denoise", 0.35)), 0.05, 0.55 if generation_type == "atelier" else 1.0),
         lora_strength=clamp(float(payload.get("lora_strength", 0.8)), 0.0, 2.0),
         cfg=cfg,
         steps=steps,
@@ -286,6 +316,8 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         max_side=int(clamp(int(payload.get("max_side", 1536)), 512, 2048)),
         detail_strength=clamp(float(payload.get("detail_strength", 0.25)), 0.05, 0.6),
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
+        generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
+        width=width, height=height,
     )
 
 
