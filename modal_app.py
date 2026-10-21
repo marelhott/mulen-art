@@ -13,6 +13,9 @@ slots = modal.Dict.from_name("img2img-slots", create_if_missing=True)
 # Jobs waiting for a slot: pending maps job_id -> submit time (small, cheap to list); the
 # potentially large payloads live in a separate Dict so ordering never downloads them.
 pending = modal.Dict.from_name("img2img-pending", create_if_missing=True)
+# One entry per finished job ("YYYY-MM:job_id" -> estimated GPU USD); written once per job, so
+# concurrent workers never race, and summed per month for the optional dollar budget.
+spend = modal.Dict.from_name("img2img-spend", create_if_missing=True)
 payloads = modal.Dict.from_name("img2img-payloads", create_if_missing=True)
 state = modal.Volume.from_name("img2img-state", create_if_missing=True)
 base_image = (
@@ -119,6 +122,18 @@ def spawn_job(job_id, payload):
     return None
 
 
+def month_spend(month):
+    """Estimated GPU dollars spent this month (worker time only; container boot is not counted)."""
+    prefix = f"{month}:"
+    return sum(value for key, value in spend.items() if key.startswith(prefix))
+
+
+def record_spend(job_id, seconds, hourly_usd):
+    import time
+    rate = hourly_usd if hourly_usd else float(os.environ.get("GPU_HOURLY_USD", "0.80"))
+    spend[f"{time.strftime('%Y-%m', time.gmtime())}:{job_id}"] = round(seconds / 3600 * rate, 5)
+
+
 def cancel_call(call_id):
     modal.FunctionCall.from_id(call_id).cancel()
     release_slot_for_call(slots, call_id)
@@ -217,6 +232,11 @@ def generate_job(job_id: str, payload: dict):
              "message": "Failed", "updated_at": now_iso(),
              "error": {"detail": str(exc)}})
         raise
+    finally:
+        try:
+            record_spend(job_id, time.monotonic() - started, gpu_hourly)
+        except Exception as exc:  # accounting must never fail a finished job
+            print(f"spend accounting failed: {exc}")
 
 
 @app.cls(
@@ -294,6 +314,10 @@ def purge_deleted_images():
     """Daily: really remove images deleted more than RETENTION_DAYS ago, so the Volume stops growing."""
     from app_runtime.server import purge_deleted
     outputs.reload()
+    import time
+    current = time.strftime("%Y-%m", time.gmtime())
+    for key in [key for key in spend.keys() if not key.startswith(current)]:  # keep only this month's totals
+        release_slot(spend, key)
     removed = purge_deleted(int(os.environ.get("DELETED_RETENTION_DAYS", "30")))
     if removed:
         outputs.commit()
@@ -311,7 +335,7 @@ def purge_deleted_images():
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app(label="i")
 def web():
-    from app_runtime.cloud_server import (create_app, VolumeUsage, optional_int_env,
+    from app_runtime.cloud_server import (create_app, VolumeUsage, optional_int_env, optional_float_env,
                                          DEFAULT_MAX_JOBS_PER_REQUEST)
     # Missing credentials make create_app refuse to start rather than serve an open GPU.
     return create_app(
@@ -320,6 +344,7 @@ def web():
         cancel=cancel_call,
         username=os.environ.get("STUDIO_USERNAME"), password=os.environ.get("STUDIO_PASSWORD"),
         monthly_limit=optional_int_env("MONTHLY_IMAGE_LIMIT"),
+        spend=month_spend, monthly_budget_usd=optional_float_env("MONTHLY_BUDGET_USD"),
         max_jobs_per_request=optional_int_env("MAX_JOBS_PER_REQUEST", DEFAULT_MAX_JOBS_PER_REQUEST),
         frontend_dir="/app/frontend/dist",
     )

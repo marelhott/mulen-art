@@ -56,6 +56,17 @@ class VolumeUsage:
 DEFAULT_MAX_JOBS_PER_REQUEST = 64
 
 
+def optional_float_env(name, default=None):
+    """Positive number from the environment; unset or empty means `default`."""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    number = float(value)
+    if number <= 0:
+        raise ValueError(f"{name} must be positive")
+    return number
+
+
 def optional_int_env(name, default=None):
     """Positive integer from the environment; unset or empty means `default`."""
     value = os.environ.get(name, "").strip()
@@ -69,7 +80,7 @@ def optional_int_env(name, default=None):
 
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                monthly_limit=None, max_jobs_per_request=DEFAULT_MAX_JOBS_PER_REQUEST, cancel=None,
-               frontend_dir=None, auth_enabled=True):
+               frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None):
     if auth_enabled and (not username or not password):
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
@@ -202,6 +213,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             used = usage.get(month, 0)
             if monthly_limit is not None and used + requested > monthly_limit:
                 raise HTTPException(429, f"Monthly safety limit reached ({monthly_limit} images).")
+            if monthly_budget_usd is not None and spend is not None and spend(month) >= monthly_budget_usd:
+                raise HTTPException(429, f"Monthly GPU budget reached (${monthly_budget_usd:.2f}).")
             # Zdroj uchováme pro porovnání i po obnovení stránky; žádná galerie složených vstupů.
             refresh_cached()
             has_sources = False
@@ -430,7 +443,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def get_usage():
         month = datetime.now(UTC).strftime("%Y-%m")
         with lock:
-            return {"month": month, "reserved_images": usage.get(month, 0), "limit": monthly_limit}
+            return {"month": month, "reserved_images": usage.get(month, 0), "limit": monthly_limit,
+                    "spent_usd": round(spend(month), 2) if spend is not None else None,
+                    "budget_usd": monthly_budget_usd}
 
     @app.get("/api/history")
     def history():

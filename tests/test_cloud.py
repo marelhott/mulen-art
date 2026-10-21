@@ -15,8 +15,11 @@ class CloudFlowTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.output = Path(self.temp.name)
+        import modal_app
+        self.spend = {}
         self.patches = [patch.object(cloud_server, "OUTPUTS_DIR", self.output),
-                        patch.object(server, "OUTPUTS_DIR", self.output)]
+                        patch.object(server, "OUTPUTS_DIR", self.output),
+                        patch.object(modal_app, "spend", self.spend)]
         for p in self.patches:
             p.start()
         self.jobs, self.usage, self.submissions = {}, {}, []
@@ -740,6 +743,30 @@ class CloudFlowTests(unittest.TestCase):
         self.assertFalse((self.output / "b.png").exists() or (self.output / "b.json").exists())
         self.assertTrue((self.output / "c.png").exists())
         self.assertEqual(sorted(server.load_deleted_ids()), ["c"])
+
+    def test_monthly_dollar_budget_blocks_new_jobs_and_is_reported(self):
+        import modal_app
+        modal_app.record_spend("j1", 1800, 1.10)  # half an hour at A10 rates
+        month = __import__("time").strftime("%Y-%m", __import__("time").gmtime())
+        self.assertAlmostEqual(modal_app.month_spend(month), 0.55, places=2)
+        self.spend["2000-01:old"] = 99  # other months do not count
+        self.assertAlmostEqual(modal_app.month_spend(month), 0.55, places=2)
+        client = TestClient(self.make_app(lambda *_: None, spend=modal_app.month_spend, monthly_budget_usd=0.5, monthly_limit=None))
+        client.auth = self.client.auth
+        self.assertEqual(client.post("/api/generate", json=self.payload).status_code, 429)
+        usage = client.get("/api/usage").json()
+        self.assertEqual((usage["spent_usd"], usage["budget_usd"]), (0.55, 0.5))
+        under = TestClient(self.make_app(lambda *_: None, spend=modal_app.month_spend, monthly_budget_usd=5, monthly_limit=None))
+        under.auth = self.client.auth
+        self.assertEqual(under.post("/api/generate", json=self.payload).status_code, 200)
+
+    def test_worker_records_estimated_spend(self):
+        import modal_app
+        from unittest.mock import Mock
+        self.jobs["test-job"] = {"id": "test-job", "status": "queued", "logs": []}
+        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
+            modal_app.generate_job("test-job", self.payload)
+        self.assertEqual(len(self.spend), 1)
 
 
 if __name__ == "__main__":
