@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
-import { averageWorkerSeconds, controlsFromSettings, usageLabel } from "./studioTools";
+import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY } from "./studioTools";
 import { API_URL, buildImageUrl, reconcileOptionIds } from "./api";
 
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
@@ -36,7 +36,16 @@ function App() {
   const [usage, setUsage] = useState(null);
   const [optionsRevision, setOptionsRevision] = useState(0);
   const [archiveStatus, setArchiveStatus] = useState("loading");
-  const [models, setModels] = useState([]);
+  const [serverModels, setServerModels] = useState([]);
+  // Checkpoint mixes live in the browser; each one is fully described by its id, so there is nothing to sync.
+  const [mixIds, setMixIds] = useState(() => {
+    try { const saved = JSON.parse(window.localStorage.getItem(MIX_STORAGE_KEY) || "[]"); return Array.isArray(saved) ? saved.filter(isMixId) : []; }
+    catch { return []; }
+  });
+  const models = useMemo(
+    () => [...serverModels, ...mixIds.map((id) => mixEntry(id, serverModels)).filter(Boolean)],
+    [serverModels, mixIds],
+  );
   const [loras, setLoras] = useState([]);
   const [inputItems, setInputItems] = useState([]);
   const restoreRecentAllowed = useRef(true);
@@ -122,8 +131,9 @@ function App() {
         setGpuHourlyUsd(data.gpu_hourly_usd ?? null);
         setArchiveStatus(data.archives?.length ? "ready" : "error");
         if (data.models?.length) {
-          setModels(data.models);
-          setSelectedModelIds(current => reconcileOptionIds(current, data.models,
+          setServerModels(data.models);
+          setSelectedModelIds(current => reconcileOptionIds(current,
+            [...data.models, ...current.filter(id => mixEntry(id, data.models)).map(id => ({id}))],
             data.models.find(item => item.kind !== "base")?.id));
         }
         if (data.loras?.length) {
@@ -140,6 +150,24 @@ function App() {
   useEffect(() => {
     loadLibrary(true).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(MIX_STORAGE_KEY, JSON.stringify(mixIds)); } catch { /* optional convenience */ }
+  }, [mixIds]);
+
+  // `target` is where the new mix is selected right away: the canvas checkpoint list or the Atelier one.
+  function addMix(id, target) {
+    if (!mixEntry(id, serverModels)) { setError("Tuto fúzi nelze vytvořit: některý checkpoint není k dispozici."); return; }
+    setMixIds(current => (current.includes(id) ? current : [...current, id]));
+    if (target === "atelier") setAtelier(current => ({...current, modelIds: [...new Set([...current.modelIds, id])]}));
+    else setSelectedModelIds(current => [...new Set([...current, id])]);
+  }
+  function removeMix(id) {
+    setMixIds(current => current.filter(item => item !== id));
+    const fallback = serverModels.find(item => item.kind !== "base")?.id;
+    setSelectedModelIds(current => { const next = current.filter(item => item !== id); return next.length ? next : [fallback]; });
+    setAtelier(current => { const next = current.modelIds.filter(item => item !== id); return {...current, modelIds: next.length ? next : ["tuymans_modal_2400"]}; });
+  }
 
   async function refreshUsage() {
     try {
@@ -247,7 +275,9 @@ function App() {
         : "tuymans_sdxl",
     );
     if (Array.isArray(preset.selectedModelIds)) {
-      const ids = [...new Set(preset.selectedModelIds)].filter(id => models.some(model => model.id === id && model.kind !== "base"));
+      const known = id => models.some(model => model.id === id && model.kind !== "base") || Boolean(mixEntry(id, serverModels));
+      const ids = [...new Set(preset.selectedModelIds)].filter(known);
+      setMixIds(current => [...new Set([...current, ...ids.filter(isMixId)])]);
       if (ids.length) setSelectedModelIds(ids);
     }
     setLoraId(
@@ -713,7 +743,7 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
-        gpuHourlyUsd, applySettings, usageText: usageLabel(usage),
+        gpuHourlyUsd, applySettings, addMix, removeMix, usageText: usageLabel(usage),
         pendingMode: activeJobs.at(-1)?.generation_type === "atelier" ? "atelier" : "results",
       }}
     />

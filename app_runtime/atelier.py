@@ -28,7 +28,10 @@ MODES = {"noise", "subject", "photo", "archive"}
 
 
 def is_atelier_model(model_id):
-    return model_id.startswith("tuymans_") or model_id in {"tuy_small", "hofmann_sdxl"}
+    if model_id.startswith("mix:"):
+        from .core import parse_mix_id
+        return all(is_atelier_model(part_id) for part_id, _ in parse_mix_id(model_id))
+    return model_id.startswith("tuymans_") or model_id in {"tuy_small", "hofmann_sdxl", "mulen_mara"}
 
 
 def subject_for(seed, theme="all"):
@@ -38,9 +41,19 @@ def subject_for(seed, theme="all"):
 
 
 def painting_prompt(model_id, text):
+    if model_id.startswith("mix:"):  # every trained component contributes its learned caption prefix
+        from .core import parse_mix_id
+        triggers = []
+        for part_id, _ in parse_mix_id(model_id):
+            prefix = painting_prompt(part_id, "").rstrip(", ")
+            if prefix and prefix not in triggers:
+                triggers.append(prefix)
+        return ", ".join(triggers + [text]) if text else ", ".join(triggers)
     # Keep the learned caption prefix for the approved checkpoints; no descriptive style embellishment.
     if model_id == "hofmann_sdxl":
         return text  # No verified caption trigger is available for this imported checkpoint.
+    if model_id == "mulen_mara":
+        return f"mulpaint, {text}"  # the caption prefix the checkpoint was trained with
     trigger = "mvhpaint" if model_id.startswith("tuymans_modal_") else "tuypaint"
     return f"{trigger}, {text}"
 

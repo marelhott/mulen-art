@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -339,21 +340,13 @@ def ensure_pipeline(model_id: str, resident: int = 1):
         return cached
 
     model = get_config_item("models", model_id)
-    model_path = model.get("path")
-    if not model_path or not Path(model_path).exists():
-        raise FileNotFoundError(f"Model checkpoint not found for '{model_id}': {model_path}")
 
     while PIPELINES and len(PIPELINES) >= resident:
         PIPELINES.pop(next(iter(PIPELINES)))
         clear_cuda()
 
     torch = get_torch()
-    diffusers = get_diffusers()
-    pipe = diffusers["pipeline"].from_single_file(
-        model_path,
-        torch_dtype=torch.float16,
-        use_safetensors=True,
-    )
+    pipe = build_mixed_pipeline(model["mix"]) if model.get("mix") else load_checkpoint_pipeline(model_id, model.get("path"))
     pipe.scheduler = make_scheduler(pipe.scheduler.config, "dpmpp_2m", "karras")
     pipe = pipe.to("cuda")
     pipe.enable_vae_tiling()
@@ -368,6 +361,45 @@ def ensure_pipeline(model_id: str, resident: int = 1):
 
     pipe._studio_lora = ("none", 0.0)
     PIPELINES[model_id] = pipe
+    return pipe
+
+
+def load_checkpoint_pipeline(model_id: str, model_path: str | None):
+    """One checkpoint as an fp16 pipeline on the CPU."""
+    if not model_path or not Path(model_path).exists():
+        raise FileNotFoundError(f"Model checkpoint not found for '{model_id}': {model_path}")
+    torch = get_torch()
+    return get_diffusers()["pipeline"].from_single_file(model_path, torch_dtype=torch.float16, use_safetensors=True)
+
+
+MIX_MODULES = ("unet", "text_encoder", "text_encoder_2")  # the VAE comes from the first checkpoint
+
+
+def build_mixed_pipeline(parts: list[tuple[str, int]]):
+    """Weighted average of the checkpoints' weights, computed on the CPU one checkpoint at a time.
+
+    All fine-tunes here start from SDXL, so their tensors line up; a mismatch aborts with a clear error.
+    """
+    torch = get_torch()
+    first_id, first_weight = parts[0]
+    pipe = load_checkpoint_pipeline(first_id, get_config_item("models", first_id).get("path"))
+    targets = {name: getattr(pipe, name).state_dict() for name in MIX_MODULES}
+    with torch.no_grad():
+        for state in targets.values():
+            for tensor in state.values():
+                if tensor.is_floating_point():
+                    tensor.copy_((tensor.float() * (first_weight / 100)).to(tensor.dtype))
+        for part_id, weight in parts[1:]:
+            other = load_checkpoint_pipeline(part_id, get_config_item("models", part_id).get("path"))
+            for name, state in targets.items():
+                source = getattr(other, name).state_dict()
+                if source.keys() != state.keys():
+                    raise ValueError(f"Checkpoint '{part_id}' does not match '{first_id}' and cannot be mixed")
+                for key, tensor in state.items():
+                    if tensor.is_floating_point():
+                        tensor.copy_((tensor.float() + source[key].float() * (weight / 100)).to(tensor.dtype))
+            del other, source
+            gc.collect()
     return pipe
 
 
@@ -558,7 +590,34 @@ def apply_demo_style(image: Image.Image, generation_input: GenerationInput, inde
     return stylized
 
 
+# A checkpoint mix is addressed by its id alone, e.g. "mix:mulen_mara=60,tuymans_modal_2400=40":
+# two to four fine-tuned checkpoints blended by weight (percent, summing to 100). Everything that takes
+# a model id (img2img, Atelier modes, worker routing, presets) therefore accepts a mix unchanged.
+MIX_PATTERN = re.compile(r"^mix:[a-z0-9_]+=\d{1,3}(,[a-z0-9_]+=\d{1,3}){1,3}$")
+
+
+def is_mix_id(model_id: str) -> bool:
+    return isinstance(model_id, str) and model_id.startswith("mix:")
+
+
+def parse_mix_id(model_id: str) -> list[tuple[str, int]]:
+    if not MIX_PATTERN.fullmatch(model_id or ""):
+        raise ValueError("Invalid checkpoint mix")
+    parts = [(key, int(value)) for key, value in (part.split("=") for part in model_id[4:].split(","))]
+    ids = [key for key, _ in parts]
+    if len(set(ids)) != len(ids) or any(weight < 1 for _, weight in parts) or sum(weight for _, weight in parts) != 100:
+        raise ValueError("A checkpoint mix needs distinct checkpoints with weights summing to 100 %")
+    for part_id, _ in parts:
+        if get_config_item("models", part_id).get("kind") == "base":
+            raise ValueError("Base models cannot be part of a mix")
+    return parts
+
+
 def get_config_item(section: str, item_id: str) -> dict[str, Any]:
+    if section == "models" and is_mix_id(item_id):
+        parts = parse_mix_id(item_id)
+        names = [f"{get_config_item('models', part_id)['name']} {weight} %" for part_id, weight in parts]
+        return {"id": item_id, "name": "Fúze: " + " + ".join(names), "path": None, "mix": parts}
     config = load_config()
     for item in config.get(section, []):
         if item.get("id") == item_id:

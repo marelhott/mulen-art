@@ -78,3 +78,59 @@ export function retryUrl(src, attempt) {
   if (!src || attempt === 0 || /^(data:|blob:)/.test(src)) return src;
   return `${src}${src.includes("?") ? "&" : "?"}retry=${attempt}`;
 }
+
+// ---- Checkpoint mixes -------------------------------------------------------------------------
+// A mix is addressed by its id alone ("mix:mulen_mara=60,tuymans_modal_2400=40"), so every place that
+// takes a model id (canvas, Atelier modes, presets, comparison) accepts it without special handling.
+export const MIX_MIN = 2;
+export const MIX_MAX = 4;
+const MIX_ID = /^mix:[a-z0-9_]+=\d{1,3}(,[a-z0-9_]+=\d{1,3}){1,3}$/;
+
+export const isMixId = (id) => typeof id === "string" && id.startsWith("mix:");
+
+export function parseMixId(id) {
+  if (!MIX_ID.test(id || "")) return null;
+  const parts = id.slice(4).split(",").map((part) => {
+    const [partId, weight] = part.split("=");
+    return { id: partId, weight: Number(weight) };
+  });
+  const total = parts.reduce((sum, part) => sum + part.weight, 0);
+  const distinct = new Set(parts.map((part) => part.id)).size === parts.length;
+  return total === 100 && distinct && parts.every((part) => part.weight >= 1) ? parts : null;
+}
+
+// Raw slider values -> whole percents that sum to exactly 100 (largest remainder, never below 1).
+export function normalizeWeights(raw) {
+  const total = raw.reduce((sum, value) => sum + value, 0);
+  if (!raw.length || total <= 0) return raw.map(() => 0);
+  const exact = raw.map((value) => (value * 100) / total);
+  const result = exact.map((value) => Math.max(1, Math.floor(value)));
+  let missing = 100 - result.reduce((sum, value) => sum + value, 0);
+  const order = exact.map((value, index) => ({ index, rest: value - Math.floor(value) })).sort((a, b) => b.rest - a.rest);
+  for (let i = 0; missing > 0; i = (i + 1) % order.length, missing -= 1) result[order[i].index] += 1;
+  for (; missing < 0; missing += 1) {
+    const biggest = result.indexOf(Math.max(...result));
+    result[biggest] -= 1;
+  }
+  return result;
+}
+
+export function buildMixId(parts) {
+  const weights = normalizeWeights(parts.map((part) => part.weight));
+  return `mix:${parts.map((part, index) => `${part.id}=${weights[index]}`).join(",")}`;
+}
+
+// Selector entry for a mix, or null when it refers to a checkpoint this server does not have.
+export function mixEntry(id, models) {
+  const parts = parseMixId(id);
+  if (!parts) return null;
+  const named = parts.map((part) => ({ ...part, name: models.find((model) => model.id === part.id && model.kind !== "base")?.name }));
+  if (named.some((part) => !part.name)) return null;
+  return { id, name: `Fúze: ${named.map((part) => `${part.name} ${part.weight} %`).join(" + ")}`, kind: "mix", parts: named };
+}
+
+export function mixName(parts, models) {
+  return parts.map((part) => `${models.find((model) => model.id === part.id)?.name || part.id} ${part.weight} %`).join(" + ");
+}
+
+export const MIX_STORAGE_KEY = "img2img-mixes-v1";

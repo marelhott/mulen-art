@@ -100,3 +100,13 @@ class AtelierTests(unittest.TestCase):
         self.assertEqual(len(sources),1)
         self.assertTrue(emitted[0]['source_url'].startswith('/library/source_atelier_'))
         self.assertEqual(updates, sorted(updates))
+
+
+class MulenMaraModelTests(unittest.TestCase):
+    def test_mulen_mara_is_an_atelier_model_with_its_own_trigger(self):
+        from app_runtime import atelier
+        self.assertTrue(atelier.is_atelier_model("mulen_mara"))
+        self.assertEqual(atelier.painting_prompt("mulen_mara", "a pale deer"), "mulpaint, a pale deer")
+        self.assertEqual(atelier.painting_prompt("mulen_mara", ""), "mulpaint, ")
+        self.assertEqual(atelier.painting_prompt("hofmann_sdxl", "a pale deer"), "a pale deer")
+        self.assertEqual(atelier.painting_prompt("tuymans_modal_2400", "x"), "mvhpaint, x")

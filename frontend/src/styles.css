@@ -2160,3 +2160,28 @@ input[type="range"]::-moz-range-progress {
 @media (prefers-reduced-motion: reduce) {
   .card-model-badge, .card-mode-badge { transition: none; }
 }
+
+/* Checkpoint mixes */
+.checkpoint-row { position: relative; display: block; }
+.checkpoint-row > button:first-child { width: 100%; }
+.checkpoint-row.is-mix > button:first-child { padding-right: 30px; }
+.checkpoint-row .mix-remove {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  width: 22px; min-height: 22px; display: grid; place-items: center; padding: 0;
+  border: 0; background: transparent; color: var(--muted); border-radius: 4px; cursor: pointer;
+}
+.checkpoint-row .mix-remove:hover, .checkpoint-row .mix-remove:focus-visible { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.mix-tag { font-style: normal; font-size: 8px; letter-spacing: .08em; padding: 1px 5px; margin-right: 6px; border-radius: 999px; color: var(--accent-ink); background: var(--accent); vertical-align: 1px; }
+.mix-builder { margin-top: 10px; border: 1px dashed var(--line-strong); border-radius: 8px; padding: 8px 10px; }
+.mix-builder summary { cursor: pointer; font-size: 10px; letter-spacing: .06em; color: var(--secondary); display: flex; align-items: center; gap: 6px; list-style: none; }
+.mix-builder summary::-webkit-details-marker { display: none; }
+.mix-builder[open] summary { color: var(--accent); margin-bottom: 6px; }
+.mix-rows { display: grid; gap: 4px; margin: 8px 0; }
+.mix-row { display: grid; gap: 4px; }
+.mix-row > button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 24px; text-align: left; padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 11px; cursor: pointer; }
+.mix-row > button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.mix-row > button:disabled { opacity: .45; cursor: not-allowed; }
+.mix-row b { font-weight: 600; color: var(--accent); }
+.mix-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+.mix-add { width: 100%; justify-content: center; }
+.mix-add:disabled { opacity: .5; cursor: not-allowed; }

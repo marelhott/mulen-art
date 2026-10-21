@@ -240,7 +240,7 @@ def generate_job(job_id: str, payload: dict):
 
 
 @app.cls(
-    image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=16384,
+    image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=24576,  # 24 GB: blending two checkpoints holds two SDXL copies on the CPU
     volumes={"/models": models, "/outputs": outputs, "/archives": archives},
     # Per model pool (see MAX_GPU_JOBS above): one container per job, 10 per model.
     min_containers=0, max_containers=MAX_GPU_JOBS, scaledown_window=20,

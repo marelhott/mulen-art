@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode, retryUrl, RETRY_DELAYS_MS } from "./studioTools.js";
+import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode, retryUrl, RETRY_DELAYS_MS, isMixId, parseMixId, normalizeWeights, buildMixId, mixEntry } from "./studioTools.js";
 
 const items = [
   { id: "a", model_id: "m1", settings: { prompt: "red fox", seed: 42, worker_seconds: 20 } },
@@ -65,4 +65,31 @@ test("retryUrl cache-busts failed image loads but leaves inline sources alone", 
   assert.equal(retryUrl("data:image/png;base64,xx", 3), "data:image/png;base64,xx");
   assert.equal(retryUrl("", 1), "");
   assert.ok(RETRY_DELAYS_MS.length >= 2);
+});
+
+test("normalizeWeights always yields whole percents summing to 100 with no part below 1", () => {
+  assert.deepEqual(normalizeWeights([50, 50]), [50, 50]);
+  assert.deepEqual(normalizeWeights([1, 1, 1]), [34, 33, 33]);
+  assert.deepEqual(normalizeWeights([3, 1]), [75, 25]);
+  assert.deepEqual(normalizeWeights([1000, 1]), [99, 1]);
+  for (const raw of [[7, 13, 29, 51], [1, 1, 1, 1], [100, 1, 1, 1], [33, 33, 34]]) {
+    const result = normalizeWeights(raw);
+    assert.equal(result.reduce((sum, value) => sum + value, 0), 100);
+    assert.ok(result.every((value) => value >= 1));
+  }
+});
+
+test("mix ids round-trip and are validated like the server does", () => {
+  const id = buildMixId([{ id: "mulen_mara", weight: 3 }, { id: "tuymans_modal_2400", weight: 1 }]);
+  assert.equal(id, "mix:mulen_mara=75,tuymans_modal_2400=25");
+  assert.ok(isMixId(id));
+  assert.deepEqual(parseMixId(id), [{ id: "mulen_mara", weight: 75 }, { id: "tuymans_modal_2400", weight: 25 }]);
+  for (const bad of ["mix:a=100", "mix:a=60,a=40", "mix:a=60,b=30", "mix:a=0,b=100", "a=50,b=50", "mix:a=20,b=20,c=20,d=20,e=20", "mix:A=50,b=50"]) assert.equal(parseMixId(bad), null, bad);
+});
+
+test("mixEntry names a mix and rejects ones that mention unknown or base checkpoints", () => {
+  const models = [{ id: "a", name: "A" }, { id: "b", name: "B" }, { id: "sdxl_base", name: "Base", kind: "base" }];
+  assert.equal(mixEntry("mix:a=60,b=40", models).name, "Fúze: A 60 % + B 40 %");
+  assert.equal(mixEntry("mix:a=60,zzz=40", models), null);
+  assert.equal(mixEntry("mix:a=60,sdxl_base=40", models), null);
 });

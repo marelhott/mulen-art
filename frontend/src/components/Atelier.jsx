@@ -2,8 +2,10 @@ import React from "react";
 import {
   Check,
   Sparkles,
+  X,
 } from "lucide-react";
 import { Label, Range, Select } from "./controls";
+import { MixBuilder } from "./MixBuilder";
 
 export function AtelierQueue({p}) {
   const counts = p.job.queue_counts || {};
@@ -35,8 +37,12 @@ export function AtelierQueue({p}) {
   </section>;
 }
 
-export function AtelierControls({atelier: a, update, models, archives = [], archiveStatus, reloadArchives, generating, onGenerate}) {
-  const choices = models.filter(model => model.id.startsWith("tuymans_") || ["tuy_small", "hofmann_sdxl"].includes(model.id));
+const isArtistId = id => id.startsWith("tuymans_") || ["tuy_small", "hofmann_sdxl", "mulen_mara"].includes(id);
+
+export function AtelierControls({atelier: a, update, models, archives = [], archiveStatus, reloadArchives, generating, onGenerate, onAddMix, onRemoveMix}) {
+  const artists = models.filter(model => model.kind !== "mix" && isArtistId(model.id));
+  // A mix is offered here only when every checkpoint in it is an artist checkpoint.
+  const choices = models.filter(model => (model.kind === "mix" ? model.parts.every(part => isArtistId(part.id)) : isArtistId(model.id)));
   const modes = [
     {id: "noise", name: "Volná studie", description: "Nový obraz přímo z šumu. Bez námětu i bez promptu; obsah vybírá samotný checkpoint."},
     {id: "subject", name: "Automatický námět", description: "Aplikace vybere střídmý námět a vytvoří obraz checkpointem. Nic nepíšeš."},
@@ -61,9 +67,13 @@ export function AtelierControls({atelier: a, update, models, archives = [], arch
     {!["noise", "archive"].includes(a.mode) && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
       items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Postavy a gesta"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
     <div className="control-block"><Label>CHECKPOINTY · MALÍŘSKÉ ZPRACOVÁNÍ</Label>
-      <div className="checkpoint-options" role="group" aria-label="Modely Ateliéru">{choices.map(model => <button key={model.id} aria-pressed={a.modelIds.includes(model.id)} onClick={() => update({modelIds: a.modelIds.includes(model.id) ? (a.modelIds.length > 1 ? a.modelIds.filter(id => id !== model.id) : a.modelIds) : [...a.modelIds, model.id]})}>
-        <span>{model.name}</span>{a.modelIds.includes(model.id) && <Check size={14} />}
-      </button>)}</div>
+      <div className="checkpoint-options" role="group" aria-label="Modely Ateliéru">{choices.map(model => <div key={model.id} className={`checkpoint-row ${model.kind === "mix" ? "is-mix" : ""}`}>
+        <button aria-pressed={a.modelIds.includes(model.id)} onClick={() => update({modelIds: a.modelIds.includes(model.id) ? (a.modelIds.length > 1 ? a.modelIds.filter(id => id !== model.id) : a.modelIds) : [...a.modelIds, model.id]})}>
+          <span>{model.kind === "mix" && <i className="mix-tag">FÚZE</i>}{model.kind === "mix" ? model.name.replace(/^Fúze: /, "") : model.name}</span>{a.modelIds.includes(model.id) && <Check size={14} />}
+        </button>
+        {model.kind === "mix" && <button type="button" className="mix-remove" aria-label={`Odebrat fúzi ${model.name}`} title="Odebrat fúzi" onClick={() => onRemoveMix(model.id)}><X size={12} /></button>}
+      </div>)}</div>
+      <MixBuilder candidates={artists} onAdd={id => onAddMix(id, "atelier")} />
       <p className="help-text">Každý námět i seed se použije na všechny vybrané modely. Výsledky se ukládají také na plátno a do knihovny.</p>
     </div>
     <Select label="ROZLIŠENÍ PRO MODEL" value={a.ratio === "random" ? "random" : `${a.width}x${a.height}`} onChange={value => {if(value === "random") {update({ratio:"random"}); return;} const [width,height] = value.split("x").map(Number); update({width,height,ratio:"fixed"});}}
