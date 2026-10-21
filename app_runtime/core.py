@@ -300,7 +300,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
             raise ValueError("Invalid atelier mode or theme")
         if not is_atelier_model(model_id) or lora_id != "none":
             raise ValueError("Ateliér uses trained artist checkpoints")
-        if atelier_mode == "archive" and payload.get("atelier_archive", "hofmann") not in {"hofmann", "tuymans"}:
+        if atelier_mode == "archive" and payload.get("atelier_archive", "hofmann") not in {"hofmann", "tuymans", "mulen"}:
             raise ValueError("Unknown reference archive")
         dimensions = [payload.get("width", 1024), payload.get("height", 1024)]
         if any(isinstance(v, bool) or int(v) != float(v) or not 512 <= int(v) <= 1536 or int(v) % 8 for v in dimensions):

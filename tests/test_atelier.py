@@ -162,7 +162,8 @@ class ColourHintTests(AtelierTests):
                 phrase, source = atelier.color_hint('tuymans_modal_2400', 7)
                 self.assertEqual((phrase, source), ('blue', 'one.png'))
                 self.assertEqual(atelier.color_archive_for('mix:tuymans_sdxl=50,hofmann_sdxl=50'), 'tuymans')
-                self.assertEqual(atelier.color_archive_for('mulen_mara'), None)
+                self.assertEqual(atelier.color_archive_for('mulen_mara'), 'mulen')
+                self.assertEqual(atelier.color_archive_for('sdxl_base'), None)
 
 
 class MulenMaraModelTests(unittest.TestCase):

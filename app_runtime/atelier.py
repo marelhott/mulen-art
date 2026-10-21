@@ -67,7 +67,7 @@ def painting_prompt(model_id, text):
 # artist's actual distribution.
 COLOR_GUIDANCE_VIVID = 4.5  # level 2: stronger text pull, no "muted/pale" qualifiers
 COLOR_GUIDANCE = 3.0  # lowest CFG at which the colour hint reliably shows (0.5 ignores text entirely)
-COLOR_ARCHIVES = {"hofmann_sdxl": "hofmann"}
+COLOR_ARCHIVES = {"hofmann_sdxl": "hofmann", "mulen_mara": "mulen"}
 FALLBACK_COLORS = ["red", "pink", "orange", "yellow", "green", "teal", "blue", "violet", "brown", "grey", "white", "black"]
 
 
