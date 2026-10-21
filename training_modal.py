@@ -28,16 +28,27 @@ def train_variant(kind: str = "lora", steps: int = 300, learning_rate: float = 0
     import json, subprocess, time, traceback
     from datetime import datetime, timezone
     import torch
-    if kind not in {'lora','full','approved'} or not 1 <= steps <= 3000:
+    if kind not in {'lora','full','approved','mulen'} or not 1 <= steps <= 3000:
         raise ValueError('Invalid bounded training configuration')
     if not 1e-7 <= learning_rate <= 1e-4:
         raise ValueError('Learning rate outside reviewed range')
     deadline = 1620 if kind == 'lora' and steps <= 300 else 6600
-    run_id = run_id or ('lora64' if kind == 'lora' else ('full-unet-approved' if kind == 'approved' else 'full-unet')) + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    prefix = {'lora':'lora64','approved':'full-unet-approved','mulen':'full-unet-mulen'}.get(kind,'full-unet')
+    run_id = run_id or prefix + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     if '/' in run_id or '..' in run_id: raise ValueError('Invalid run ID')
     folder = Path('/results') / run_id
-    if folder.exists(): raise RuntimeError('Run ID already exists: automatic restart is refused; inspect preserved checkpoints before resuming')
-    folder.mkdir()
+    resume_state = None
+    if folder.exists():
+        # Modal reschedules a preempted input with the same arguments: continue from the newest saved
+        # optimizer state instead of paying for the finished steps again. Completed runs are never touched.
+        previous = json.loads((folder/'status.json').read_text()) if (folder/'status.json').exists() else {}
+        if previous.get('status') == 'completed': raise RuntimeError('Run already completed; refusing to restart it')
+        states = sorted(folder.glob('*-step*-state'))
+        resume_state = states[-1] if states else None
+        attempt = len(list(folder.glob('train*.log'))) + 1
+        if (folder/'train.log').exists(): (folder/'train.log').rename(folder/f'train.attempt{attempt-1}.log')
+    else:
+        folder.mkdir()
     dataset = '''[general]
 caption_extension = ".txt"
 shuffle_caption = false
@@ -64,6 +75,13 @@ num_repeats = 1
         # At this pinned commit sdxl_train.py does not apply per-image prior loss weights.
         dataset = dataset.replace('num_repeats = 1', 'num_repeats = 4')
         dataset += '\n[[datasets.subsets]]\nimage_dir = "/data/dataset-v1/regularization"\nnum_repeats = 1\ncaption_dropout_rate = 0.0\n'
+    if kind == 'mulen':
+        manifest=json.loads(Path('/data/dataset-mulen-v1/manifest.json').read_text())
+        if sum(1 for r in manifest if r['used'])!=226: raise RuntimeError('Expected the 226 prepared Mulen Mara paintings')
+        # Same recipe as the validated Tuymans run: whole images x4, caption dropout .35, no replay, no crops.
+        dataset=dataset.replace('/data/dataset-v2/train','/data/dataset-mulen-v1/whole')
+        dataset=dataset.replace('caption_dropout_rate = 0.15','caption_dropout_rate = 0.35')
+        dataset=dataset.replace('num_repeats = 1','num_repeats = 4')
     if kind == 'approved':
         manifest=json.loads(Path('/data/dataset-approved-v3/manifest.json').read_text())
         if len(manifest)!=247: raise RuntimeError('Expected all 247 approved sources')
@@ -88,17 +106,25 @@ num_repeats = 1
       'save_every_n_steps':100 if steps <= 300 else 200,'save_state':True,'save_state_on_train_end':True,'save_last_n_steps':steps,
       'logging_dir':str(folder/'logs'),'log_with':'tensorboard',
     }
-    if kind in {'full','approved'}:
+    if kind in {'full','approved','mulen'}:
         for key in ['network_module','network_dim','network_alpha','network_train_unet_only']:
             config.pop(key)
-        config['output_name']='mvhpaint_full_unet'
+        config['output_name']='mulen_mara_full_unet' if kind == 'mulen' else 'mvhpaint_full_unet'
+        if kind == 'mulen': config['save_every_n_steps']=600  # resume points; only the newest optimizer state is kept
         config['train_text_encoder']=False
         config['lr_warmup_steps']=50
         config['save_last_n_steps_state']=200
+    if resume_state:
+        # The saved state holds weights, optimizer and scheduler but no step counter at this commit,
+        # so run only the steps still missing; the finished ones are already in the weights.
+        import re
+        done=int(re.search(r'step(\d+)-state$',resume_state.name).group(1))
+        if done >= steps: raise RuntimeError('Newest saved state already covers the requested steps')
+        config['resume']=str(resume_state); config['max_train_steps']=steps-done
     import toml
     (folder/'train.toml').write_text(toml.dumps(config))
     (folder/'environment.txt').write_text(subprocess.check_output(['pip','freeze'],text=True))
-    status={'run_id':run_id,'commit':COMMIT,'config':config,
+    status={'run_id':run_id,'commit':COMMIT,'config':config,'resumed_from':str(resume_state) if resume_state else None,
             'gpu':torch.cuda.get_device_name(),'started_at':datetime.now(timezone.utc).isoformat(),
             'gpu_hourly_usd':2.4984,'cpu_ram_hourly_usd_estimate':0.700128,
             'timeout_seconds':7200, 'subprocess_deadline_seconds':deadline,'status':'running'}
@@ -135,15 +161,17 @@ num_repeats = 1
     return status
 
 @app.local_entrypoint()
-def main(kind: str = "lora", steps: int = 300, learning_rate: float = 0.00005):
+def main(kind: str = "lora", steps: int = 300, learning_rate: float = 0.00005, resume_run: str = ""):
     import json
-    # Upload only the prepared private dataset; never publish it or modify source images.
-    dataset_name='dataset-approved-v3' if kind == 'approved' else 'dataset-v2'
-    local=Path(__file__).parent/'outputs/research/tuymans'/dataset_name
-    if not (local/'manifest.json').exists(): raise RuntimeError('Prepare and review dataset first')
-    with data.batch_upload() as upload:
-        upload.put_directory(local, '/'+dataset_name)
     from datetime import datetime, timezone
-    prefix='lora64' if kind=='lora' else ('full-unet-approved' if kind=='approved' else 'full-unet')
+    prefix={'lora':'lora64','approved':'full-unet-approved','mulen':'full-unet-mulen'}.get(kind,'full-unet')
+    if resume_run:  # continue a preempted run from its newest saved state; the dataset is already uploaded
+        print(json.dumps(train_variant.remote(kind, steps, learning_rate, resume_run),indent=2)); return
+    # Upload only the prepared private dataset; never publish it or modify source images.
+    dataset_name={'approved':'dataset-approved-v3','mulen':'dataset-mulen-v1'}.get(kind,'dataset-v2')
+    local=Path(__file__).parent/'outputs/research'/('mulen_mara' if kind == 'mulen' else 'tuymans')/dataset_name
+    if not (local/'manifest.json').exists(): raise RuntimeError('Prepare and review dataset first')
+    with data.batch_upload(force=True) as upload:
+        upload.put_directory(local, '/'+dataset_name)
     run_id=prefix+'-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     print(json.dumps(train_variant.remote(kind, steps, learning_rate, run_id),indent=2))
