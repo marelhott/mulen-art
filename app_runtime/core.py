@@ -69,6 +69,8 @@ class GenerationInput:
     atelier_archive: str = "hofmann"
     atelier_color_level: int = 2  # 0 off, 1 archive-like palette, 2 vivid
     atelier_color_text: str = ""
+    atelier_color_cfg: float = 0.0  # 0 = the level's default guidance
+    atelier_color_until: float = 0.2  # fraction of the steps the colour hint is active; 1 = all steps
     width: int = 1024
     height: int = 1024
 
@@ -330,6 +332,8 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
         atelier_color_level=0 if payload.get("atelier_color") is False else int(clamp(int(payload.get("atelier_color_level", 2)), 0, 2)),
         atelier_color_text=str(payload.get("atelier_color_text", ""))[:80],
+        atelier_color_cfg=clamp(float(payload.get("atelier_color_cfg", 0.0)), 0.0, 8.0),
+        atelier_color_until=clamp(float(payload.get("atelier_color_until", 0.2)), 0.1, 1.0),
     )
 
 

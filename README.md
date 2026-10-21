@@ -269,7 +269,9 @@ Queue feedback is compact and automatically returns to zero/ready 2.5 seconds af
   (změřeno: ~98 % obrazů sdílí dominantní odstín). Posun startovního šumu strukturu ničí, proto každá studie
   dostane krátký barevný pokyn ve slovníku tréninkových popisků (např. „pale blue and grey“), odvozený ze
   dvou dominantních barev náhodného skutečného obrazu malíře z archivu, a CFG se zvedne na 3 (archivní)
-  nebo 4,5 (výrazná, výchozí), aby text zabral. Volba „Bez úpravy“ vrací původní chování. Metadata nesou
+  nebo 4,5 (výrazná, výchozí), aby text zabral. Pokyn běží jen v prvních 20 % kroků (`atelier_color_until`), pak výpočet dokončí původní prázdný
+  prompt s původním CFG: v měření na 48 seedech to drží ostrost tahu na úrovni bez úpravy (3,71 vs 3,76; plný
+  text ji snižuje na 2,69) a barvy zůstávají. Volba „Bez úpravy“ vrací původní chování. Metadata nesou
   `color_hint`, `color_source`, `color_level` a `requested_cfg`.
 - **Fúze checkpointů**: 2–4 checkpointy smíchané váženým průměrem vah (`mix:id=60,id=40`), v UI přepínač
   „Jednotlivé / Fúze“; funguje v Plátně i ve všech režimech Ateliéru. Worker má kvůli tomu 24 GB RAM.

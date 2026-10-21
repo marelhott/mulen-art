@@ -26,7 +26,7 @@ class Pipeline:
 
     def __call__(self, **kwargs):
         self.calls.append(kwargs)
-        self.num_timesteps = int(kwargs['num_inference_steps'] * kwargs['strength'])
+        self.num_timesteps = int(kwargs['num_inference_steps'] * kwargs.get('strength', 1 - kwargs.get('denoising_start', 0)))
         callback = kwargs['callback_on_step_end']
         if callback:
             for i in range(self.num_timesteps):

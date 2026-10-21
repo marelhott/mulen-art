@@ -81,32 +81,44 @@ def color_archive_for(model_id):
 
 
 def color_name(hue, saturation, value):
-    """Name of one pixel's colour in the vocabulary the training captions used."""
-    if value < 0.22:
+    """Name of one pixel's colour: about 35 shades, so palettes are not limited to a dozen basic colours."""
+    h, s_, v = hue % 1.0, saturation, value
+    if v < 0.2:
         return "black"
-    if saturation < 0.12:
-        return "white" if value > 0.82 else "grey"
-    hue = hue % 1.0
-    if hue >= 0.95 or hue < 0.04:
-        name = "pink" if (value > 0.72 and saturation < 0.5) else ("brown" if value < 0.5 else "red")
-    elif hue < 0.11:
-        name = "brown" if value < 0.6 else "orange"
-    elif hue < 0.19:
-        name = "yellow" if value >= 0.55 else "brown"
-    elif hue < 0.42:
-        name = "green"
-    elif hue < 0.53:
-        name = "teal"
-    elif hue < 0.72:
-        name = "blue"
-    elif hue < 0.83:
-        name = "violet"
-    else:
-        name = "pink"
-    return name
+    if s_ < 0.12:
+        return "white" if v > 0.85 else ("light grey" if v > 0.62 else ("grey" if v > 0.36 else "charcoal"))
+    if h >= 0.95 or h < 0.03:
+        return "burgundy" if v < 0.42 else ("pink" if (v > 0.7 and s_ < 0.5) else "red")
+    if h < 0.07:
+        return "rust" if v < 0.6 else ("salmon" if (s_ < 0.5 and v > 0.7) else "coral")
+    if h < 0.11:
+        if v < 0.5:
+            return "brown"
+        if s_ < 0.35:
+            return "beige"
+        return "terracotta" if v < 0.65 else ("peach" if s_ < 0.55 else "orange")
+    if h < 0.17:
+        if s_ < 0.3 and v > 0.8:
+            return "cream"
+        return "ochre" if v < 0.7 else "yellow"
+    if h < 0.25:
+        return "olive" if v < 0.55 else ("sage" if s_ < 0.4 else "lime")
+    if h < 0.42:
+        return "sage" if s_ < 0.3 else ("dark green" if v < 0.45 else ("mint" if (v > 0.78 and s_ < 0.5) else "green"))
+    if h < 0.52:
+        return "teal" if v < 0.65 else "turquoise"
+    if h < 0.62:
+        return "navy" if v < 0.4 else ("sky blue" if (v > 0.75 and s_ < 0.55) else "blue")
+    if h < 0.72:
+        return "navy" if v < 0.4 else ("slate blue" if s_ < 0.35 else ("cobalt" if s_ > 0.7 else "blue"))
+    if h < 0.83:
+        return "purple" if v < 0.5 else ("lavender" if (v > 0.7 and s_ < 0.45) else ("mauve" if s_ < 0.3 else "violet"))
+    return "plum" if v < 0.5 else ("magenta" if s_ >= 0.6 else "pink")
 
 
-NEUTRALS = {"white", "grey", "black"}
+NEUTRALS = {"white", "light grey", "grey", "charcoal", "black"}
+# Only the basic names take a "pale/muted/dark" qualifier; the finer shades (ochre, mauve, navy ...) already encode it.
+QUALIFIABLE = {"red", "orange", "yellow", "green", "blue", "violet", "pink", "brown", "teal"}
 
 
 def color_phrase_from_image(image, adjectives=True):
@@ -137,7 +149,7 @@ def color_phrase_from_image(image, adjectives=True):
     parts = []
     for name in ranked:
         sat, val = (stats[name][0] / counts[name], stats[name][1] / counts[name])
-        adjective = "" if (name in NEUTRALS or not adjectives) else ("dark" if val < 0.4 else ("pale" if sat < 0.32 and val > 0.7 else ("muted" if sat < 0.35 else "")))
+        adjective = "" if (name not in QUALIFIABLE or not adjectives) else ("dark" if val < 0.4 else ("pale" if sat < 0.32 and val > 0.7 else ("muted" if sat < 0.35 else "")))
         parts.append(f"{adjective} {name}".strip())
     return " and ".join(parts)
 
@@ -183,6 +195,7 @@ def generate_study(spec, progress, image_callback):
         prompt = "" if spec.atelier_mode == "noise" else painting_prompt(spec.model_id, text)
         # Colour hint for the two modes that start from nothing (noise, subject). The photo mode already gets its
         # colours from the photograph and the archive mode from the reference painting.
+        base_prompt = prompt
         color_text, color_source, cfg = None, None, spec.cfg
         if spec.atelier_mode in {"noise", "subject"} and (spec.atelier_color_level > 0 or spec.atelier_color_text):
             if spec.atelier_color_text:
@@ -191,7 +204,7 @@ def generate_study(spec, progress, image_callback):
                 color_text, color_source = color_hint(spec.model_id, seed, adjectives=spec.atelier_color_level != 2)
             # For a subject the colour comes first, so the subject text cannot drown it out.
             prompt = painting_prompt(spec.model_id, color_text if spec.atelier_mode == "noise" else f"{color_text}, {text}")
-            cfg = max(spec.cfg, COLOR_GUIDANCE_VIVID if spec.atelier_color_level == 2 else COLOR_GUIDANCE)
+            cfg = max(spec.cfg, spec.atelier_color_cfg or (COLOR_GUIDANCE_VIVID if spec.atelier_color_level == 2 else COLOR_GUIDANCE))
         notify(.02, "Ateliér: načítání modelu")
         source_url = None
         # The optional photographic study uses SDXL Base, then releases its pipeline before painting.
@@ -231,11 +244,26 @@ def generate_study(spec, progress, image_callback):
             pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
             text_pipe = modules["text_pipeline"].from_pipe(pipe)
             notify(.15, "Ateliér: nový obraz z šumu")
-            result = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
-                guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(),
-                callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72, stage="Ateliér"),
-                callback_on_step_end_tensor_inputs=[]).images[0]
-            actual_steps = int(text_pipe.num_timesteps)
+            until = spec.atelier_color_until if color_text else 1.0
+            if until < 1.0:
+                # Two phases of one denoising run. The colour hint decides palette and layout in the first steps;
+                # the rest runs without it (the artist's own prompt and CFG), because a text prompt present all the
+                # way through measurably softens the brushwork (edge strength -27 %).
+                latents = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
+                    guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(), denoising_end=until, output_type="latent",
+                    callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72 * until, stage="Ateliér · barva"),
+                    callback_on_step_end_tensor_inputs=[]).images
+                result = pipe(prompt="" if spec.atelier_mode == "noise" else base_prompt, negative_prompt=None, image=latents, denoising_start=until,
+                    guidance_scale=spec.cfg, num_inference_steps=spec.steps, generator=generator(),
+                    callback_on_step_end=core.build_step_callback(notify, .18 + .72 * until, 1, 0, spec.steps, span=.72 * (1 - until), stage="Ateliér · tah"),
+                    callback_on_step_end_tensor_inputs=[]).images[0]
+                actual_steps = int(pipe.num_timesteps) + int(text_pipe.num_timesteps)
+            else:
+                result = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
+                    guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(),
+                    callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72, stage="Ateliér"),
+                    callback_on_step_end_tensor_inputs=[]).images[0]
+                actual_steps = int(text_pipe.num_timesteps)
             del text_pipe
         result = core.upscale_if_needed(result, spec.scale)
         meta = {"generation_type": "atelier", "atelier_mode": spec.atelier_mode,

@@ -20,7 +20,9 @@ class TextPipeline:
         self.num_timesteps = kwargs['num_inference_steps']
         for index in range(self.num_timesteps):
             kwargs['callback_on_step_end'](self, index, None, {})
-        return SimpleNamespace(images=[Image.new('RGB', (kwargs['width'], kwargs['height']), '#b5b2a1')])
+        picture = Image.new('RGB', (kwargs['width'], kwargs['height']), '#b5b2a1')
+        # like diffusers: with output_type="latent" `images` is the latent tensor itself, not a list of pictures
+        return SimpleNamespace(images=picture if kwargs.get('output_type') == 'latent' else [picture])
 
 
 class AtelierTests(unittest.TestCase):
@@ -103,23 +105,28 @@ class AtelierTests(unittest.TestCase):
 
 
 class ColourHintTests(AtelierTests):
-    def test_colour_hint_replaces_the_empty_prompt_and_lifts_cfg_only_where_text_acts(self):
-        text, _, _, _, _, emitted, _ = self.run_study(num_images=3, atelier_color_level=1)
+    def test_colour_hint_runs_only_the_first_steps_then_the_artists_own_prompt_finishes(self):
+        text, painting, _, _, _, emitted, _ = self.run_study(num_images=3, atelier_color_level=1)
         for call, meta in zip(text.calls, emitted):
             self.assertTrue(call['prompt'].startswith('mvhpaint, '))
             self.assertEqual(call['prompt'], 'mvhpaint, ' + meta['color_hint'])
-            self.assertEqual(call['guidance_scale'], 3.0)
+            self.assertEqual((call['guidance_scale'], call['denoising_end'], call['output_type']), (3.0, 0.2, 'latent'))
             self.assertEqual((meta['cfg'], meta['requested_cfg']), (3.0, .5))
+        for call in painting.calls:  # phase two: no colour text, the requested CFG, continuing at the same point
+            self.assertEqual((call['prompt'], call['guidance_scale'], call['denoising_start']), ('', .5, 0.2))
         self.assertEqual(len({meta['color_hint'] for meta in emitted}) > 1, True)  # different studies, different palettes
         _, _, _, _, _, emitted, _ = self.run_study(cfg=5.0, atelier_color_level=1)
         self.assertEqual(emitted[0]['cfg'], 5.0)  # a higher requested CFG is never lowered
         text, _, _, _, _, emitted, _ = self.run_study()  # the default is the vivid level: stronger text pull
         self.assertEqual((text.calls[0]['guidance_scale'], emitted[0]['color_level']), (4.5, 2))
         self.assertNotRegex(emitted[0]['color_hint'], r'\b(pale|muted)\b')
+        text, painting, _, _, _, _, _ = self.run_study(atelier_color_until=1.0)  # opt in to the hint for every step
+        self.assertEqual((len(text.calls), len(painting.calls), 'denoising_end' in text.calls[0]), (1, 0, False))
 
     def test_subject_keeps_its_subject_and_adds_the_colour_hint(self):
-        text, _, _, _, _, emitted, _ = self.run_study(atelier_mode='subject', atelier_theme='face')
+        text, painting, _, _, _, emitted, _ = self.run_study(atelier_mode='subject', atelier_theme='face')
         self.assertEqual(text.calls[0]['prompt'], 'mvhpaint, ' + emitted[0]['color_hint'] + ', ' + emitted[0]['subject_text'])
+        self.assertEqual(painting.calls[0]['prompt'], 'mvhpaint, ' + emitted[0]['subject_text'])  # the subject alone finishes the image
 
     def test_photo_and_opt_out_are_untouched(self):
         text, painting, _, _, _, emitted, _ = self.run_study(atelier_mode='photo', denoise=.9)
@@ -143,12 +150,14 @@ class ColourHintTests(AtelierTests):
                 image.paste(Image.new('RGB', (width + 1, 48), colour), (index * width, 0))
             return atelier.color_phrase_from_image(image)
         self.assertEqual(phrase('#2a60c8'), 'blue')
-        self.assertEqual(phrase('#bcd0e8', '#8a8a86'), 'pale blue and grey')
+        self.assertEqual(phrase('#bcd0e8', '#8a8a86'), 'sky blue and grey')
         self.assertEqual(phrase('#c83020', '#101010'), 'red and black')
         self.assertIn('pink', phrase('#f0b0c0', '#f0f0f0'))
         self.assertEqual(atelier.color_name(0.58, 0.8, 0.8), 'blue')
         self.assertEqual(atelier.color_name(0.3, 0.8, 0.8), 'green')
         self.assertEqual(atelier.color_name(0.0, 0.0, 0.9), 'white')
+        names = {atelier.color_name(hue / 100, sat / 10, val / 10) for hue in range(100) for sat in (2, 5, 9) for val in (3, 5, 7, 9)}
+        self.assertGreaterEqual(len(names), 28)  # a wide vocabulary, not a dozen basic colours
 
     def test_hint_comes_from_a_real_archive_painting_when_the_model_has_one(self):
         from app_runtime import atelier
