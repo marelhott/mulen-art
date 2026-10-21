@@ -1,4 +1,5 @@
 import React from "react";
+import { creationMode } from "../studioTools";
 import {
   ArrowDownToLine,
   Check,
@@ -31,6 +32,7 @@ export function ImageCard({
 }) {
   const libraryMode = isLibrary || Boolean(onLibraryDrop);
   const checkpointName = modelName || item?.settings?.model_name || item?.model_id || "";
+  const mode = creationMode(item);
   const modalStep = (item?.model_id || item?.settings?.model_id || "").match(/^tuymans_modal_(\d+)$/)?.[1];
   return (
     <article
@@ -111,6 +113,7 @@ export function ImageCard({
           </div>
         )}
         {item && <span className="card-number">{index + 1}</span>}
+        {mode && <span className="card-mode-badge" title="Způsob tvorby">{mode}</span>}
         {modalStep && <span className="card-model-badge" title={checkpointName}>Modal {modalStep}</span>}
       </div>
       {item && (

@@ -1976,6 +1976,8 @@ input[type="range"]::-moz-range-progress {
 .card-caption > span { flex-shrink: 0; }
 .card-model-badge { position: absolute; top: 7px; left: 7px; padding: 3px 5px; border-radius: 4px; color: #fff; background: #111b; font-size: 9px; line-height: 12px; pointer-events: none; }
 
+.card-mode-badge { position: absolute; bottom: 7px; left: 7px; max-width: calc(100% - 14px); padding: 3px 6px; border-radius: 4px; color: #fff; background: #111c; font-size: 9px; line-height: 12px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+
 .atelier-modes { display: grid; gap: 6px; }
 .atelier-mode { display: grid; gap: 5px; text-align: left; padding: 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
 .atelier-mode[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }

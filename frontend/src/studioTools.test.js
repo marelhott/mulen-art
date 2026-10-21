@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings } from "./studioTools.js";
+import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode } from "./studioTools.js";
 
 const items = [
   { id: "a", model_id: "m1", settings: { prompt: "red fox", seed: 42, worker_seconds: 20 } },
@@ -45,4 +45,14 @@ test("controlsFromSettings maps stored settings onto studio controls", () => {
   assert.deepEqual(controls, { engine: { mode: "detail", sampler: "euler_a", schedule: "karras", prompt: "x", negativePrompt: "y", seed: "123" },
     modelId: "m1", loraId: "l", loraStrength: 0.7, denoise: 0.4, cfg: 5, steps: 28 });
   assert.deepEqual(controlsFromSettings(undefined), { engine: {} });
+});
+
+test("creationMode names the Atelier way an image was made and ignores img2img outputs", () => {
+  assert.equal(creationMode({ settings: { generation_type: "atelier", atelier_mode: "photo" } }), "Foto → malba");
+  assert.equal(creationMode({ settings: { generation_type: "atelier", atelier_mode: "noise" } }), "Volná studie");
+  assert.equal(creationMode({ settings: { generation_type: "atelier", atelier_mode: "subject" } }), "Automatický námět");
+  assert.equal(creationMode({ settings: { generation_type: "atelier", atelier_mode: "archive" } }), "Archiv → fúze");
+  assert.equal(creationMode({ settings: { generation_type: "atelier" } }), "Ateliér");
+  assert.equal(creationMode({ settings: { generation_type: "img2img" } }), "");
+  assert.equal(creationMode(null), "");
 });

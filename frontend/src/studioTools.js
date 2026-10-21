@@ -62,3 +62,11 @@ export function controlsFromSettings(settings = {}) {
   if (has(settings.steps)) controls.steps = settings.steps;
   return controls;
 }
+
+const ATELIER_MODES = { noise: "Volná studie", subject: "Automatický námět", photo: "Foto → malba", archive: "Archiv → fúze" };
+
+// How an output was made: one of the four Atelier modes, or empty for ordinary img2img results.
+export function creationMode(item) {
+  const settings = item?.settings || {};
+  return settings.generation_type === "atelier" ? ATELIER_MODES[settings.atelier_mode] || "Ateliér" : "";
+}
