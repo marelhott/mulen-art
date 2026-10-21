@@ -64,7 +64,6 @@ export function AtelierControls({atelier: a, update, models, archives = [], arch
       <div className="checkpoint-options" role="group" aria-label="Modely Ateliéru">{choices.map(model => <button key={model.id} aria-pressed={a.modelIds.includes(model.id)} onClick={() => update({modelIds: a.modelIds.includes(model.id) ? (a.modelIds.length > 1 ? a.modelIds.filter(id => id !== model.id) : a.modelIds) : [...a.modelIds, model.id]})}>
         <span>{model.name}</span>{a.modelIds.includes(model.id) && <Check size={14} />}
       </button>)}</div>
-      <button className="text-button" onClick={() => update({modelIds: ["tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"].filter(id => choices.some(model => model.id === id))})}>Porovnat 800 / 1600 / 2400</button>
       <p className="help-text">Každý námět i seed se použije na všechny vybrané modely. Výsledky se ukládají také na plátno a do knihovny.</p>
     </div>
     <Select label="ROZLIŠENÍ PRO MODEL" value={a.ratio === "random" ? "random" : `${a.width}x${a.height}`} onChange={value => {if(value === "random") {update({ratio:"random"}); return;} const [width,height] = value.split("x").map(Number); update({width,height,ratio:"fixed"});}}

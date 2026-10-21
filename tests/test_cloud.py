@@ -52,7 +52,7 @@ class CloudFlowTests(unittest.TestCase):
         client = TestClient(self.app)
         source = {"image_base64": self.payload["image_base64"]}
         writes = [("post", "/api/generate-batch", {"json": {"inputs": [source]}}),
-                  ("post", "/api/atelier-batch", {"json": {"model_ids": ["tuymans_modal_800"], "count": 1}}),
+                  ("post", "/api/atelier-batch", {"json": {"model_ids": ["hofmann_sdxl"], "count": 1}}),
                   ("post", "/api/library/x", {}), ("delete", "/api/library/x", {}),
                   ("put", "/api/library/order", {"json": {"ids": []}})]
         for method, path, kwargs in writes:
@@ -84,7 +84,7 @@ class CloudFlowTests(unittest.TestCase):
                 optional_int_env("MONTHLY_IMAGE_LIMIT")
 
     def test_monthly_limit_returns_429_for_atelier_without_submitting(self):
-        response = self.client.post("/api/atelier-batch", json={"model_ids": ["tuymans_modal_800"], "count": 3,
+        response = self.client.post("/api/atelier-batch", json={"model_ids": ["hofmann_sdxl"], "count": 3,
             "settings": {"atelier_mode": "subject", "atelier_theme": "face", "seed": 1}})
         self.assertEqual(response.status_code, 429)
         self.assertEqual(self.submissions, [])
@@ -98,7 +98,7 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(client.post("/api/generate-batch", json={"inputs": [source] * 5}).status_code, 413)
         self.assertEqual(client.post("/api/generate-batch", json={"inputs": [source] * 2, "settings": {"num_images": 3}}).status_code, 413)
         atelier = {"atelier_mode": "subject", "atelier_theme": "face", "seed": 1}
-        self.assertEqual(client.post("/api/atelier-batch", json={"model_ids": ["tuymans_modal_800", "tuymans_modal_2400"],
+        self.assertEqual(client.post("/api/atelier-batch", json={"model_ids": ["hofmann_sdxl", "tuymans_modal_2400"],
                                                                   "count": 3, "settings": atelier}).status_code, 413)
         self.assertEqual(self.submissions, [])
         self.assertEqual(self.usage, {})
@@ -148,7 +148,7 @@ class CloudFlowTests(unittest.TestCase):
 
     def test_options_and_polling_do_not_submit_gpu(self):
         data = self.client.get("/api/options").json()
-        self.assertTrue({"tuymans_sdxl", "tuy_small", "hofmann_sdxl", "sdxl_base", "tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"}.issubset({item["id"] for item in data["models"]}))
+        self.assertTrue({"tuymans_sdxl", "tuy_small", "hofmann_sdxl", "sdxl_base", "hofmann_sdxl", "tuymans_sdxl", "tuymans_modal_2400"}.issubset({item["id"] for item in data["models"]}))
         self.assertEqual(len(data["loras"]), 3)
         self.assertEqual(self.client.get("/api/jobs/missing").status_code, 404)
         self.assertEqual(len(self.submissions), 0)
@@ -156,7 +156,7 @@ class CloudFlowTests(unittest.TestCase):
     def test_multiple_checkpoints_keep_inputs_separate_and_seeds_comparable(self):
         client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
         client.auth = ("studio", "test-password")
-        for model in ("tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"):
+        for model in ("hofmann_sdxl", "tuymans_sdxl", "tuymans_modal_2400"):
             response = client.post("/api/generate-batch", json={
                 "inputs": [{"name": name, "image_base64": self.payload["image_base64"]} for name in ("first.png", "second.png")],
                 "settings": {"model_id": model, "num_images": 2, "seed": 4294967295},
@@ -164,7 +164,7 @@ class CloudFlowTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(len(response.json()["jobs"]), 4)
         self.assertEqual(len(self.submissions), 12)
-        for model in ("tuymans_modal_800", "tuymans_modal_1600", "tuymans_modal_2400"):
+        for model in ("hofmann_sdxl", "tuymans_sdxl", "tuymans_modal_2400"):
             for name in ("first.png", "second.png"):
                 payloads = [payload for _, payload in self.submissions if payload["model_id"] == model and payload["source_name"] == name]
                 self.assertEqual([payload["seed"] for payload in payloads], [4294967295, 0])
@@ -173,7 +173,7 @@ class CloudFlowTests(unittest.TestCase):
     def test_atelier_queues_no_source_files_and_compares_all_models_on_same_studies(self):
         client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
         client.auth = ("studio", "test-password")
-        response = client.post("/api/atelier-batch", json={"model_ids": ["tuymans_modal_800", "tuymans_modal_2400"], "count": 3,
+        response = client.post("/api/atelier-batch", json={"model_ids": ["hofmann_sdxl", "tuymans_modal_2400"], "count": 3,
             "settings": {"atelier_mode": "subject", "atelier_theme": "face", "seed": 231020, "cfg": .5, "steps": 28}})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(response.json()["jobs"]), 6)
@@ -184,7 +184,7 @@ class CloudFlowTests(unittest.TestCase):
             self.assertEqual(pair[0]["source_name"],pair[1]["source_name"])
             self.assertTrue(all(payload["cfg"]==.5 and not payload["image_base64"] and payload["source_url"] is None for payload in pair))
         for invalid in ({"model_ids":["sdxl_base"]}, {"count":9}, {"settings":{"atelier_mode":"missing"}}):
-            rejected = client.post("/api/atelier-batch", json={"model_ids":["tuymans_modal_800"], "count":1, **invalid})
+            rejected = client.post("/api/atelier-batch", json={"model_ids":["hofmann_sdxl"], "count":1, **invalid})
             self.assertEqual(rejected.status_code,422)
         self.assertEqual(len(self.submissions),6)
 
