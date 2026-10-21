@@ -262,3 +262,17 @@ The source reference, archive, hash, checkpoint and seed are retained in output 
 Ateliér resolution offers **Random**: square, portrait and landscape SDXL formats are chosen deterministically from each study seed, shared by all compared models. Reference archives retain each source composition and its natural aspect ratio within the selected bounding box. Archive options retry automatically after transient load failures and expose an explicit retry button instead of a blank select.
 
 Queue feedback is compact and automatically returns to zero/ready 2.5 seconds after successful completion; generated images and job history are retained. New submissions cancel the display-reset timer.
+
+## Ateliér: barevnost, fúze checkpointů a Mulen Mara
+
+- **Barevnost** (Volná studie, Automatický námět): z čistého šumu model padá na jednu béžovou paletu
+  (změřeno: ~98 % obrazů sdílí dominantní odstín). Posun startovního šumu strukturu ničí, proto každá studie
+  dostane krátký barevný pokyn ve slovníku tréninkových popisků (např. „pale blue and grey“), odvozený ze
+  dvou dominantních barev náhodného skutečného obrazu malíře z archivu, a CFG se zvedne na 3 (archivní)
+  nebo 4,5 (výrazná, výchozí), aby text zabral. Volba „Bez úpravy“ vrací původní chování. Metadata nesou
+  `color_hint`, `color_source`, `color_level` a `requested_cfg`.
+- **Fúze checkpointů**: 2–4 checkpointy smíchané váženým průměrem vah (`mix:id=60,id=40`), v UI přepínač
+  „Jednotlivé / Fúze“; funguje v Plátně i ve všech režimech Ateliéru. Worker má kvůli tomu 24 GB RAM.
+- **Mulen Mara** (`mulen_mara`, trigger `mulpaint`): plná UNet na 226 obrazech z `~/Desktop/moje obrazy`
+  (`training/prepare_mulen_dataset.py`, popisky `training/mulen_mara_captions.txt`), 2400 kroků, stejný recept
+  jako Tuymans; `scripts/install_checkpoint.py` kopíruje hotový checkpoint na server a ověřuje SHA-256.
