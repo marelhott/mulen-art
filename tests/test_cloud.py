@@ -718,6 +718,29 @@ class CloudFlowTests(unittest.TestCase):
             with patch.dict(sys.modules, {"torch": fake}):
                 self.assertEqual(modal_app.gpu_rate(), expected)
 
+    def test_history_listing_is_cached_until_the_directory_changes_and_purge_removes_old_deletions(self):
+        import json, os, time
+        from datetime import datetime, UTC
+        def write(stem, **extra):
+            (self.output / f"{stem}.png").write_bytes(b"x")
+            (self.output / f"{stem}.json").write_text(json.dumps({"id": stem, "filename": f"{stem}.png", **extra}))
+        write("a"); write("b", deleted=True, deleted_at=datetime.fromtimestamp(time.time() - 40 * 86400, UTC).isoformat())
+        write("c", deleted=True, deleted_at=datetime.now(UTC).isoformat())
+        server._LISTING_CACHE.clear()
+        self.assertEqual([i["id"] for i in server.load_history_items()], ["a"])
+        self.assertEqual(sorted(server.load_deleted_ids()), ["b", "c"])
+        reads = []
+        original = server.read_record
+        with patch.object(server, "read_record", side_effect=lambda p: reads.append(p) or original(p)):
+            server.load_history_items(); server.load_deleted_ids()
+        self.assertEqual(reads, [])  # second call served from the cache
+        write("d")
+        self.assertIn("d", [i["id"] for i in server.load_history_items()])
+        self.assertEqual(server.purge_deleted(30), 1)
+        self.assertFalse((self.output / "b.png").exists() or (self.output / "b.json").exists())
+        self.assertTrue((self.output / "c.png").exists())
+        self.assertEqual(sorted(server.load_deleted_ids()), ["c"])
+
 
 if __name__ == "__main__":
     unittest.main()

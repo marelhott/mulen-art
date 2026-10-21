@@ -287,6 +287,20 @@ def dispatch():
 
 
 @app.function(
+    image=base_image, volumes={"/outputs": outputs}, cpu=0.25, memory=512, timeout=600,
+    schedule=modal.Cron("17 3 * * *"),
+)
+def purge_deleted_images():
+    """Daily: really remove images deleted more than RETENTION_DAYS ago, so the Volume stops growing."""
+    from app_runtime.server import purge_deleted
+    outputs.reload()
+    removed = purge_deleted(int(os.environ.get("DELETED_RETENTION_DAYS", "30")))
+    if removed:
+        outputs.commit()
+    print(f"purged {removed} deleted images")
+
+
+@app.function(
     image=base_image.add_local_dir("frontend/dist", "/app/frontend/dist"),
     volumes={"/outputs": outputs, "/state": state, "/archives": archives},
     min_containers=0, max_containers=1, scaledown_window=20,

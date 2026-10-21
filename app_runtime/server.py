@@ -4,6 +4,8 @@ import base64
 from datetime import datetime, UTC
 import json
 import os
+import re
+import time
 from pathlib import Path
 import threading
 import uuid
@@ -91,10 +93,15 @@ def set_library_membership(item_id: str, saved: bool):
         raise HTTPException(status_code=404, detail="Image not found.")
     data["saved_to_library"] = saved
     data["deleted"] = not saved
+    if saved:
+        data.pop("deleted_at", None)
+    else:
+        data["deleted_at"] = now_iso()
     temporary = metadata_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
     temporary.replace(metadata_path)
     _RECORD_CACHE.pop(str(metadata_path), None)
+    _LISTING_CACHE.clear()
     return {"ok": True, "id": item_id, "item": data}
 
 
@@ -299,16 +306,69 @@ def metadata_paths() -> list[Path]:
     return paths
 
 
+# One scan of the metadata files answers both /api/history lists. Every write replaces or adds a
+# file, which bumps the directory mtime, so that mtime (plus explicit clears) is a safe cache key.
+_LISTING_CACHE: dict[str, Any] = {}
+
+
+def scan_records() -> tuple[list[dict[str, Any]], list[str]]:
+    try:
+        stamp = OUTPUTS_DIR.stat().st_mtime_ns
+    except OSError:
+        return [], []
+    # The 5 s ceiling is a safety net for filesystems that do not bump directory mtimes promptly.
+    if _LISTING_CACHE.get("key") == (str(OUTPUTS_DIR), stamp) and time.monotonic() - _LISTING_CACHE["at"] < 5:
+        return _LISTING_CACHE["value"]
+    items, deleted = [], []
+    for metadata_path in sorted(metadata_paths(), reverse=True):
+        try:
+            data = read_record(metadata_path)
+            if not isinstance(data, dict) or "filename" not in data:
+                continue
+            if data.get("deleted", False):
+                deleted.append(data["id"])
+                continue
+            if not (OUTPUTS_DIR / data["filename"]).exists():
+                continue
+            if "url" not in data:
+                data["url"] = f"{OUTPUTS_URL_PREFIX}/{data['filename']}"
+            data["thumb_url"] = f"{THUMBS_URL_PREFIX}/{thumb_filename(data['filename'])}"
+            items.append(data)
+        except Exception:
+            continue
+    _LISTING_CACHE.update(key=(str(OUTPUTS_DIR), stamp), value=(items, deleted), at=time.monotonic())
+    return items, deleted
+
+
 def load_deleted_ids():
-    ids = []
+    return list(scan_records()[1])
+
+
+def purge_deleted(days: int = 30, now: float | None = None) -> int:
+    """Really remove images the user deleted more than `days` ago (file, thumbnail, record)."""
+    now = time.time() if now is None else now
+    removed = 0
     for path in metadata_paths():
         try:
-            item = read_record(path)
-            if isinstance(item, dict) and item.get("deleted"):
-                ids.append(item["id"])
+            data = read_record(path)
+            if not isinstance(data, dict) or not data.get("deleted"):
+                continue
+            stamp = data.get("deleted_at")
+            deleted_at = datetime.fromisoformat(stamp).timestamp() if stamp else path.stat().st_mtime
+            if now - deleted_at < days * 86400:
+                continue
+            filename = data.get("filename")
+            if filename and re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
+                (OUTPUTS_DIR / filename).unlink(missing_ok=True)
+                thumb_path(filename).unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+            _RECORD_CACHE.pop(str(path), None)
+            removed += 1
         except (OSError, ValueError, KeyError):
             continue
-    return ids
+    if removed:
+        _LISTING_CACHE.clear()
+    return removed
 
 
 def thumb_filename(filename: str) -> str:
@@ -349,22 +409,7 @@ def ensure_thumbnail(filename: str) -> Path | None:
 
 
 def load_history_items() -> list[dict[str, Any]]:
-    items = []
-    for metadata_path in sorted(metadata_paths(), reverse=True):
-        try:
-            data = read_record(metadata_path)
-            if data.get("deleted", False):
-                continue
-            image_path = OUTPUTS_DIR / data["filename"]
-            if not image_path.exists():
-                continue
-            if "url" not in data:
-                data["url"] = f"{OUTPUTS_URL_PREFIX}/{data['filename']}"
-            data["thumb_url"] = f"{THUMBS_URL_PREFIX}/{thumb_filename(data['filename'])}"
-            items.append(data)
-        except Exception:
-            continue
-    return items
+    return [dict(item) for item in scan_records()[0]]
 
 
 def load_library_items() -> list[dict[str, Any]]:
