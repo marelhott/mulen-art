@@ -714,6 +714,7 @@ function App() {
         downloadLibraryImage,
         downloadSelectedImage,
         gpuHourlyUsd, applySettings, usageText: usageLabel(usage),
+        pendingMode: activeJobs.at(-1)?.generation_type === "atelier" ? "atelier" : "results",
       }}
     />
   );

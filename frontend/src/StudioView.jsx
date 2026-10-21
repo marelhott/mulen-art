@@ -112,8 +112,12 @@ export default function StudioView(p) {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [libraryOpen]);
-  const atelierItems = p.results.filter(item => item?.settings?.generation_type === "atelier");
-  const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : p.results;
+  // Two separate feeds: canvas (img2img) and Atelier; the library holds both. Pending placeholders
+  // (null) belong to the kind of job currently running.
+  const isAtelierItem = (item) => item?.settings?.generation_type === "atelier";
+  const atelierItems = p.results.filter((item) => (item ? isAtelierItem(item) : p.pendingMode === "atelier"));
+  const canvasItems = p.results.filter((item) => (item ? !isAtelierItem(item) : p.pendingMode !== "atelier"));
+  const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : canvasItems;
   const items = filterItems(unfiltered, { modelId: filterModel, text: filterText });
   const filtering = Boolean(filterModel || filterText.trim());
   const modelNameFor = (item) => p.models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name;
@@ -271,7 +275,7 @@ export default function StudioView(p) {
   const viewerPool =
     p.selectedImage?.context === "library"
       ? p.libraryItems
-      : (isAtelier ? atelierItems : p.results.filter(Boolean));
+      : (isAtelier ? atelierItems : canvasItems).filter(Boolean);
   const viewerIndex = viewerPool.findIndex(
     (item) => item.id === p.selectedImage?.id,
   );
@@ -289,6 +293,9 @@ export default function StudioView(p) {
         <a href="#" className="brand-symbol" aria-label="Mulen IMG2IMG">
           <Sparkles size={23} />
         </a>
+        <button className={isAtelier ? "active" : ""} onClick={() => setTab("atelier")} title="Ateliér — tvorba bez vstupní fotografie">
+          <Sparkles /><span>ATELIÉR</span>
+        </button>
         <button
           className={tab === "results" ? "active" : ""}
           onClick={() => setTab("results")}
@@ -304,9 +311,6 @@ export default function StudioView(p) {
         >
           <Images />
           <span>KNIHOVNA</span>
-        </button>
-        <button className={isAtelier ? "active" : ""} onClick={() => setTab("atelier")} title="Ateliér — tvorba bez vstupní fotografie">
-          <Sparkles /><span>ATELIÉR</span>
         </button>
         <div className="rail-bottom">
           <span className="online-dot" />
@@ -620,11 +624,12 @@ export default function StudioView(p) {
         {isAtelier && <AtelierQueue p={progressState} />}
         <div className="gallery-tools">
           <div className="segmented tabs">
+            <button aria-pressed={isAtelier} onClick={() => setTab("atelier")}>Ateliér <span>{atelierItems.filter(Boolean).length}</span></button>
             <button
               aria-pressed={tab === "results"}
               onClick={() => setTab("results")}
             >
-              Plátno <span>{p.results.filter(Boolean).length}</span>
+              Plátno <span>{canvasItems.filter(Boolean).length}</span>
             </button>
             <button
               aria-pressed={tab === "library"}
@@ -632,7 +637,6 @@ export default function StudioView(p) {
             >
               Knihovna <span>{p.libraryItems.length}</span>
             </button>
-            <button aria-pressed={isAtelier} onClick={() => setTab("atelier")}>Ateliér <span>{atelierItems.length}</span></button>
           </div>
           <div className="density-control">
             <Grid2X2 size={13} />
