@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
-import { API_URL, buildImageUrl } from "./api";
+import { API_URL, buildImageUrl, reconcileOptionIds } from "./api";
 
 const POLL_INTERVAL = 1500;
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
@@ -146,19 +146,14 @@ function App() {
         setArchives(data.archives || []);
         setGpuHourlyUsd(data.gpu_hourly_usd ?? null);
         setArchiveStatus(data.archives?.length ? "ready" : "error");
-        if (!data.archives?.length) retry = setTimeout(() => setOptionsRevision(v => v + 1), 5000);
         if (data.models?.length) {
           setModels(data.models);
-          setModelId(
-            data.models.find((item) => item.kind !== "base")?.id ||
-              "tuymans_sdxl",
-          );
+          setSelectedModelIds(current => reconcileOptionIds(current, data.models,
+            data.models.find(item => item.kind !== "base")?.id));
         }
         if (data.loras?.length) {
           setLoras(data.loras);
-          setLoraId(
-            data.loras.find((item) => item.id !== "none")?.id || "none",
-          );
+          setLoraId(current => reconcileOptionIds([current], data.loras)[0]);
         }
       })
       .catch(() => {

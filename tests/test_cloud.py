@@ -249,23 +249,113 @@ class CloudFlowTests(unittest.TestCase):
         self.jobs["stream-job"] = {"id": "stream-job", "status": "queued", "logs": []}
         image = {"image_base64": self.payload["image_base64"], "width": 64, "height": 64, "format": "png"}
         meta = {"model_id": "tuymans_sdxl", "lora_id": "none", "demo_mode": False}
+        volume = Mock()
+        committed_files = set()
+        def commit_files():
+            self.assertNotEqual(self.jobs["stream-job"]["status"], "completed")
+            committed_files.update(path.name for path in self.output.glob("*"))
+        volume.commit.side_effect = commit_files
         def fake_generate(payload, progress_callback, image_callback):
             for count in (1, 2):
                 image_callback(image, meta)
                 live = self.jobs["stream-job"]
                 self.assertEqual(live["status"], "running")
                 self.assertEqual(len(live["partial_images"]), count)
+                self.assertEqual(volume.commit.call_count, count)
+                self.assertIn(live["partial_images"][-1]["filename"], committed_files)
                 # Each saved image carries a real elapsed-time figure for the cost readout.
                 # A stubbed generator finishes instantly, so only the type is asserted here.
                 self.assertIsInstance(live["partial_images"][-1]["settings"]["worker_seconds"], float)
                 self.assertEqual(self.client.get(live["partial_images"][-1]["url"]).status_code, 200)
             return {"images": [image, image], "meta": meta}
-        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch("app_runtime.core.generate", side_effect=fake_generate):
+        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", volume), patch("app_runtime.core.generate", side_effect=fake_generate):
             modal_app.generate_image.local("stream-job", self.payload)
         self.assertEqual(self.jobs["stream-job"]["status"], "completed")
         self.assertEqual(len(self.jobs["stream-job"]["result"]["images"]), 2)
         self.assertEqual(len(self.client.get("/api/history").json()["items"]), 2)
         self.assertEqual(len(self.client.get("/api/library").json()["items"]), 0)
+
+    def test_source_is_committed_before_submission_and_commit_failure_does_not_enqueue(self):
+        from unittest.mock import Mock
+        committed_sources = set()
+        def commit_sources():
+            committed_sources.update(path.name for path in self.output.glob("source_*.png"))
+        def submit(job_id, payload):
+            self.assertIn(Path(payload["source_url"]).name, committed_sources)
+            self.submissions.append((job_id, payload))
+        commit = Mock(side_effect=commit_sources)
+        app = create_app(jobs=self.jobs, usage=self.usage, submit=submit, refresh=lambda: None,
+                         commit=commit, username=None, password=None, auth_enabled=False)
+        client = TestClient(app)
+        self.assertEqual(client.post("/api/generate", json=self.payload).status_code, 200)
+        self.assertEqual(commit.call_count, 1)
+        self.assertEqual(len(self.submissions), 1)
+        # Reused sources are confirmed too, including retries after a failed commit.
+        self.assertEqual(client.post("/api/generate", json=self.payload).status_code, 200)
+        self.assertEqual(commit.call_count, 2)
+        self.jobs.clear(); self.usage.clear(); self.submissions.clear()
+        commit.side_effect = RuntimeError("storage unavailable")
+        failed = TestClient(app, raise_server_exceptions=False).post("/api/generate", json=self.payload)
+        self.assertEqual(failed.status_code, 500)
+        self.assertEqual(self.jobs, {})
+        self.assertEqual(self.usage, {})
+        self.assertEqual(self.submissions, [])
+        commit.side_effect = commit_sources
+        self.assertEqual(client.post("/api/generate", json=self.payload).status_code, 200)
+        self.assertEqual(commit.call_count, 4)
+        self.assertEqual(len(self.submissions), 1)
+
+    def test_worker_never_publishes_images_when_volume_commit_fails(self):
+        import modal_app
+        from unittest.mock import Mock
+        self.jobs["failed-commit"] = {"id": "failed-commit", "status": "queued", "logs": []}
+        image = {"image_base64": self.payload["image_base64"], "format": "png"}
+        meta = {"model_id": "tuymans_sdxl"}
+        volume = Mock()
+        volume.commit.side_effect = RuntimeError("storage unavailable")
+        for incremental in (True, False):
+            self.jobs["failed-commit"] = {"id": "failed-commit", "status": "queued", "logs": []}
+            def generate(payload, progress_callback, image_callback):
+                if incremental:
+                    image_callback(image, meta)
+                return {"images": [image], "meta": meta}
+            with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", volume), patch("app_runtime.core.generate", side_effect=generate):
+                with self.assertRaisesRegex(RuntimeError, "storage unavailable"):
+                    modal_app.generate_image.local("failed-commit", self.payload)
+            self.assertEqual(self.jobs["failed-commit"]["status"], "failed")
+            self.assertNotIn("partial_images", self.jobs["failed-commit"])
+            self.assertNotIn("result", self.jobs["failed-commit"])
+
+    def test_missing_cloud_asset_refreshes_even_within_polling_cache_interval(self):
+        from unittest.mock import Mock
+        def reveal_file():
+            Image.new("RGB", (64, 64), "blue").save(self.output / "new.png")
+        refresh = Mock()
+        app = create_app(jobs={}, usage={}, submit=lambda *_: None, refresh=refresh,
+                         commit=lambda: None, username=None, password=None, auth_enabled=False)
+        client = TestClient(app)
+        client.get("/api/history")
+        refresh.side_effect = reveal_file
+        self.assertEqual(client.get("/library/new.png").status_code, 200)
+        self.assertEqual(refresh.call_count, 2)
+
+    def test_local_thumbnail_route_returns_real_webp_and_supports_head(self):
+        Image.new("RGB", (1200, 800), "red").save(self.output / "local.png")
+        with patch.object(server, "THUMBS_DIR", self.output / "thumbs"):
+            client = TestClient(server.app)
+            response = client.get("/thumb/local.webp")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["content-type"], "image/webp")
+            with Image.open(io.BytesIO(response.content)) as image:
+                self.assertEqual(image.size, (server.THUMB_WIDTH, round(800 * server.THUMB_WIDTH / 1200)))
+            head = client.head("/thumb/local.webp")
+            self.assertEqual(head.status_code, 200)
+            self.assertEqual(head.content, b"")
+            self.assertEqual(int(head.headers["content-length"]), len(response.content))
+            self.assertEqual(client.get("/thumb/missing.webp").status_code, 404)
+            self.assertEqual(client.get("/thumb/local.png").status_code, 404)
+            with patch("app_runtime.archives.archive_options", return_value=[]):
+                self.assertEqual(client.get("/api/options").json()["archives"], [])
 
     def test_img2img_progress_uses_actual_denoising_steps(self):
         from app_runtime.core import build_step_callback

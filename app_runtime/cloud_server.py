@@ -58,13 +58,13 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     lock = threading.Lock()
     refresh_state = {"at": 0.0}
 
-    def refresh_cached():
+    def refresh_cached(*, force=False):
         """Volume reload is a network call; collapse bursts of polling into one."""
         now = time.monotonic()
-        if now - refresh_state["at"] < VOLUME_REFRESH_INTERVAL:
+        if not force and now - refresh_state["at"] < VOLUME_REFRESH_INTERVAL:
             return
-        refresh_state["at"] = now
         refresh()
+        refresh_state["at"] = now
 
     def session_valid(token):
         try:
@@ -183,10 +183,12 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 raise HTTPException(429, f"Monthly safety limit reached ({monthly_limit} images).")
             # Zdroj uchováme pro porovnání i po obnovení stránky; žádná galerie složených vstupů.
             refresh_cached()
+            has_sources = False
             for payload in payloads:
                 if payload["generation_type"] == "atelier":
                     payload["source_url"] = None
                     continue
+                has_sources = True
                 digest = hashlib.sha256(payload["image_base64"].encode()).hexdigest()
                 filename = f"source_{digest}.png"
                 path = OUTPUTS_DIR / filename
@@ -194,6 +196,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
                     decode_image(payload["image_base64"]).save(path, format="PNG")
                 payload["source_url"] = f"/library/{filename}"
+            # Also confirm reused files: a previous failed commit may have left
+            # a source present locally without making it durable.
+            if has_sources:
+                commit()
             usage[month] = used + requested
             for index, payload in enumerate(payloads):
                 job_id = uuid.uuid4().hex
@@ -327,7 +333,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     @app.post("/api/library/{item_id}")
     def save_to_library(item_id: str):
         with lock:
-            refresh_cached()
+            refresh_cached(force=True)
             result = api_library_save(item_id)
             commit()
             return result
@@ -353,7 +359,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         with lock:
             path = OUTPUTS_DIR / filename
             if not path.is_file():
-                refresh_cached()
+                refresh_cached(force=True)
                 if not path.is_file():
                     raise HTTPException(404, "Image not found.")
             return asset_response(path, "image/png" if filename.endswith(".png") else "image/webp", request)
@@ -369,7 +375,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 stem = Path(filename).stem
                 source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None)
                 if source is None:
-                    refresh_cached()
+                    refresh_cached(force=True)
                     source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None)
                 if source is None:
                     raise HTTPException(404, "Thumbnail not found.")

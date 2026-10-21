@@ -1,7 +1,16 @@
 // Run: node --test frontend/src/api.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildImageUrl, formatDuration, imageUrl, sourceUrl, thumbUrl } from "./api.js";
+import { buildImageUrl, formatDuration, imageUrl, sourceUrl, thumbUrl, reconcileOptionIds } from "./api.js";
+
+test("options reload preserves multiple selected models and the no-LoRA choice", () => {
+  const models = [{id: "default"}, {id: "artist-a"}, {id: "artist-b"}];
+  assert.deepEqual(reconcileOptionIds(["artist-a", "artist-b"], models, "default"), ["artist-a", "artist-b"]);
+  assert.deepEqual(reconcileOptionIds(["none"], [{id: "none"}, {id: "lora"}]), ["none"]);
+  assert.deepEqual(reconcileOptionIds(["removed", "artist-b"], models), ["artist-b"]);
+  assert.deepEqual(reconcileOptionIds(["removed"], models, "default"), ["default"]);
+  assert.deepEqual(reconcileOptionIds(["artist-a"], []), ["artist-a"]);
+});
 
 test("buildImageUrl keeps absolute URLs and prefixes relative paths", () => {
   assert.equal(buildImageUrl("/library/a.png"), "/library/a.png");

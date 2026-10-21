@@ -54,6 +54,8 @@ def generate_image(job_id: str, payload: dict):
         # Real GPU time up to this saved image, so the library can show cost per file.
         meta = {**meta, "worker_seconds": round(time.monotonic() - started, 2)}
         items = persist_generated_images({"images": [image], "meta": dict(meta)})
+        # Other containers must see the files before their URLs are published.
+        outputs.commit()
         library_items.extend(items)
         if first_image_seconds is None:
             first_image_seconds = round(time.monotonic() - started, 2)
@@ -82,14 +84,13 @@ def generate_image(job_id: str, payload: dict):
         result["meta"]["source_url"] = result["meta"].get("source_url") or payload.get("source_url")
         if not library_items:  # Local demo tests do not emit incremental images.
             library_items = persist_generated_images(result)
+            outputs.commit()
         result["images"] = library_items
         result["library_items"] = library_items
         result["meta"]["worker_seconds"] = round(time.monotonic() - started, 2)
         result["meta"]["first_image_seconds"] = first_image_seconds
         jobs[job_id] = {**record, "status": "completed", "progress": 1,
                         "message": "Completed", "updated_at": now_iso(), "result": result}
-        # One volume commit per job instead of one per generated image.
-        outputs.commit()
     except Exception as exc:
         try:
             outputs.commit()

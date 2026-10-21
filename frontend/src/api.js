@@ -2,6 +2,11 @@
 // import.meta.env exists under Vite; the optional chain keeps this module importable in plain Node tests.
 export const API_URL = import.meta.env?.VITE_API_URL || "";
 
+export function reconcileOptionIds(current, options, fallbackId) {
+  const valid = current.filter(id => options.some(option => option.id === id));
+  return valid.length ? valid : options.length ? [fallbackId ?? options[0].id] : current;
+}
+
 const ABSOLUTE = /^(https?:|data:|blob:)/;
 
 export function buildImageUrl(path) {

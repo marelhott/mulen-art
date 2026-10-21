@@ -9,7 +9,7 @@ import threading
 import uuid
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response
@@ -29,6 +29,7 @@ app = FastAPI(title="Img2Img Runtime", version="0.1.0")
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 GENERATION_LOCK = threading.Lock()
+THUMBNAIL_LOCK = threading.Lock()
 OUTPUTS_URL_PREFIX = "/library"
 THUMBS_URL_PREFIX = "/thumb"
 OUTPUTS_DIR = resolve_outputs_dir()
@@ -54,7 +55,8 @@ def health():
 
 @app.get("/api/options")
 def api_options():
-    return get_options()
+    from .archives import archive_options
+    return {**get_options(), "archives": archive_options()}
 
 
 @app.get("/api/history")
@@ -139,6 +141,25 @@ def api_job_status(job_id: str):
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found.")
         return job
+
+
+@app.get("/thumb/{filename}")
+@app.head("/thumb/{filename}")
+def api_thumbnail(filename: str, request: Request):
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+\.webp", filename):
+        raise HTTPException(404, "Thumbnail not found.")
+    with THUMBNAIL_LOCK:
+        stem = Path(filename).stem
+        source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*")
+                       if p.suffix.lower() in {".png", ".webp"}), None)
+        target = ensure_thumbnail(source.name) if source else None
+        if target is None:
+            raise HTTPException(404, "Thumbnail not found.")
+        headers = {"Cache-Control": "private, max-age=31536000, immutable",
+                   "Content-Length": str(target.stat().st_size)}
+        return Response(None if request.method == "HEAD" else target.read_bytes(),
+                        media_type="image/webp", headers=headers)
 
 
 app.mount(OUTPUTS_URL_PREFIX, StaticFiles(directory=OUTPUTS_DIR), name="library")
