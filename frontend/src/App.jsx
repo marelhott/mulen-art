@@ -59,7 +59,7 @@ function App() {
   const setModelId = (id) => setSelectedModelIds([id]);
   const [generationMode, setGenerationMode] = useState("checkpoint");
   const [atelier, setAtelier] = useState({mode: "noise", theme: "all", archive: "hofmann", modelIds: ["tuymans_modal_2400"], count: 4,
-    width: 1024, height: 1024, scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.52,
+    width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.52,
     sampler: "dpmpp_2m", schedule: "karras"});
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
