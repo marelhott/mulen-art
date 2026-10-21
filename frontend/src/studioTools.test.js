@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode } from "./studioTools.js";
+import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode, retryUrl, RETRY_DELAYS_MS } from "./studioTools.js";
 
 const items = [
   { id: "a", model_id: "m1", settings: { prompt: "red fox", seed: 42, worker_seconds: 20 } },
@@ -55,4 +55,14 @@ test("creationMode names the Atelier way an image was made and ignores img2img o
   assert.equal(creationMode({ settings: { generation_type: "atelier" } }), "Ateliér");
   assert.equal(creationMode({ settings: { generation_type: "img2img" } }), "");
   assert.equal(creationMode(null), "");
+});
+
+test("retryUrl cache-busts failed image loads but leaves inline sources alone", () => {
+  assert.equal(retryUrl("/thumb/a.webp", 0), "/thumb/a.webp");
+  assert.equal(retryUrl("/thumb/a.webp", 2), "/thumb/a.webp?retry=2");
+  assert.equal(retryUrl("/x.png?v=1", 1), "/x.png?v=1&retry=1");
+  assert.equal(retryUrl("blob:abc", 1), "blob:abc");
+  assert.equal(retryUrl("data:image/png;base64,xx", 3), "data:image/png;base64,xx");
+  assert.equal(retryUrl("", 1), "");
+  assert.ok(RETRY_DELAYS_MS.length >= 2);
 });

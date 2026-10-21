@@ -402,7 +402,7 @@ def ensure_thumbnail(filename: str) -> Path | None:
         if image.width > THUMB_WIDTH:
             ratio = THUMB_WIDTH / image.width
             image = image.resize((THUMB_WIDTH, max(1, round(image.height * ratio))), Image.Resampling.LANCZOS)
-        temporary = target.with_suffix(".webp.tmp")
+        temporary = target.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")  # unique: concurrent requests must not share a temp file
         image.save(temporary, "WEBP", quality=THUMB_QUALITY, method=4)
     os.replace(temporary, target)
     return target

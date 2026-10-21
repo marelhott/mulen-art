@@ -801,6 +801,31 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(small.post("/api/generate", json=self.payload).status_code, 200)
         self.assertEqual(sent, [0])
 
+    def test_assets_survive_volume_reload_conflicts_and_late_visibility(self):
+        calls = []
+        def reload():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("there are open files preventing the operation: path x.json is open")
+            if len(calls) == 2:  # the worker's file becomes visible after the second reload
+                Image.new("RGB", (64, 32), "green").save(self.output / "late_01_a.png")
+        app = create_app(jobs={}, usage={}, submit=lambda *_: None, refresh=reload, commit=lambda: None,
+                         username="studio", password="test-password", monthly_limit=None)
+        client = TestClient(app); client.auth = ("studio", "test-password")
+        with patch("time.sleep"):
+            self.assertEqual(client.get("/library/late_01_a.png").status_code, 200)
+            self.assertEqual(client.get("/thumb/late_01_a.webp").status_code, 200)
+            self.assertEqual(client.get("/library/never_01_a.png").status_code, 404)  # still 404, not 500
+        self.assertGreaterEqual(len(calls), 3)
+
+    def test_unrelated_volume_errors_still_surface(self):
+        def reload():
+            raise RuntimeError("volume exploded")
+        app = create_app(jobs={}, usage={}, submit=lambda *_: None, refresh=reload, commit=lambda: None,
+                         username="studio", password="test-password", monthly_limit=None)
+        client = TestClient(app, raise_server_exceptions=False); client.auth = ("studio", "test-password")
+        self.assertEqual(client.get("/library/missing_01_a.png").status_code, 500)
+
 
 if __name__ == "__main__":
     unittest.main()

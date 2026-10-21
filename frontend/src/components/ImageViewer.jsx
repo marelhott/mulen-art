@@ -16,6 +16,7 @@ import { urlFor, sourceFor, duration, dateFor } from "../shared";
 import { IconButton, Label } from "./controls";
 import { sourceUrl, buildImageUrl } from "../api";
 import { TEXT } from "../texts";
+import { RetryImage } from "./RetryImage";
 
 export function ImageViewer({
   image,
@@ -192,7 +193,7 @@ export function ImageViewer({
             drag.current = null;
           }}
         >
-          <img src={src} alt="Zvětšený výsledek" draggable={false} />
+          <RetryImage src={src} alt="Zvětšený výsledek" draggable={false} />
           {mode === "compare" && source && (
             <>
               <img

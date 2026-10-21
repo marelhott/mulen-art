@@ -7,7 +7,8 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { thumbFor } from "../shared";
+import { thumbFor, urlFor } from "../shared";
+import { RetryImage } from "./RetryImage";
 import { IconButton } from "./controls";
 
 export function ImageCard({
@@ -94,8 +95,9 @@ export function ImageCard({
         }}
       >
         {item ? (
-          <img
+          <RetryImage
             src={thumbFor(item)}
+            fallbackSrc={urlFor(item)}
             alt={
               item.source_name ||
               item.settings?.source_name ||

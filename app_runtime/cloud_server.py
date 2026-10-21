@@ -89,7 +89,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
     lock = threading.Lock()
-    thumb_lock = threading.Lock()  # asset reads must not queue behind enqueue/commit calls
+    reload_lock = threading.Lock()  # one Volume reload at a time; asset reads never wait on `lock`
     refresh_state = {"at": 0.0}
 
     def refresh_cached(*, force=False):
@@ -97,8 +97,27 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         now = time.monotonic()
         if not force and now - refresh_state["at"] < VOLUME_REFRESH_INTERVAL:
             return
-        refresh()
-        refresh_state["at"] = now
+        with reload_lock:
+            try:
+                refresh()
+            except RuntimeError as exc:
+                # Modal refuses a reload while another request still holds a file open; the next call retries.
+                if "open files" not in str(exc):
+                    raise
+                return
+            refresh_state["at"] = time.monotonic()
+
+    def wait_for_file(find):
+        """A fresh worker output can take a moment to become visible here: reload and retry briefly."""
+        found = find()
+        for _ in range(3):
+            if found is not None:
+                break
+            refresh_cached(force=True)
+            found = find()
+            if found is None:
+                time.sleep(0.4)
+        return found
 
     def session_valid(token):
         try:
@@ -358,8 +377,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         filename = f"source_{source_id}.png"
         path = OUTPUTS_DIR / filename
         if not path.is_file():
-            with thumb_lock:
-                refresh_cached(force=True)
+            refresh_cached(force=True)
         if not path.is_file():
             raise ValueError("Uploaded source not found; upload it again")
         return base64.b64encode(path.read_bytes()).decode(), filename
@@ -487,11 +505,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if not re.fullmatch(r"[A-Za-z0-9_.-]+\.(png|webp)", filename):
             raise HTTPException(404, "Image not found.")
         path = OUTPUTS_DIR / filename
-        if not path.is_file():
-            with thumb_lock:
-                refresh_cached(force=True)
-            if not path.is_file():
-                raise HTTPException(404, "Image not found.")
+        if not wait_for_file(lambda: path if path.is_file() else None):
+            raise HTTPException(404, "Image not found.")
         return asset_response(path, "image/png" if filename.endswith(".png") else "image/webp", request)
 
     @app.get("/thumb/{filename}")
@@ -502,18 +517,15 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         target = THUMBS_DIR / filename
         if target.is_file():
             return asset_response(target, "image/webp", request)
-        with thumb_lock:
-            if not target.is_file():
-                stem = Path(filename).stem
-                source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None)
-                if source is None:
-                    refresh_cached(force=True)
-                    source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None)
-                if source is None:
-                    raise HTTPException(404, "Thumbnail not found.")
-                target = ensure_thumbnail(source.name)
-                if target is None:
-                    raise HTTPException(404, "Thumbnail not found.")
+        if not target.is_file():
+            stem = Path(filename).stem
+            source = wait_for_file(lambda: next(
+                (p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None))
+            if source is None:
+                raise HTTPException(404, "Thumbnail not found.")
+            target = ensure_thumbnail(source.name)
+            if target is None:
+                raise HTTPException(404, "Thumbnail not found.")
         return asset_response(target, "image/webp", request)
 
     @app.get("/api/library/{item_id}/export")

@@ -70,3 +70,11 @@ export function creationMode(item) {
   const settings = item?.settings || {};
   return settings.generation_type === "atelier" ? ATELIER_MODES[settings.atelier_mode] || "Ateliér" : "";
 }
+
+// Delays before re-requesting an image that failed to load (a fresh output may not be visible yet).
+export const RETRY_DELAYS_MS = [800, 2000, 5000];
+
+export function retryUrl(src, attempt) {
+  if (!src || attempt === 0 || /^(data:|blob:)/.test(src)) return src;
+  return `${src}${src.includes("?") ? "&" : "?"}retry=${attempt}`;
+}

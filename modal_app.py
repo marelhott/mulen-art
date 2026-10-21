@@ -328,7 +328,7 @@ def purge_deleted_images():
     image=base_image.add_local_dir("frontend/dist", "/app/frontend/dist"),
     volumes={"/outputs": outputs, "/state": state, "/archives": archives},
     min_containers=0, max_containers=1, scaledown_window=20,
-    cpu=0.25, memory=512,
+    cpu=1, memory=1024,  # thumbnails of 2048 px PNGs are decoded here; 0.25 CPU made them take 20+ s
     # STUDIO_USERNAME / STUDIO_PASSWORD, optional MONTHLY_IMAGE_LIMIT and MAX_JOBS_PER_REQUEST.
     secrets=[modal.Secret.from_name("img2img-auth")],
 )
