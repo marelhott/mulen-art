@@ -670,6 +670,28 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(self.jobs["test-job"]["status"], "completed")
         self.assertEqual(slots, {})
 
+    def test_slot_cap_works_with_a_modal_style_dict_without_len(self):
+        import modal_app
+
+        class ModalLikeDict(dict):
+            __len__ = None  # modal.Dict raises TypeError on len(); it offers .len()
+
+            def len(self):
+                return sum(1 for _ in self.keys())
+
+        slots = ModalLikeDict()
+        for index in range(2):
+            modal_app.acquire_slot(slots, f"j{index}", cap=2, now=1)
+        with self.assertRaisesRegex(RuntimeError, "backlog"):
+            modal_app.acquire_slot(slots, "j2", cap=2, now=2)
+
+    def test_gpu_rate_matches_torch_device_names(self):
+        import modal_app, sys, types
+        for name, expected in (("NVIDIA L4", ("L4", 0.80)), ("NVIDIA A10", ("A10", 1.10)), ("NVIDIA A10G", ("A10", 1.10)), ("NVIDIA H100", ("NVIDIA H100", None))):
+            fake = types.SimpleNamespace(cuda=types.SimpleNamespace(get_device_name=lambda _i, n=name: n))
+            with patch.dict(sys.modules, {"torch": fake}):
+                self.assertEqual(modal_app.gpu_rate(), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

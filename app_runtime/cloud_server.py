@@ -3,6 +3,7 @@ import base64
 import binascii
 from datetime import datetime, UTC
 import hmac
+import logging
 import hashlib
 import os
 import time
@@ -242,6 +243,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                                       "expected_images": payload["num_images"]})
                     submitted[-1].update(generation_type=payload["generation_type"], model_id=payload["model_id"])
                 except Exception:
+                    logging.getLogger("studio").exception("Could not submit job %s", job_id)
                     requested -= payload["num_images"]
                     jobs.pop(job_id, None)
                     errors.append(f"Could not submit {payload['source_name']}")

@@ -45,15 +45,20 @@ SLOT_TTL_SECONDS = 1200 + 300  # worker timeout + slack; reclaims slots leaked b
 SNAPSHOT = os.environ.get("MODAL_GPU_SNAPSHOT") == "1"  # alpha GPU memory snapshot, opt-in at deploy time
 
 
+def store_size(store):
+    # modal.Dict has no __len__; it exposes .len() instead.
+    return store.len() if hasattr(store, "len") else len(store)
+
+
 def acquire_slot(store, job_id, cap=MAX_BACKLOG_JOBS, ttl=SLOT_TTL_SECONDS, now=None):
     """Reserve a backlog slot for job_id or raise. Called only by the single gateway container."""
     import time
     now = time.time() if now is None else now
-    if len(store) >= cap:  # scan for leaked slots only when the cheap length check says we are full
+    if store_size(store) >= cap:  # scan for leaked slots only when the cheap length check says we are full
         for key, entry in list(store.items()):
             if now - entry.get("ts", 0) > ttl:
                 release_slot(store, key)
-    if len(store) >= cap:
+    if store_size(store) >= cap:
         raise RuntimeError(f"Job backlog full ({cap} jobs in flight)")
     store[job_id] = {"ts": now, "call_id": None}
 
@@ -90,7 +95,8 @@ def cancel_call(call_id):
 
 
 # Published Modal per-hour rates, used only for the UI's per-image estimate.
-GPU_RATES_USD_HOUR = {"L4": 0.80, "A10G": 1.10}
+# Modal reports an A10G as "NVIDIA A10", hence the "A10" key.
+GPU_RATES_USD_HOUR = {"L4": 0.80, "A10": 1.10}
 
 
 def gpu_rate():
