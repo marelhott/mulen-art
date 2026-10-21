@@ -2,10 +2,10 @@ import React from "react";
 import {
   Check,
   Sparkles,
-  X,
 } from "lucide-react";
 import { Label, Range, Select } from "./controls";
-import { MixBuilder } from "./MixBuilder";
+import { CheckpointPicker } from "./CheckpointPicker";
+import { idsForSource } from "../studioTools";
 
 export function AtelierQueue({p}) {
   const counts = p.job.queue_counts || {};
@@ -49,9 +49,11 @@ export function AtelierControls({atelier: a, update, models, archives = [], arch
     {id: "archive", name: "Archiv → fúze", description: "Náhodný obraz ze zdrojového archivu přemaluje libovolný zvolený checkpoint. Jeden obraz na výstup, bez tréninku."},
     {id: "photo", name: "Foto → malba", description: "SDXL Base vytvoří fotografický předobraz a vybraný checkpoint jej přemaluje. Dva průchody GPU; denoise až 0,99."},
   ];
-  const total = Number(a.count || 0) * a.modelIds.length;
+  const source = a.source || "single";
+  const activeIds = idsForSource(a.modelIds, source);
+  const total = Number(a.count || 0) * activeIds.length;
   return <>
-    <button className="primary-button generate" disabled={!a.modelIds.length || !choices.length || (a.mode === "archive" && !archives.some(item => item.id === (a.archive || "hofmann")))} onClick={onGenerate}>
+    <button className="primary-button generate" disabled={!activeIds.length || !choices.length || (a.mode === "archive" && !archives.some(item => item.id === (a.archive || "hofmann")))} onClick={onGenerate}>
       <Sparkles size={16} />{generating ? "PŘIDAT STUDIE DO FRONTY" : "VYTVOŘIT STUDIE"}
     </button>
     <div className="control-block atelier-modes">
@@ -62,20 +64,14 @@ export function AtelierControls({atelier: a, update, models, archives = [], arch
     </div>
     <Range label="POČET STUDIÍ NA MODEL" min={1} max={10} step={1} value={a.count}
       onChange={count => update({count})}
-      hint={`${a.count} studií × ${a.modelIds.length} modelů = ${total} výstupů`} />
+      hint={`${a.count} studií × ${activeIds.length} modelů = ${total} výstupů`} />
+    <CheckpointPicker label="CHECKPOINTY · MALÍŘSKÉ ZPRACOVÁNÍ" items={choices} selectedIds={a.modelIds}
+      onChange={modelIds => update({modelIds})} source={source} onSourceChange={next => update({source: next})}
+      mixCandidates={artists} onAddMix={id => onAddMix(id, "atelier")} onRemoveMix={onRemoveMix}
+      hint="Každý námět i seed se použije na všechny vybrané modely. Výsledky se ukládají také na plátno a do knihovny." />
     {a.mode === "archive" && <><Select label="ZDROJOVÝ ARCHIV · OBSAH" value={a.archive || "hofmann"} onChange={archive => update({archive})} items={archives.length ? archives.map(item => ({id:item.id,name:`${item.name} · ${item.count} obrazů`})) : [{id:a.archive || "hofmann",name: archiveStatus === "loading" ? "Načítám archivy…" : "Archiv se nepodařilo načíst"}]} />{archiveStatus === "error" && <button className="text-button" onClick={reloadArchives}>Znovu načíst archivy</button>}<p className="help-text">Archiv vybírá předlohu, checkpoint určuje přemalování. Stejná předloha i seed pro všechny modely. Zachovává se poměr stran; rozlišení níže je maximální rámeček.</p></>}
     {!["noise", "archive"].includes(a.mode) && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
       items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Postavy a gesta"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
-    <div className="control-block"><Label>CHECKPOINTY · MALÍŘSKÉ ZPRACOVÁNÍ</Label>
-      <div className="checkpoint-options" role="group" aria-label="Modely Ateliéru">{choices.map(model => <div key={model.id} className={`checkpoint-row ${model.kind === "mix" ? "is-mix" : ""}`}>
-        <button aria-pressed={a.modelIds.includes(model.id)} onClick={() => update({modelIds: a.modelIds.includes(model.id) ? (a.modelIds.length > 1 ? a.modelIds.filter(id => id !== model.id) : a.modelIds) : [...a.modelIds, model.id]})}>
-          <span>{model.kind === "mix" && <i className="mix-tag">FÚZE</i>}{model.kind === "mix" ? model.name.replace(/^Fúze: /, "") : model.name}</span>{a.modelIds.includes(model.id) && <Check size={14} />}
-        </button>
-        {model.kind === "mix" && <button type="button" className="mix-remove" aria-label={`Odebrat fúzi ${model.name}`} title="Odebrat fúzi" onClick={() => onRemoveMix(model.id)}><X size={12} /></button>}
-      </div>)}</div>
-      <MixBuilder candidates={artists} onAdd={id => onAddMix(id, "atelier")} />
-      <p className="help-text">Každý námět i seed se použije na všechny vybrané modely. Výsledky se ukládají také na plátno a do knihovny.</p>
-    </div>
     <Select label="ROZLIŠENÍ PRO MODEL" value={a.ratio === "random" ? "random" : `${a.width}x${a.height}`} onChange={value => {if(value === "random") {update({ratio:"random"}); return;} const [width,height] = value.split("x").map(Number); update({width,height,ratio:"fixed"});}}
       items={[{id:"random",name:"Random · různé poměry stran"},{id:"1024x1024",name:"1024 × 1024 · čtverec"},{id:"832x1216",name:"832 × 1216 · na výšku"},{id:"1216x832",name:"1216 × 832 · na šířku"},{id:"1536x1536",name:"1536 × 1536 · experiment"}]} />
     <Range label="ZVĚTŠENÍ HOTOVÉHO OBRAZU" min={1} max={4} step={0.1} value={a.scale} onChange={scale => update({scale})}

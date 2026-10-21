@@ -24,10 +24,10 @@ import {
 } from "lucide-react";
 import { urlFor } from "./shared";
 import { buildImageUrl } from "./api";
-import { filterItems } from "./studioTools";
+import { filterItems, idsForSource } from "./studioTools";
 import { TEXT } from "./texts";
 import { Compare } from "./components/Compare";
-import { MixBuilder } from "./components/MixBuilder";
+import { CheckpointPicker } from "./components/CheckpointPicker";
 import { AtelierControls, AtelierQueue } from "./components/Atelier";
 import { ImageCard } from "./components/ImageCard";
 import { ImageViewer } from "./components/ImageViewer";
@@ -347,7 +347,7 @@ export default function StudioView(p) {
         {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} onAddMix={p.addMix} onRemoveMix={p.removeMix} /> : <>
         <button
           className="primary-button generate"
-          disabled={!p.inputItems.length}
+          disabled={!p.inputItems.length || (p.generationMode === "checkpoint" && !idsForSource(p.selectedModelIds, p.checkpointSource).length)}
           onClick={() => {
             setTab("results");
             p.handleGenerate();
@@ -515,22 +515,12 @@ export default function StudioView(p) {
           </div>
         </div>
         {p.generationMode === "checkpoint" ? (
-          <div className="control-block">
-            <Label>MODELY · VÝBĚR VÍCE</Label>
-            <div className="checkpoint-options" role="group" aria-label="Checkpointy">
-              {p.models.filter(item => item.kind !== "base").map(item => {
-                const active = p.selectedModelIds.includes(item.id);
-                return <div key={item.id} className={`checkpoint-row ${item.kind === "mix" ? "is-mix" : ""}`}>
-                  <button aria-pressed={active} onClick={() => p.setSelectedModelIds(current => active ? (current.length > 1 ? current.filter(id => id !== item.id) : current) : [...current, item.id])}>
-                    <span>{item.kind === "mix" && <i className="mix-tag">FÚZE</i>}{item.kind === "mix" ? item.name.replace(/^Fúze: /, "") : item.name}</span>{active && <Check size={14} />}
-                  </button>
-                  {item.kind === "mix" && <button type="button" className="mix-remove" aria-label={`Odebrat fúzi ${item.name}`} title="Odebrat fúzi" onClick={() => p.removeMix(item.id)}><X size={12} /></button>}
-                </div>;
-              })}
-            </div>
-            <MixBuilder candidates={p.models.filter(item => item.kind !== "base" && item.kind !== "mix")} onAdd={(id) => p.addMix(id, "canvas")} />
-            <p className="help-text">Každý vstup × každý model. Stejný seed; více modelů = více výpočtů.</p>
-          </div>
+          <CheckpointPicker label="MODELY · VÝBĚR VÍCE" items={p.models.filter(item => item.kind !== "base")}
+            selectedIds={p.selectedModelIds} onChange={p.setSelectedModelIds}
+            source={p.checkpointSource} onSourceChange={p.setCheckpointSource}
+            mixCandidates={p.models.filter(item => item.kind !== "base" && item.kind !== "mix")}
+            onAddMix={(id) => p.addMix(id, "canvas")} onRemoveMix={p.removeMix}
+            hint="Každý vstup × každý model. Stejný seed; více modelů = více výpočtů." />
         ) : (
           <>
             <div className="base-model">

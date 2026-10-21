@@ -2185,3 +2185,10 @@ input[type="range"]::-moz-range-progress {
 .mix-row input[type="range"] { width: 100%; accent-color: var(--accent); }
 .mix-add { width: 100%; justify-content: center; }
 .mix-add:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Individual checkpoints / fusions switch */
+.source-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; margin: 6px 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--input); }
+.source-switch button { min-height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); font: inherit; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+.source-switch button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.source-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mix-empty { padding: 6px 2px; }

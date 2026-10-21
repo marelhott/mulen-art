@@ -3,7 +3,7 @@ import { Layers3 } from "lucide-react";
 import { MIX_MAX, MIX_MIN, buildMixId, normalizeWeights } from "../studioTools";
 
 // Builds a checkpoint mix: pick 2-4 checkpoints, set how much of each, add it to the model list.
-export function MixBuilder({ candidates, onAdd }) {
+export function MixBuilder({ candidates, onAdd, defaultOpen = false }) {
   const [picked, setPicked] = useState({}); // id -> raw slider value
   const ids = candidates.map((item) => item.id).filter((id) => picked[id] !== undefined);
   const percents = normalizeWeights(ids.map((id) => picked[id]));
@@ -26,7 +26,7 @@ export function MixBuilder({ candidates, onAdd }) {
   }
 
   return (
-    <details className="mix-builder">
+    <details className="mix-builder" open={defaultOpen || undefined}>
       <summary><Layers3 size={13} aria-hidden="true" /> Fúze checkpointů</summary>
       <p className="help-text">Smíchá váhy 2–4 checkpointů do jednoho nového modelu. Vznikne položka FÚZE v seznamu výše, použitelná ve všech režimech a srovnatelná s ostatními.</p>
       <div className="mix-rows" role="group" aria-label="Checkpointy do fúze">

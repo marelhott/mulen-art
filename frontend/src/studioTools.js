@@ -134,3 +134,8 @@ export function mixName(parts, models) {
 }
 
 export const MIX_STORAGE_KEY = "img2img-mixes-v1";
+
+// Plain checkpoints and fusions are two exclusive ways of choosing models: the picker shows one source
+// at a time and generation uses only the ids that belong to the active source.
+export const sourceOf = (id) => (isMixId(id) ? "mix" : "single");
+export const idsForSource = (ids, source) => ids.filter((id) => sourceOf(id) === source);

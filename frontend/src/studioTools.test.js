@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode, retryUrl, RETRY_DELAYS_MS, isMixId, parseMixId, normalizeWeights, buildMixId, mixEntry } from "./studioTools.js";
+import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode, retryUrl, RETRY_DELAYS_MS, isMixId, parseMixId, normalizeWeights, buildMixId, mixEntry, sourceOf, idsForSource } from "./studioTools.js";
 
 const items = [
   { id: "a", model_id: "m1", settings: { prompt: "red fox", seed: 42, worker_seconds: 20 } },
@@ -92,4 +92,13 @@ test("mixEntry names a mix and rejects ones that mention unknown or base checkpo
   assert.equal(mixEntry("mix:a=60,b=40", models).name, "Fúze: A 60 % + B 40 %");
   assert.equal(mixEntry("mix:a=60,zzz=40", models), null);
   assert.equal(mixEntry("mix:a=60,sdxl_base=40", models), null);
+});
+
+test("plain checkpoints and fusions are exclusive sources", () => {
+  const ids = ["a", "mix:a=50,b=50", "b", "mix:a=30,b=70"];
+  assert.deepEqual(idsForSource(ids, "single"), ["a", "b"]);
+  assert.deepEqual(idsForSource(ids, "mix"), ["mix:a=50,b=50", "mix:a=30,b=70"]);
+  assert.equal(sourceOf("mix:a=50,b=50"), "mix");
+  assert.equal(sourceOf("a"), "single");
+  assert.deepEqual(idsForSource([], "mix"), []);
 });

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
-import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY } from "./studioTools";
+import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf } from "./studioTools";
 import { API_URL, buildImageUrl, reconcileOptionIds } from "./api";
 
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
@@ -64,10 +64,12 @@ function App() {
   const [resizeScale, setResizeScale] = useState(2);
   const [inputScale, setInputScale] = useState(1);
   const [selectedModelIds, setSelectedModelIds] = useState(["tuymans_sdxl"]);
-  const modelId = selectedModelIds[0];
+  // Individual checkpoints and fusions are exclusive: only ids of the active source are ever generated.
+  const [checkpointSource, setCheckpointSource] = useState("single");
+  const modelId = idsForSource(selectedModelIds, checkpointSource)[0] ?? selectedModelIds[0];
   const setModelId = (id) => setSelectedModelIds([id]);
   const [generationMode, setGenerationMode] = useState("checkpoint");
-  const [atelier, setAtelier] = useState({mode: "noise", theme: "all", archive: "hofmann", modelIds: ["tuymans_modal_2400"], count: 4,
+  const [atelier, setAtelier] = useState({mode: "noise", theme: "all", archive: "hofmann", modelIds: ["tuymans_modal_2400"], source: "single", count: 4,
     width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.52,
     sampler: "dpmpp_2m", schedule: "karras"});
   const [loraId, setLoraId] = useState("none");
@@ -159,8 +161,9 @@ function App() {
   function addMix(id, target) {
     if (!mixEntry(id, serverModels)) { setError("Tuto fúzi nelze vytvořit: některý checkpoint není k dispozici."); return; }
     setMixIds(current => (current.includes(id) ? current : [...current, id]));
-    if (target === "atelier") setAtelier(current => ({...current, modelIds: [...new Set([...current.modelIds, id])]}));
-    else setSelectedModelIds(current => [...new Set([...current, id])]);
+    // A new fusion switches the picker to fusions and selects it; the plain checkpoints stay remembered but off.
+    if (target === "atelier") setAtelier(current => ({...current, source: "mix", modelIds: [...new Set([...current.modelIds, id])]}));
+    else { setCheckpointSource("mix"); setSelectedModelIds(current => [...new Set([...current, id])]); }
   }
   function removeMix(id) {
     setMixIds(current => current.filter(item => item !== id));
@@ -185,7 +188,11 @@ function App() {
 
   function applySettings(settings) {
     const next = controlsFromSettings(settings);
-    if (next.modelId && models.some((model) => model.id === next.modelId)) setSelectedModelIds([next.modelId]);
+    if (next.modelId && isMixId(next.modelId) && mixEntry(next.modelId, serverModels))
+      setMixIds(current => (current.includes(next.modelId) ? current : [...current, next.modelId]));
+    if (next.modelId && (models.some((model) => model.id === next.modelId) || mixEntry(next.modelId, serverModels))) {
+      setSelectedModelIds([next.modelId]); setCheckpointSource(sourceOf(next.modelId));
+    }
     if (next.loraId && loras.some((lora) => lora.id === next.loraId)) setLoraId(next.loraId);
     if (next.loraStrength !== undefined) setLoraStrength(next.loraStrength);
     if (next.denoise !== undefined) setDenoise(next.denoise);
@@ -250,7 +257,7 @@ function App() {
       generationMode,
       atelier,
       modelId,
-      selectedModelIds,
+      selectedModelIds: idsForSource(selectedModelIds, checkpointSource),
       loraId,
       loraStrength,
       numImages,
@@ -278,7 +285,7 @@ function App() {
       const known = id => models.some(model => model.id === id && model.kind !== "base") || Boolean(mixEntry(id, serverModels));
       const ids = [...new Set(preset.selectedModelIds)].filter(known);
       setMixIds(current => [...new Set([...current, ...ids.filter(isMixId)])]);
-      if (ids.length) setSelectedModelIds(ids);
+      if (ids.length) { setSelectedModelIds(ids); setCheckpointSource(sourceOf(ids[0])); }
     }
     setLoraId(
       preset.loraId && preset.loraId !== "none"
@@ -365,7 +372,7 @@ function App() {
 
   async function handleGenerate() {
     if (!inputItems.length) return;
-    const modelIds = generationMode === "lora" ? ["sdxl_base"] : [...new Set(selectedModelIds)];
+    const modelIds = generationMode === "lora" ? ["sdxl_base"] : [...new Set(idsForSource(selectedModelIds, checkpointSource))];
     if (!modelIds.length) { setError("Vyber alespoň jeden checkpoint."); return; }
     if (
       !Number.isSafeInteger(numImages) ||
@@ -499,7 +506,7 @@ function App() {
   }
 
   async function handleGenerateAtelier() {
-    const modelIds = [...new Set(atelier.modelIds)].filter(id => models.some(model => model.id === id && model.kind !== "base"));
+    const modelIds = [...new Set(idsForSource(atelier.modelIds, atelier.source || "single"))].filter(id => models.some(model => model.id === id && model.kind !== "base"));
     const count = Number(atelier.count), total = count * modelIds.length;
     if (!modelIds.length || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(total)) {
       setError("Vyber checkpoint a kladný celý počet studií."); return;
@@ -743,7 +750,7 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
-        gpuHourlyUsd, applySettings, addMix, removeMix, usageText: usageLabel(usage),
+        gpuHourlyUsd, applySettings, addMix, removeMix, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
         pendingMode: activeJobs.at(-1)?.generation_type === "atelier" ? "atelier" : "results",
       }}
     />
