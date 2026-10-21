@@ -281,8 +281,10 @@ Queue feedback is compact and automatically returns to zero/ready 2.5 seconds af
 
 ## Lokální kopie obrázků
 
-Každý vygenerovaný obrázek se stahuje do `~/Pictures/Mulen art/` (Finder: Obrázky → Mulen art): `Plátno/` pro
-img2img a `Atelier/` pro studie z Ateliéru. Dělá to `scripts/sync_images.py` (běží i při zavřené stránce) a
-LaunchAgent `cz.mulen.art.sync` ho spouští každých 5 minut (`scripts/install_sync_agent.sh`, log
-`~/Library/Logs/mulen-art-sync.log`). Skript je opakovatelný: nic nepřepisuje, nic lokálně nemaže a
-přeskakuje obrázky smazané v aplikaci. Soubory mají datum vzniku obrázku.
+Každý vygenerovaný obrázek se do pár sekund objeví v `~/Pictures/Mulen art/` (Finder: Obrázky → Mulen art):
+`Plátno/` pro img2img a `Atelier/` pro studie z Ateliéru. Obrázek smazaný v aplikaci se přesune do Koše i
+tam (a vrátí se, když ho v aplikaci obnovíš); soubory, které smažeš nebo přesuneš sám, zůstanou jak jsou.
+Dělá to `scripts/sync_images.py --watch`, který jako LaunchAgent `cz.mulen.art.sync` běží trvale a kontroluje
+Modal každých 15 s (`scripts/install_sync_agent.sh`, log `~/Library/Logs/mulen-art-sync.log`). Webová stránka
+na Modalu nemůže číst složku na Macu; rychlý start galerie zajišťuje paměť prohlížeče (IndexedDB a Service
+Worker). Vypnutí: `launchctl bootout gui/$(id -u)/cz.mulen.art.sync`.

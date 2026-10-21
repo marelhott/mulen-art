@@ -1,40 +1,62 @@
-"""Download every generated image from the Modal outputs Volume into ~/Pictures/Mulen art.
+"""Mirror the generated images of the Modal outputs Volume into ~/Pictures/Mulen art.
 
   Plátno/   img2img results (canvas)
-  Atelier/  Atelier studies (noise, subject, photo, archive)
+  Atelier/  Atelier studies
 
-Runs on the Mac (manually or from the LaunchAgent in scripts/install_sync_agent.sh) and is safe to repeat:
-a record is processed once (.sync-state.json), existing files are never overwritten, and images you deleted in
-the app are skipped. Nothing is ever deleted locally. Usage: .venv/bin/python scripts/sync_images.py [--dest DIR]
+New images are downloaded within seconds; an image you delete in the app is moved to the Trash here too
+(and comes back if you restore it in the app). Files you delete or move yourself are left alone.
+
+  .venv/bin/python scripts/sync_images.py            one pass
+  .venv/bin/python scripts/sync_images.py --watch    keep running (what the LaunchAgent does)
 """
-import argparse, json, os, sys, tempfile
+import argparse, json, os, shutil, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-
-import modal
 
 DEFAULT_DEST = Path.home() / "Pictures" / "Mulen art"
 FOLDERS = {"canvas": "Plátno", "atelier": "Atelier"}
 VOLUME = "img2img-outputs"
 
 
-def read_bytes(volume, path):
-    return b"".join(volume.read_file(path))
-
-
 def classify(record):
     return "atelier" if (record.get("settings") or {}).get("generation_type") == "atelier" else "canvas"
 
 
-def sync(dest, dry_run=False):
-    volume = modal.Volume.from_name(VOLUME)
-    entries = {entry.path.lstrip("/"): entry for entry in volume.listdir("/") if entry.type == modal.volume.FileEntryType.FILE}
+def read_bytes(volume, path):
+    return b"".join(volume.read_file(path))
+
+
+def to_trash(path, trash=Path.home() / ".Trash"):
+    """Move to the macOS Trash (recoverable); fall back to deleting only if the Trash is unavailable."""
+    try:
+        trash.mkdir(exist_ok=True)
+        target = trash / path.name
+        if target.exists():
+            target = trash / f"{path.stem}-{int(time.time())}{path.suffix}"
+        shutil.move(str(path), str(target))
+    except OSError:
+        path.unlink(missing_ok=True)
+
+
+def migrate(state):
+    """Older state files stored just the relative path per record."""
+    return {name: (value if isinstance(value, dict) else {"status": "downloaded" if value.endswith((".png", ".webp")) else "skip", "path": value, "mtime": None})
+            for name, value in state.items()}
+
+
+def sync(dest, volume=None, trash=to_trash, now=None):
+    if volume is None:
+        import modal
+        volume = modal.Volume.from_name(VOLUME)
+    from modal.volume import FileEntryType
+    entries = {entry.path.lstrip("/"): entry for entry in volume.listdir("/") if entry.type == FileEntryType.FILE}
     for folder in FOLDERS.values():
         (dest / folder).mkdir(parents=True, exist_ok=True)
     state_path = dest / ".sync-state.json"
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    todo = [name for name in entries if name.endswith(".json") and name not in state]
+    state = migrate(json.loads(state_path.read_text())) if state_path.exists() else {}
+    # A record needs a look when it is new or was rewritten (saved, deleted, restored) since we last saw it.
+    changed = [name for name, entry in entries.items() if name.endswith(".json") and (name not in state or state[name].get("mtime") != entry.mtime)]
 
     def load(name):
         try:
@@ -44,48 +66,63 @@ def sync(dest, dry_run=False):
             return name, None
 
     with ThreadPoolExecutor(max_workers=16) as pool:
-        loaded = list(pool.map(load, todo))
-    jobs, skipped = [], 0
+        loaded = list(pool.map(load, changed))
+    downloads, report = [], {"downloaded": 0, "removed": 0, "checked": len(changed)}
     for name, record in loaded:
+        mtime = entries[name].mtime
+        previous = state.get(name, {})
         if record is None:
-            state[name] = "not-a-record"
+            state[name] = {"status": "skip", "path": None, "mtime": mtime}
         elif record.get("deleted"):
-            state[name] = "deleted"
-            skipped += 1
-        elif record["filename"] in entries:  # the image may land a moment after its record
-            jobs.append((name, record))
+            local = previous.get("path") and dest / previous["path"]
+            if previous.get("status") == "downloaded" and local and local.exists():
+                trash(local)
+                report["removed"] += 1
+            state[name] = {"status": "deleted", "path": previous.get("path"), "mtime": mtime}
+        elif record["filename"] in entries:  # the image can land a moment after its record
+            downloads.append((name, record, mtime))
 
     def fetch(job):
-        name, record = job
+        name, record, mtime = job
         target = dest / FOLDERS[classify(record)] / record["filename"]
-        if not target.exists():
+        fresh = False
+        if not target.exists() and state.get(name, {}).get("status") != "downloaded":
             data = read_bytes(volume, record["filename"])
             fd, temporary = tempfile.mkstemp(dir=target.parent, suffix=".part")
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
             os.replace(temporary, target)
+            fresh = True
             try:
                 stamp = datetime.fromisoformat(record["created_at"]).timestamp()
-                os.utime(target, (stamp, stamp))  # Finder sorts by the time it was generated
+                os.utime(target, (stamp, stamp))  # Finder sorts by the time the image was made
             except (KeyError, ValueError):
                 pass
-        return name, str(target.relative_to(dest))
+        return name, {"status": "downloaded", "path": str(target.relative_to(dest)), "mtime": mtime}, fresh
 
-    downloaded = 0
-    if not dry_run:
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for name, relative in pool.map(fetch, jobs):
-                state[name] = relative
-                downloaded += 1
-        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=0))
-    return {"new_records": len(todo), "downloaded": downloaded, "skipped_deleted": skipped,
-            "waiting_for_image": len(todo) - len(jobs) - skipped - sum(1 for _, r in loaded if r is None), "dry_run": dry_run}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for name, entry, fresh in pool.map(fetch, downloads):
+            state[name] = entry
+            report["downloaded"] += int(fresh)
+    state_path.write_text(json.dumps(state, ensure_ascii=False))
+    return report
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dest", type=Path, default=DEFAULT_DEST)
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--watch", action="store_true")
+    parser.add_argument("--interval", type=int, default=15)
     args = parser.parse_args()
-    result = sync(args.dest, args.dry_run)
-    print(datetime.now().isoformat(timespec="seconds"), json.dumps(result, ensure_ascii=False))
+    while True:
+        try:
+            report = sync(args.dest)
+            if report["downloaded"] or report["removed"] or not args.watch:
+                print(datetime.now().isoformat(timespec="seconds"), json.dumps(report), flush=True)
+        except Exception as exc:  # network hiccup: try again next round
+            print(datetime.now().isoformat(timespec="seconds"), "sync failed:", exc, file=sys.stderr, flush=True)
+            if not args.watch:
+                raise
+        if not args.watch:
+            break
+        time.sleep(args.interval)
