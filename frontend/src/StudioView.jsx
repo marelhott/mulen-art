@@ -52,7 +52,7 @@ export default function StudioView(p) {
   const [compareOpen, setCompareOpen] = useState(false);
   const [filterModel, setFilterModel] = useState("");
   const [filterText, setFilterText] = useState("");
-  const [tab, setTab] = useState("results");
+  const [tab, setTab] = useState("atelier");
   const isAtelier = tab === "atelier";
   const updateAtelier = patch => p.setAtelier(current => ({...current, ...patch}));
   const [thumbSize, setThumbSize] = useState(
