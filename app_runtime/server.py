@@ -254,7 +254,9 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
         raw = base64.b64decode(image["image_base64"])
         extension = image.get("format", "png").lower()
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-        stem = f"{timestamp}_{index:02d}_{meta.get('model_id', 'model')}"
+        # A checkpoint mix id contains ":", "=" and ","; file names (and gallery URLs) allow only [A-Za-z0-9_-].
+        model_part = re.sub(r"[^A-Za-z0-9_-]+", "_", str(meta.get("model_id", "model"))).strip("_")[:90] or "model"
+        stem = f"{timestamp}_{index:02d}_{model_part}"
         image_name = f"{stem}.{extension}"
         image_path = OUTPUTS_DIR / image_name
         image_path.write_bytes(raw)

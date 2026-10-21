@@ -843,6 +843,17 @@ class CloudFlowTests(unittest.TestCase):
         filename = self.jobs["thumb-job"]["result"]["images"][0]["filename"]
         self.assertTrue(server.thumb_path(filename).is_file())
 
+    def test_images_of_a_checkpoint_mix_get_url_safe_names(self):
+        result = {"images": [{"image_base64": self.payload["image_base64"], "format": "png", "width": 64, "height": 64}],
+                  "meta": {"model_id": "mix:tuymans_sdxl=50,tuymans_modal_2400=50"}}
+        item = server.persist_generated_images(result)[0]
+        import re
+        self.assertRegex(item["filename"], r"^[A-Za-z0-9_.-]+$")
+        self.assertRegex(item["id"], r"^[A-Za-z0-9_-]+$")
+        self.assertIn("tuymans_sdxl_50_tuymans_modal_2400_50", item["filename"])
+        self.assertEqual(self.client.get(item["url"]).status_code, 200)
+        self.assertEqual(self.client.get(item["thumb_url"]).status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()
