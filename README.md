@@ -278,3 +278,11 @@ Queue feedback is compact and automatically returns to zero/ready 2.5 seconds af
 - **Mulen Mara** (`mulen_mara`, trigger `mulpaint`): plná UNet na 226 obrazech z `~/Desktop/moje obrazy`
   (`training/prepare_mulen_dataset.py`, popisky `training/mulen_mara_captions.txt`), 2400 kroků, stejný recept
   jako Tuymans; `scripts/install_checkpoint.py` kopíruje hotový checkpoint na server a ověřuje SHA-256.
+
+## Lokální kopie obrázků
+
+Každý vygenerovaný obrázek se stahuje do `~/Pictures/Mulen art/` (Finder: Obrázky → Mulen art): `Plátno/` pro
+img2img a `Atelier/` pro studie z Ateliéru. Dělá to `scripts/sync_images.py` (běží i při zavřené stránce) a
+LaunchAgent `cz.mulen.art.sync` ho spouští každých 5 minut (`scripts/install_sync_agent.sh`, log
+`~/Library/Logs/mulen-art-sync.log`). Skript je opakovatelný: nic nepřepisuje, nic lokálně nemaže a
+přeskakuje obrázky smazané v aplikaci. Soubory mají datum vzniku obrázku.
