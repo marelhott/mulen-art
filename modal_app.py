@@ -307,6 +307,30 @@ def dispatch():
 
 
 @app.function(
+    image=base_image, volumes={"/outputs": outputs}, cpu=1, memory=2048, timeout=1800,
+    schedule=modal.Cron("47 3 * * *"),
+)
+def backfill_thumbnails():
+    """Create gallery thumbnails missing on the Volume (older outputs), so the gateway never builds them on demand."""
+    from app_runtime.server import OUTPUTS_DIR, ensure_thumbnail, thumb_path
+    outputs.reload()
+    created = 0
+    for path in sorted(OUTPUTS_DIR.iterdir()):
+        if path.suffix.lower() not in {".png", ".webp"} or path.name.startswith("source_"):
+            continue
+        if thumb_path(path.name).is_file():
+            continue
+        try:
+            if ensure_thumbnail(path.name):
+                created += 1
+        except Exception as exc:
+            print(f"thumbnail failed for {path.name}: {exc}")
+    if created:
+        outputs.commit()
+    print(f"created {created} thumbnails")
+
+
+@app.function(
     image=base_image, volumes={"/outputs": outputs}, cpu=0.25, memory=512, timeout=600,
     schedule=modal.Cron("17 3 * * *"),
 )
@@ -327,7 +351,8 @@ def purge_deleted_images():
 @app.function(
     image=base_image.add_local_dir("frontend/dist", "/app/frontend/dist"),
     volumes={"/outputs": outputs, "/state": state, "/archives": archives},
-    min_containers=0, max_containers=1, scaledown_window=20,
+    # Stays warm for 5 minutes after the last request: a page reload used to hit a cold start.
+    min_containers=0, max_containers=1, scaledown_window=300,
     cpu=1, memory=1024,  # thumbnails of 2048 px PNGs are decoded here; 0.25 CPU made them take 20+ s
     # STUDIO_USERNAME / STUDIO_PASSWORD, optional MONTHLY_IMAGE_LIMIT and MAX_JOBS_PER_REQUEST.
     secrets=[modal.Secret.from_name("img2img-auth")],

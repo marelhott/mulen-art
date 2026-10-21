@@ -258,6 +258,10 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
         image_name = f"{stem}.{extension}"
         image_path = OUTPUTS_DIR / image_name
         image_path.write_bytes(raw)
+        try:
+            ensure_thumbnail(image_name)  # the gallery never has to decode the full image on the gateway
+        except Exception:
+            pass  # the gateway still builds it on demand
 
         record = {
             "id": stem,

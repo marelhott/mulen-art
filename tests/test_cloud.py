@@ -826,6 +826,23 @@ class CloudFlowTests(unittest.TestCase):
         client = TestClient(app, raise_server_exceptions=False); client.auth = ("studio", "test-password")
         self.assertEqual(client.get("/library/missing_01_a.png").status_code, 500)
 
+    def test_assets_support_conditional_requests_and_workers_create_thumbnails(self):
+        import modal_app
+        from unittest.mock import Mock
+        Image.new("RGB", (64, 32), "green").save(self.output / "pic_01_a.png")
+        first = self.client.get("/library/pic_01_a.png")
+        self.assertEqual(first.status_code, 200)
+        self.assertIn("immutable", first.headers["cache-control"])
+        again = self.client.get("/library/pic_01_a.png", headers={"If-None-Match": first.headers["etag"]})
+        self.assertEqual((again.status_code, again.content), (304, b""))
+        self.assertEqual(self.client.head("/library/pic_01_a.png").status_code, 200)
+        # A generated image gets its thumbnail in the worker, before the gateway ever asks for it.
+        self.jobs["thumb-job"] = {"id": "thumb-job", "status": "queued", "logs": []}
+        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
+            modal_app.generate_job("thumb-job", self.payload)
+        filename = self.jobs["thumb-job"]["result"]["images"][0]["filename"]
+        self.assertTrue(server.thumb_path(filename).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

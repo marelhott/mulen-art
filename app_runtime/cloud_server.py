@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from PIL import Image
@@ -493,11 +493,15 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             return {"items": load_library_items()}
 
     def asset_response(path, media_type, request: Request):
+        stat = path.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        headers = {"Cache-Control": "public, max-age=31536000, immutable", "ETag": etag}
+        # Browsers revalidate on reload; a 304 saves re-sending megabytes through the gateway.
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
         if request.method == "HEAD":
-            return Response(status_code=200, media_type=media_type,
-                            headers={"Content-Length": str(path.stat().st_size), "Cache-Control": "public, max-age=31536000, immutable"})
-        return Response(path.read_bytes(), media_type=media_type,
-                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+            return Response(status_code=200, media_type=media_type, headers={**headers, "Content-Length": str(stat.st_size)})
+        return FileResponse(path, media_type=media_type, headers=headers)
 
     @app.get("/library/{filename}")
     @app.head("/library/{filename}")
