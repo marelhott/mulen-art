@@ -122,16 +122,29 @@ def spawn_job(job_id, payload):
     return None
 
 
+_SPEND_CACHE = {}
+
+
 def month_spend(month):
-    """Estimated GPU dollars spent this month (worker time only; container boot is not counted)."""
+    """Estimated GPU dollars spent this month (worker time only; container boot is not counted).
+
+    Summing walks every entry of a shared Dict over the network, so the result is kept for 30 s."""
+    import time
+    cached = _SPEND_CACHE.get(month)
+    if cached and time.monotonic() - cached[0] < 30:
+        return cached[1]
     prefix = f"{month}:"
-    return sum(value for key, value in spend.items() if key.startswith(prefix))
+    total = sum(value for key, value in spend.items() if key.startswith(prefix))
+    _SPEND_CACHE[month] = (time.monotonic(), total)
+    return total
 
 
 def record_spend(job_id, seconds, hourly_usd):
     import time
     rate = hourly_usd if hourly_usd else float(os.environ.get("GPU_HOURLY_USD", "0.80"))
-    spend[f"{time.strftime('%Y-%m', time.gmtime())}:{job_id}"] = round(seconds / 3600 * rate, 5)
+    month = time.strftime('%Y-%m', time.gmtime())
+    spend[f"{month}:{job_id}"] = round(seconds / 3600 * rate, 5)
+    _SPEND_CACHE.pop(month, None)
 
 
 def cancel_call(call_id):

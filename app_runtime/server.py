@@ -303,6 +303,23 @@ def read_record(path: Path) -> Any:
     return dict(data) if isinstance(data, dict) else data
 
 
+def warm_records(paths: list[Path]) -> None:
+    """Read not-yet-cached records concurrently. On a cold container every file is a network round trip, and
+    reading hundreds one after another took ~50 s; 32 at a time takes a couple of seconds."""
+    cold = [path for path in paths if str(path) not in _RECORD_CACHE]
+    if len(cold) < 8:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    def read(path):
+        try:
+            read_record(path)
+        except (OSError, ValueError):
+            pass
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        list(pool.map(read, cold))
+
+
 def metadata_paths() -> list[Path]:
     paths = list(OUTPUTS_DIR.glob("*.json"))
     if len(_RECORD_CACHE) > len(paths) + 256:  # forget records of files that vanished
@@ -326,7 +343,9 @@ def scan_records() -> tuple[list[dict[str, Any]], list[str]]:
     if _LISTING_CACHE.get("key") == (str(OUTPUTS_DIR), stamp) and time.monotonic() - _LISTING_CACHE["at"] < 5:
         return _LISTING_CACHE["value"]
     items, deleted = [], []
-    for metadata_path in sorted(metadata_paths(), reverse=True):
+    paths = metadata_paths()
+    warm_records(paths)
+    for metadata_path in sorted(paths, reverse=True):
         try:
             data = read_record(metadata_path)
             if not isinstance(data, dict) or "filename" not in data:

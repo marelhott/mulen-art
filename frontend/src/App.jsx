@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
+import { GALLERY_CACHE_KEY, cacheableItems, readCached, writeCached } from "./galleryCache";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { API_URL, buildImageUrl, reconcileOptionIds } from "./api";
 
@@ -156,8 +157,25 @@ function App() {
     return () => {cancelled = true; clearTimeout(retry);};
   }, [optionsRevision]);
 
+  const galleryFresh = useRef(false);
+  // Keep the stored snapshot in step with what the user does (save, delete, new results), debounced.
   useEffect(() => {
-    loadLibrary(true).catch(() => {});
+    if (!galleryFresh.current) return undefined;
+    const timer = window.setTimeout(() => {
+      writeCached(GALLERY_CACHE_KEY, {
+        library: { items: cacheableItems(libraryItems) },
+        history: { items: cacheableItems(results), deleted_ids: [...deletedIds.current] },
+        savedAt: Date.now(),
+      });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [libraryItems, results]);
+  useEffect(() => {
+    // Instant start: show the last known gallery from the browser while the server (possibly cold) answers.
+    readCached(GALLERY_CACHE_KEY).then((cached) => {
+      if (cached && !galleryFresh.current) applyGallery(cached.library, cached.history);
+    });
+    loadLibrary().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -580,21 +598,26 @@ function App() {
     );
   }
 
-  async function loadLibrary(restoreRecent = false) {
-    const response = await fetch(`${API_URL}/api/library`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.detail || "Library load failed.");
-    }
-    setLibraryItems((data.items || []).filter((item) => !deletedIds.current.has(item.id)));
-    const historyResponse = await fetch(`${API_URL}/api/history`);
-    if (!historyResponse.ok) throw new Error("Historii se nepodařilo načíst.");
-    const history = await historyResponse.json();
-    for (const id of history.deleted_ids || []) deletedIds.current.add(id);
+  // Shows a gallery snapshot (cached or fresh): library list, history list and deleted ids.
+  function applyGallery(library, history) {
+    for (const id of history?.deleted_ids || []) deletedIds.current.add(id);
+    setLibraryItems((library?.items || []).filter((item) => !deletedIds.current.has(item.id)));
     setResults((current) => {
       const ids = new Set(current.filter(Boolean).map((item) => item.id));
-      return [...current, ...(history.items || []).filter((item) => !ids.has(item.id))].filter((item) => !item || !deletedIds.current.has(item.id));
+      return [...current, ...(history?.items || []).filter((item) => !ids.has(item.id))].filter((item) => !item || !deletedIds.current.has(item.id));
     });
+  }
+
+  async function loadLibrary() {
+    // Both lists in parallel (they used to run one after the other, doubling the wait).
+    const [libraryResponse, historyResponse] = await Promise.all([fetch(`${API_URL}/api/library`), fetch(`${API_URL}/api/history`)]);
+    const library = await libraryResponse.json();
+    if (!libraryResponse.ok) throw new Error(library.detail || "Library load failed.");
+    if (!historyResponse.ok) throw new Error("Historii se nepodařilo načíst.");
+    const history = await historyResponse.json();
+    galleryFresh.current = true;
+    applyGallery(library, history);
+    writeCached(GALLERY_CACHE_KEY, { library: { items: cacheableItems(library.items) }, history: { items: cacheableItems(history.items), deleted_ids: history.deleted_ids || [] }, savedAt: Date.now() });
   }
 
   async function saveLibraryItem(itemId) {

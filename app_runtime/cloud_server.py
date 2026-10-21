@@ -468,15 +468,18 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def get_usage():
         month = datetime.now(UTC).strftime("%Y-%m")
         with lock:
-            return {"month": month, "reserved_images": usage.get(month, 0), "limit": monthly_limit,
-                    "spent_usd": round(spend(month), 2) if spend is not None else None,
-                    "budget_usd": monthly_budget_usd}
+            reserved = usage.get(month, 0)
+        # The spend sum walks a shared Dict over the network; it must not wait behind (or hold) the write lock.
+        return {"month": month, "reserved_images": reserved, "limit": monthly_limit,
+                "spent_usd": round(spend(month), 2) if spend is not None else None,
+                "budget_usd": monthly_budget_usd}
 
     @app.get("/api/history")
     def history():
-        with lock:
-            refresh_cached()
-            return {"items": load_history_items(), "deleted_ids": load_deleted_ids()}
+        # Read-only: records are replaced atomically, so listing needs no write lock. Holding it here made
+        # /api/usage and every other request wait behind a slow cold listing (50 s on a cold container).
+        refresh_cached()
+        return {"items": load_history_items(), "deleted_ids": load_deleted_ids()}
 
     @app.post("/api/library/{item_id}")
     def save_to_library(item_id: str):
@@ -488,9 +491,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
 
     @app.get("/api/library")
     def library():
-        with lock:
-            refresh_cached()
-            return {"items": load_library_items()}
+        refresh_cached()
+        return {"items": load_library_items()}
 
     def asset_response(path, media_type, request: Request):
         stat = path.stat()

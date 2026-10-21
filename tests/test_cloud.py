@@ -872,6 +872,35 @@ class CloudFlowTests(unittest.TestCase):
             "settings": {"model_id": "mix:tuymans_sdxl=60,hofmann_sdxl=30"}})
         self.assertEqual(bad.status_code, 422)  # weights must still sum to 100
 
+    def test_cold_listing_reads_records_concurrently_and_listing_does_not_take_the_write_lock(self):
+        import json, threading, time
+        for index in range(40):
+            Image.new("RGB", (8, 8), "red").save(self.output / f"img_{index:02d}.png")
+            (self.output / f"img_{index:02d}.json").write_text(json.dumps({"id": f"img_{index:02d}", "filename": f"img_{index:02d}.png"}))
+        server._RECORD_CACHE.clear(); server._LISTING_CACHE.clear()
+        threads_seen, original = set(), server.read_record
+
+        def slow_read(path):
+            if str(path) not in server._RECORD_CACHE:  # only a cold read is slow, like a network round trip
+                threads_seen.add(threading.get_ident()); time.sleep(0.02)
+            return original(path)
+        with patch.object(server, "read_record", side_effect=slow_read):
+            started = time.monotonic()
+            self.assertEqual(len(server.load_history_items()), 40)
+            self.assertLess(time.monotonic() - started, 0.4)  # 40 x 20 ms in sequence would take 0.8 s
+        self.assertGreater(len(threads_seen), 4)
+        # /api/history and /api/usage answer while another request holds the write lock
+        holder = threading.Thread(target=lambda: None)
+        import modal_app
+        done = {}
+        def get(name, path):
+            done[name] = self.client.get(path).status_code
+        with patch.object(modal_app, "month_spend", return_value=0.0):
+            workers = [threading.Thread(target=get, args=(n, p)) for n, p in (("history", "/api/history"), ("library", "/api/library"), ("usage", "/api/usage"))]
+            for w in workers: w.start()
+            for w in workers: w.join(5)
+        self.assertEqual(done, {"history": 200, "library": 200, "usage": 200})
+
 
 if __name__ == "__main__":
     unittest.main()
