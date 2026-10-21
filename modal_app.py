@@ -10,6 +10,10 @@ outputs = modal.Volume.from_name("img2img-outputs", create_if_missing=True)
 jobs = modal.Dict.from_name("img2img-jobs", create_if_missing=True)
 # One entry per admitted GPU job (job_id -> {"ts", "call_id"}); enforces the global GPU cap below.
 slots = modal.Dict.from_name("img2img-slots", create_if_missing=True)
+# Jobs waiting for a slot: pending maps job_id -> submit time (small, cheap to list); the
+# potentially large payloads live in a separate Dict so ordering never downloads them.
+pending = modal.Dict.from_name("img2img-pending", create_if_missing=True)
+payloads = modal.Dict.from_name("img2img-payloads", create_if_missing=True)
 state = modal.Volume.from_name("img2img-state", create_if_missing=True)
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -35,10 +39,12 @@ gpu_image = (
 )
 
 # GPU concurrency: Modal autoscales each distinct model_id parameter as its own container pool,
-# so max_containers bounds ONE model's pool (10 workers), not the whole app. Total concurrent GPUs
-# are therefore <= 10 x (models in use at the same time) and <= the Modal account's GPU quota.
-# Large batches must keep queueing instead of being rejected (252 jobs is a normal batch), so the
-# gateway only bounds the in-flight BACKLOG, as a guard against runaway submission loops.
+# so max_containers bounds ONE model's pool, not the whole app. The app-wide cost cap is enforced
+# here instead: at most MAX_GPU_JOBS jobs run at once across all models (one job = one GPU
+# container; idle containers inside scaledown_window can briefly add to that). Everything beyond
+# it WAITS in `pending` (FIFO) so a 252-job batch still queues, and the single-instance
+# `dispatch` function (max_containers=1 => serialized, so the Dict needs no locking) starts the
+# next job whenever a slot frees. MAX_BACKLOG_JOBS only guards against runaway submit loops.
 MAX_GPU_JOBS = 10
 MAX_BACKLOG_JOBS = int(os.environ.get("MAX_BACKLOG_JOBS", "1000"))
 SLOT_TTL_SECONDS = 1200 + 300  # worker timeout + slack; reclaims slots leaked by a crashed worker
@@ -48,19 +54,6 @@ SNAPSHOT = os.environ.get("MODAL_GPU_SNAPSHOT") == "1"  # alpha GPU memory snaps
 def store_size(store):
     # modal.Dict has no __len__; it exposes .len() instead.
     return store.len() if hasattr(store, "len") else len(store)
-
-
-def acquire_slot(store, job_id, cap=MAX_BACKLOG_JOBS, ttl=SLOT_TTL_SECONDS, now=None):
-    """Reserve a backlog slot for job_id or raise. Called only by the single gateway container."""
-    import time
-    now = time.time() if now is None else now
-    if store_size(store) >= cap:  # scan for leaked slots only when the cheap length check says we are full
-        for key, entry in list(store.items()):
-            if now - entry.get("ts", 0) > ttl:
-                release_slot(store, key)
-    if store_size(store) >= cap:
-        raise RuntimeError(f"Job backlog full ({cap} jobs in flight)")
-    store[job_id] = {"ts": now, "call_id": None}
 
 
 def release_slot(store, job_id):
@@ -76,22 +69,63 @@ def release_slot_for_call(store, call_id):
             release_slot(store, key)
 
 
+def drain_pending(pending, payloads, slots, spawn, is_cancelled, on_started, on_failed,
+                  cap=MAX_GPU_JOBS, ttl=SLOT_TTL_SECONDS, now=None):
+    """Start queued jobs, oldest first, while fewer than `cap` are running. Serialized by Modal."""
+    import time
+    now = time.time() if now is None else now
+    for key, entry in list(slots.items()):
+        if now - entry.get("ts", 0) > ttl:
+            release_slot(slots, key)
+    live = store_size(slots)
+    started = 0
+    for job_id, _ts in sorted(pending.items(), key=lambda item: item[1]):
+        if is_cancelled(job_id):  # cancelled while waiting: drop it, never spend a GPU on it
+            release_slot(pending, job_id); release_slot(payloads, job_id)
+            continue
+        if live >= cap:
+            break
+        slots[job_id] = {"ts": now, "call_id": None}
+        try:
+            call_id = spawn(job_id, payloads[job_id])
+        except Exception as exc:
+            release_slot(slots, job_id)
+            on_failed(job_id, exc)
+        else:
+            if job_id in slots:  # the worker may already have finished and released it
+                slots[job_id] = {"ts": now, "call_id": call_id}
+            on_started(job_id, call_id)
+            live += 1
+            started += 1
+        release_slot(pending, job_id); release_slot(payloads, job_id)
+    return started
+
+
 def spawn_job(job_id, payload):
-    """Gateway submit: admit under the global cap, route to the model's own worker pool."""
-    acquire_slot(slots, job_id)
+    """Gateway submit: queue the job; `dispatch` starts it when a GPU slot is free.
+
+    Returns None because there is no FunctionCall yet; dispatch records `call:<job_id>` for cancel.
+    """
+    import time
+    if store_size(pending) >= MAX_BACKLOG_JOBS:
+        raise RuntimeError(f"Job backlog full ({MAX_BACKLOG_JOBS} jobs waiting)")
+    payloads[job_id] = payload
+    pending[job_id] = time.time()
     try:
-        call = ImageWorker(model_id=payload["model_id"]).run.spawn(job_id, payload)
+        dispatch.spawn()
     except Exception:
-        release_slot(slots, job_id)
+        release_slot(pending, job_id); release_slot(payloads, job_id)
         raise
-    if job_id in slots:  # the worker may already have finished and released it
-        slots[job_id] = {**slots[job_id], "call_id": call.object_id}
-    return call.object_id
+    return None
 
 
 def cancel_call(call_id):
     modal.FunctionCall.from_id(call_id).cancel()
     release_slot_for_call(slots, call_id)
+    try:
+        dispatch.spawn()
+    except Exception:
+        pass
 
 
 # Published Modal per-hour rates, used only for the UI's per-image estimate.
@@ -214,6 +248,42 @@ class ImageWorker:
             return generate_job(job_id, payload)
         finally:
             release_slot(slots, job_id)
+            try:
+                dispatch.spawn()  # a slot is free: start the next waiting job
+            except Exception as exc:
+                print(f"dispatch wake-up failed (the periodic sweep will catch up): {exc}")
+
+
+@app.function(
+    image=base_image, max_containers=1, scaledown_window=20, cpu=0.25, memory=512, timeout=300,
+    # Safety net if a wake-up is ever lost: the queue is also swept every two minutes.
+    schedule=modal.Period(minutes=2),
+)
+def dispatch():
+    from app_runtime.server import now_iso
+
+    def spawn(job_id, payload):
+        return ImageWorker(model_id=payload["model_id"]).run.spawn(job_id, payload).object_id
+
+    def is_cancelled(job_id):
+        record = jobs.get(job_id)
+        return record is None or record.get("status") == "cancelled"
+
+    def on_started(job_id, call_id):
+        jobs[f"call:{job_id}"] = call_id
+        if is_cancelled(job_id):  # cancelled in the instant between the check and the spawn
+            try:
+                cancel_call(call_id)
+            except Exception:
+                pass
+
+    def on_failed(job_id, exc):
+        record = jobs.get(job_id)
+        if record and record.get("status") != "cancelled":
+            jobs[job_id] = {**record, "status": "failed", "message": "Failed", "updated_at": now_iso(),
+                            "error": {"detail": f"Could not start the cloud job: {exc}"}}
+
+    drain_pending(pending, payloads, slots, spawn, is_cancelled, on_started, on_failed)
 
 
 @app.function(

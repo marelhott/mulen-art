@@ -621,56 +621,86 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(path.stat().st_size, before.st_size)
         self.assertEqual(server.read_record(path), {"state": "bbbb"})
 
-    def test_gpu_cap_is_global_across_models_and_expires_leaked_slots(self):
+    def drain(self, pending, payloads, slots, spawned, cancelled=(), cap=3, now=1000, ttl=1500):
         import modal_app
-        slots = {}
-        for index in range(3):
-            modal_app.acquire_slot(slots, f"j{index}", cap=3, now=100)
-        with self.assertRaisesRegex(RuntimeError, "backlog"):
-            modal_app.acquire_slot(slots, "j3", cap=3, now=101)
-        modal_app.release_slot(slots, "j0")
-        modal_app.release_slot(slots, "j0")  # idempotent
-        modal_app.acquire_slot(slots, "j3", cap=3, now=102)
-        # A crashed worker never releases; its slot is reclaimed after the TTL.
-        modal_app.acquire_slot(slots, "j4", cap=3, ttl=50, now=1000)
-        self.assertEqual(list(slots), ["j4"])
+        failed, started = [], []
 
-    def test_spawn_routes_to_model_pool_returns_call_id_and_cancel_releases_slot(self):
+        def spawn(job_id, payload):
+            if payload.get("boom"):
+                raise RuntimeError("offline")
+            spawned.append((job_id, payload["model_id"]))
+            return f"fc-{job_id}"
+        count = modal_app.drain_pending(pending, payloads, slots, spawn, lambda job_id: job_id in cancelled,
+                                        lambda job_id, call_id: started.append((job_id, call_id)),
+                                        lambda job_id, exc: failed.append(job_id), cap=cap, now=now, ttl=ttl)
+        return count, started, failed
+
+    def test_dispatcher_runs_at_most_cap_jobs_across_models_in_fifo_order(self):
+        pending = {f"j{i}": i for i in range(5)}
+        payloads = {f"j{i}": {"model_id": "a" if i % 2 else "b"} for i in range(5)}
+        slots, spawned = {}, []
+        count, started, failed = self.drain(pending, payloads, slots, spawned)
+        self.assertEqual((count, [job for job, _ in spawned]), (3, ["j0", "j1", "j2"]))
+        self.assertEqual({payloads_model for _, payloads_model in spawned}, {"a", "b"})
+        self.assertEqual(sorted(pending), ["j3", "j4"])  # the rest keep waiting
+        self.assertEqual(slots["j1"]["call_id"], "fc-j1")
+        self.assertEqual(self.drain(pending, payloads, slots, spawned)[0], 0)  # full: nothing more starts
+        import modal_app
+        modal_app.release_slot(slots, "j0")
+        self.assertEqual(self.drain(pending, payloads, slots, spawned)[0], 1)
+        self.assertEqual(spawned[-1][0], "j3")
+
+    def test_dispatcher_skips_cancelled_reclaims_leaked_slots_and_reports_spawn_failures(self):
+        pending = {"j0": 0, "j1": 1, "j2": 2}
+        payloads = {"j0": {"model_id": "a"}, "j1": {"model_id": "a", "boom": True}, "j2": {"model_id": "a"}}
+        slots, spawned = {"old": {"ts": 1, "call_id": "x"}}, []
+        count, started, failed = self.drain(pending, payloads, slots, spawned, cancelled={"j0"}, cap=1, now=5000)
+        self.assertEqual((spawned, failed, count), ([("j2", "a")], ["j1"], 1))
+        self.assertEqual((pending, payloads), ({}, {}))
+        self.assertEqual(list(slots), ["j2"])  # leaked "old" reclaimed, failed j1 released
+
+    def test_gateway_queues_without_a_call_id_and_cancel_releases_slot_and_wakes_dispatcher(self):
         import modal_app
         from unittest.mock import Mock
-        slots, worker = {}, Mock()
-        worker.return_value.run.spawn.return_value.object_id = "fc-123"
-        with patch.object(modal_app, "slots", slots), patch.object(modal_app, "ImageWorker", worker), \
+        pending, payloads, slots, dispatch = {}, {}, {"job": {"ts": 1, "call_id": "fc-1"}}, Mock()
+        with patch.object(modal_app, "pending", pending), patch.object(modal_app, "payloads", payloads), \
+                patch.object(modal_app, "slots", slots), patch.object(modal_app, "dispatch", dispatch), \
                 patch.object(modal_app.modal.FunctionCall, "from_id") as from_id:
-            self.assertEqual(modal_app.spawn_job("job", {"model_id": "hofmann_sdxl"}), "fc-123")
-            worker.assert_called_once_with(model_id="hofmann_sdxl")
-            self.assertEqual(slots["job"]["call_id"], "fc-123")
-            modal_app.cancel_call("fc-123")
-            from_id.assert_called_once_with("fc-123")
+            self.assertIsNone(modal_app.spawn_job("new", {"model_id": "hofmann_sdxl"}))
+            self.assertIn("new", pending); self.assertEqual(payloads["new"]["model_id"], "hofmann_sdxl")
+            dispatch.spawn.assert_called_once()
+            modal_app.cancel_call("fc-1")
+            from_id.assert_called_once_with("fc-1")
             from_id.return_value.cancel.assert_called_once()
+            self.assertEqual(dispatch.spawn.call_count, 2)
         self.assertEqual(slots, {})
 
-    def test_spawn_failure_releases_slot(self):
+    def test_gateway_rolls_back_queue_entry_and_enforces_backlog_guard(self):
         import modal_app
         from unittest.mock import Mock
-        slots, worker = {}, Mock()
-        worker.return_value.run.spawn.side_effect = RuntimeError("offline")
-        with patch.object(modal_app, "slots", slots), patch.object(modal_app, "ImageWorker", worker):
+        pending, payloads, dispatch = {}, {}, Mock()
+        dispatch.spawn.side_effect = RuntimeError("offline")
+        with patch.object(modal_app, "pending", pending), patch.object(modal_app, "payloads", payloads), patch.object(modal_app, "dispatch", dispatch):
             with self.assertRaises(RuntimeError):
                 modal_app.spawn_job("job", {"model_id": "tuymans_sdxl"})
-        self.assertEqual(slots, {})
+            self.assertEqual((pending, payloads), ({}, {}))
+            with patch.object(modal_app, "MAX_BACKLOG_JOBS", 1):
+                pending["x"] = 1
+                with self.assertRaisesRegex(RuntimeError, "backlog"):
+                    modal_app.spawn_job("job", {"model_id": "tuymans_sdxl"})
 
-    def test_worker_is_parameterized_by_model_and_releases_slot(self):
+    def test_worker_is_parameterized_by_model_and_releases_slot_and_wakes_dispatcher(self):
         import modal_app
         from unittest.mock import Mock
-        slots = {"test-job": {"ts": 1, "call_id": None}}
+        slots, dispatch = {"test-job": {"ts": 1, "call_id": None}}, Mock()
         self.jobs["test-job"] = {"id": "test-job", "status": "queued", "logs": []}
-        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "slots", slots), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
+        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "slots", slots), patch.object(modal_app, "dispatch", dispatch), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
             modal_app.ImageWorker(model_id="tuymans_sdxl").run.local("test-job", self.payload)
         self.assertEqual(self.jobs["test-job"]["status"], "completed")
         self.assertEqual(slots, {})
+        dispatch.spawn.assert_called_once()
 
-    def test_slot_cap_works_with_a_modal_style_dict_without_len(self):
+    def test_store_size_works_with_a_modal_style_dict_without_len(self):
         import modal_app
 
         class ModalLikeDict(dict):
@@ -679,11 +709,7 @@ class CloudFlowTests(unittest.TestCase):
             def len(self):
                 return sum(1 for _ in self.keys())
 
-        slots = ModalLikeDict()
-        for index in range(2):
-            modal_app.acquire_slot(slots, f"j{index}", cap=2, now=1)
-        with self.assertRaisesRegex(RuntimeError, "backlog"):
-            modal_app.acquire_slot(slots, "j2", cap=2, now=2)
+        self.assertEqual(modal_app.store_size(ModalLikeDict(a=1, b=2)), 2)
 
     def test_gpu_rate_matches_torch_device_names(self):
         import modal_app, sys, types
