@@ -785,6 +785,22 @@ class CloudFlowTests(unittest.TestCase):
         with patch.object(cloud_server, "MAX_EXPORT_PIXELS", 1000):
             self.assertEqual(self.client.get("/api/library/pic/export?scale=2").status_code, 413)
 
+    def test_small_requests_get_queue_priority_over_large_batches(self):
+        import modal_app
+        from unittest.mock import Mock
+        pending, payloads, dispatch = {}, {}, Mock()
+        with patch.object(modal_app, "pending", pending), patch.object(modal_app, "payloads", payloads), patch.object(modal_app, "dispatch", dispatch):
+            modal_app.spawn_job("batch", {"model_id": "a", "queue_priority": 1})
+            modal_app.spawn_job("single", {"model_id": "a", "queue_priority": 0})
+        slots, spawned = {}, []
+        payloads["batch"], payloads["single"] = {"model_id": "a"}, {"model_id": "a"}
+        self.drain(pending, payloads, slots, spawned, cap=1)
+        self.assertEqual([job for job, _ in spawned], ["single"])
+        sent = []
+        small = TestClient(self.make_app(lambda key, payload: sent.append(payload["queue_priority"]), monthly_limit=None)); small.auth = self.client.auth
+        self.assertEqual(small.post("/api/generate", json=self.payload).status_code, 200)
+        self.assertEqual(sent, [0])
+
 
 if __name__ == "__main__":
     unittest.main()

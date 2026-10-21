@@ -57,6 +57,7 @@ DEFAULT_MAX_JOBS_PER_REQUEST = 64
 
 
 MAX_EXPORT_PIXELS = 36_000_000
+INTERACTIVE_REQUEST_JOBS = 4
 
 
 def optional_float_env(name, default=None):
@@ -240,7 +241,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             if has_sources:
                 commit()
             usage[month] = used + requested
+            # Small, interactive requests start before the tail of a large batch waiting in the queue.
+            priority = 0 if len(payloads) <= INTERACTIVE_REQUEST_JOBS else 1
             for index, payload in enumerate(payloads):
+                payload["queue_priority"] = priority
                 job_id = uuid.uuid4().hex
                 jobs[job_id] = {
                     "id": job_id, "status": "queued", "progress": 0,

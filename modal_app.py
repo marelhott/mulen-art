@@ -47,7 +47,7 @@ gpu_image = (
 # container; idle containers inside scaledown_window can briefly add to that). Everything beyond
 # it WAITS in `pending` (FIFO) so a 252-job batch still queues, and the single-instance
 # `dispatch` function (max_containers=1 => serialized, so the Dict needs no locking) starts the
-# next job whenever a slot frees. MAX_BACKLOG_JOBS only guards against runaway submit loops.
+# next job whenever a slot frees (small requests first, then oldest first). MAX_BACKLOG_JOBS only guards against runaway submit loops.
 MAX_GPU_JOBS = 10
 MAX_BACKLOG_JOBS = int(os.environ.get("MAX_BACKLOG_JOBS", "1000"))
 SLOT_TTL_SECONDS = 1200 + 300  # worker timeout + slack; reclaims slots leaked by a crashed worker
@@ -113,7 +113,7 @@ def spawn_job(job_id, payload):
     if store_size(pending) >= MAX_BACKLOG_JOBS:
         raise RuntimeError(f"Job backlog full ({MAX_BACKLOG_JOBS} jobs waiting)")
     payloads[job_id] = payload
-    pending[job_id] = time.time()
+    pending[job_id] = [payload.get("queue_priority", 1), time.time()]  # [priority, submit time]; lowest first
     try:
         dispatch.spawn()
     except Exception:

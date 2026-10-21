@@ -52,6 +52,9 @@ route except `/health` and `/login` needs either the session cookie set by
 redirected to `/login`. Optional keys in the same Secret:
 
 - `MONTHLY_IMAGE_LIMIT` — monthly output cap; requests over it get 429. Unset = no cap.
+- `MONTHLY_BUDGET_USD` — monthly GPU budget; new requests get 429 once the estimated spend
+  (worker seconds × the GPU's published hourly rate, container boot not counted) reaches it.
+  `/api/usage` reports `spent_usd` and `budget_usd`; the sidebar shows them. Unset = no budget.
 - `MAX_JOBS_PER_REQUEST` — GPU jobs one `/api/generate-batch` or `/api/atelier-batch`
   request may queue (default 64; the UI sends at most 8 studies × 7 checkpoints = 56).
   Larger requests get 413.
@@ -70,10 +73,14 @@ separate frontend host or Vercel account is required.
 - Models live in `img2img-models` Volume (~26.69 GiB including SDXL Base).
 - Gallery files/metadata live in `img2img-outputs` Volume.
 - Jobs/progress live in a shared Modal Dict so CPU restarts do not lose them.
-- Up to 10 independent L4 workers can process different input images concurrently,
-  subject to the account GPU quota and available capacity. Each worker runs one
-  input at a time; it scales to zero after a 20-second idle
-  window. Browsing/polling never starts it. Starts and the idle window can be billed.
+- GPU workers are one `ImageWorker` pool per checkpoint (`model_id` is a Modal class parameter), so a
+  warm container keeps its model loaded (`@modal.enter` preloads it) instead of swapping checkpoints.
+  Modal autoscales each pool independently, so the app-wide cost cap is enforced by a serialized
+  `dispatch` function: at most `MAX_GPU_JOBS` (10) jobs run at once across all models, the rest wait
+  in a FIFO queue (`img2img-pending`; requests of up to 4 jobs go before large batches). Containers
+  idle inside the 20-second `scaledown_window` can briefly add to that. Set `MODAL_GPU_SNAPSHOT=1`
+  at deploy time to try Modal's alpha GPU memory snapshots. Deleted images are purged after 30 days
+  (`DELETED_RETENTION_DAYS`) by a daily job. Browsing/polling never starts a worker.
 - Input count and variants per input have no application cap; the UI splits them into
   transport requests below `MAX_JOBS_PER_REQUEST`, and the monthly output count is
   capped only when `MONTHLY_IMAGE_LIMIT` is set.

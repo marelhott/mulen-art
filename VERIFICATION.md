@@ -40,6 +40,9 @@ soubory jsou bajtově shodné s místními originály. Zálohy `.bak` se nepřen
 - Výpočet běží na Modalu, místní Mac slouží jen pro správu a prohlížeč.
 - GPU má min_containers=0 a vypíná se po 20 s nečinnosti.
 - Měsíční aplikační strop byl odstraněn; produkční `/api/usage` ověřeno s `limit: null`.
+- Per-model workery (2026-10-21): 12 úloh ve dvou modelech běželo nejvýš po 10 (špička 10 slotů), zrušená
+  čekající úloha se nespustila, fronta i sloty skončily prázdné; Atelier foto a 1536 detail po jiném
+  modelu doběhly. Volitelný rozpočet: `MONTHLY_BUDGET_USD` (viz README).
 
 Zkušební výsledky jsou ponechány v galerii.
 
