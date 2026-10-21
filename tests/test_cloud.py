@@ -854,6 +854,24 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(self.client.get(item["url"]).status_code, 200)
         self.assertEqual(self.client.get(item["thumb_url"]).status_code, 200)
 
+    def test_variant_siblings_carry_their_own_seed_settings_fusion_weights_and_prompt(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client.auth = ("studio", "test-password")
+        siblings = [
+            {"model_id": "mix:tuymans_sdxl=64,hofmann_sdxl=36", "seed": 100, "denoise": 0.36, "cfg": 4.6, "prompt": "same pose, camera a few degrees to the left", "negative_prompt": "text"},
+            {"model_id": "mix:tuymans_sdxl=55,hofmann_sdxl=45", "seed": 101, "denoise": 0.41, "cfg": 5.4, "prompt": "same pose, slightly tighter crop", "negative_prompt": "text"},
+        ]
+        for sibling in siblings:
+            response = client.post("/api/generate-batch", json={"inputs": [{"name": "a.png", "image_base64": self.payload["image_base64"]}],
+                "settings": {"num_images": 1, "steps": 28, **sibling}})
+            self.assertEqual(response.status_code, 200, response.text)
+        sent = [payload for _, payload in self.submissions]
+        self.assertEqual([(p["model_id"], p["seed"], p["denoise"], p["cfg"], p["prompt"], p["negative_prompt"]) for p in sent],
+                         [(s["model_id"], s["seed"], s["denoise"], s["cfg"], s["prompt"], s["negative_prompt"]) for s in siblings])
+        bad = client.post("/api/generate-batch", json={"inputs": [{"name": "a.png", "image_base64": self.payload["image_base64"]}],
+            "settings": {"model_id": "mix:tuymans_sdxl=60,hofmann_sdxl=30"}})
+        self.assertEqual(bad.status_code, 422)  # weights must still sum to 100
+
 
 if __name__ == "__main__":
     unittest.main()

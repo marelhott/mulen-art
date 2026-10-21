@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode, retryUrl, RETRY_DELAYS_MS, isMixId, parseMixId, normalizeWeights, buildMixId, mixEntry, sourceOf, idsForSource } from "./studioTools.js";
+import { filterItems, averageWorkerSeconds, etaSeconds, formatEta, etaLabel, usageLabel, controlsFromSettings, creationMode, retryUrl, RETRY_DELAYS_MS, isMixId, parseMixId, normalizeWeights, buildMixId, mixEntry, sourceOf, idsForSource, planVariants, VARIANT_DISTANCES, describeVariant } from "./studioTools.js";
 
 const items = [
   { id: "a", model_id: "m1", settings: { prompt: "red fox", seed: 42, worker_seconds: 20 } },
@@ -101,4 +101,35 @@ test("plain checkpoints and fusions are exclusive sources", () => {
   assert.equal(sourceOf("mix:a=50,b=50"), "mix");
   assert.equal(sourceOf("a"), "single");
   assert.deepEqual(idsForSource([], "mix"), []);
+});
+
+test("variants: deterministic siblings that differ in seed, settings, prompt and fusion weights within the distance band", () => {
+  const base = { denoise: 0.5, cfg: 5, loraStrength: 0.8, modelId: "mix:a=60,b=40" };
+  const plan = planVariants({ count: 5, distance: "middle", spread: 0.5, prompt: "a quiet room", base, seed: 100 });
+  assert.equal(plan.length, 5);
+  assert.deepEqual(plan, planVariants({ count: 5, distance: "middle", spread: 0.5, prompt: "a quiet room", base, seed: 100 }));
+  assert.deepEqual(plan.map((v) => v.seed), [100, 101, 102, 103, 104]);
+  assert.equal(new Set(plan.map((v) => v.denoise)).size > 1, true);
+  assert.equal(new Set(plan.map((v) => v.modelId)).size > 1, true);
+  for (const v of plan) {
+    assert.ok(parseMixId(v.modelId), "still a valid mix summing to 100");
+    assert.ok(v.denoise >= 0.05 && v.denoise <= 0.95 && v.cfg >= 0.5 && v.cfg <= 20);
+    assert.ok(v.prompt.startsWith("a quiet room, "));
+  }
+  assert.equal(new Set(plan.map((v) => v.directive)).size, 5);
+});
+
+test("variants: distance moves denoise, adds its suffix, and spread 0 keeps the weights and settings", () => {
+  const base = { denoise: 0.5, cfg: 5, loraStrength: 0.8, modelId: "tuymans_sdxl" };
+  const at = (distance, spread = 0) => planVariants({ count: 1, distance, spread, base, seed: 7 })[0];
+  assert.ok(at("near").denoise < at("middle").denoise && at("middle").denoise < at("far").denoise && at("far").denoise < at("weird").denoise);
+  assert.equal(at("middle").denoise, 0.5);
+  assert.equal(at("middle").modelId, "tuymans_sdxl");
+  assert.equal(at("near").prompt, "same pose, slightly different camera angle, camera a few degrees to the left");
+  assert.match(at("weird").prompt, /^surreal, dreamlike/);
+  assert.equal(planVariants({ count: 1, distance: "bogus", spread: 0, base, seed: 7 })[0].denoise, 0.5);
+  assert.equal(VARIANT_DISTANCES.length, 4);
+  const mixed = planVariants({ count: 2, distance: "middle", spread: 0, base: { ...base, modelId: "mix:a=70,b=30" }, seed: 1 });
+  assert.deepEqual(mixed.map((v) => v.modelId), ["mix:a=70,b=30", "mix:a=70,b=30"]);
+  assert.equal(describeVariant(mixed[0], [{ id: "a", name: "A" }, { id: "b", name: "B" }]).text.includes("váhy 70 / 30"), true);
 });

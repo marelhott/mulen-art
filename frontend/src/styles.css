@@ -2192,3 +2192,20 @@ input[type="range"]::-moz-range-progress {
 .source-switch button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .source-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mix-empty { padding: 6px 2px; }
+
+/* Variants (siblings) */
+.variants-panel { border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; }
+.variants-panel.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.variants-toggle { display: grid; grid-template-columns: auto auto 1fr; align-items: start; gap: 8px; cursor: pointer; }
+.variants-toggle input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--accent); }
+.variants-toggle b { display: block; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.variants-toggle small { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; }
+.variants-toggle input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.source-switch.four { grid-template-columns: repeat(4, 1fr); }
+.variants-prompt, .variants-negative { width: 100%; background: var(--input); border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); font: inherit; font-size: 11px; padding: 8px 10px; resize: vertical; }
+.variants-prompt:focus-visible, .variants-negative:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.variants-plan { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.variants-plan li { display: grid; gap: 2px; font-size: 10px; color: var(--secondary); padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: color-mix(in srgb, var(--card) 70%, transparent); }
+.variants-plan b { color: var(--accent); margin-right: 4px; }
+.variants-plan em { font-style: normal; color: var(--muted); }
+.variants-plan q { quotes: none; color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

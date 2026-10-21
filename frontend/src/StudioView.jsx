@@ -28,6 +28,7 @@ import { filterItems, idsForSource } from "./studioTools";
 import { TEXT } from "./texts";
 import { Compare } from "./components/Compare";
 import { CheckpointPicker } from "./components/CheckpointPicker";
+import { VariantsPanel } from "./components/VariantsPanel";
 import { AtelierControls, AtelierQueue } from "./components/Atelier";
 import { ImageCard } from "./components/ImageCard";
 import { ImageViewer } from "./components/ImageViewer";
@@ -546,6 +547,7 @@ export default function StudioView(p) {
             />
           </>
         )}
+        <VariantsPanel value={p.variants} onChange={p.setVariants} plan={p.variantsPlan} models={p.models} />
         <div className="control-block resolution">
           <Label>VSTUP PŘED GENEROVÁNÍM</Label>
           <Range label="ZVĚTŠENÍ VSTUPU" min={1} max={4} step={0.05} value={p.inputScale} onChange={p.setInputScale}

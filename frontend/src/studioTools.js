@@ -139,3 +139,78 @@ export const MIX_STORAGE_KEY = "img2img-mixes-v1";
 // at a time and generation uses only the ids that belong to the active source.
 export const sourceOf = (id) => (isMixId(id) ? "mix" : "single");
 export const idsForSource = (ids, source) => ids.filter((id) => sourceOf(id) === source);
+
+// ---- Variants (siblings of one input), ported from Mulen Nano's "Varianty" -----------------------------
+// Nano makes siblings of an image with a general prompt and a distance (near .. weird). Here a sibling also
+// differs in what SDXL actually exposes: the seed, denoise, CFG, LoRA strength and the weights of a checkpoint
+// fusion, all moved within a band set by the distance and a "spread" slider. Fully deterministic per seed.
+export const VARIANT_DISTANCES = [
+  { id: "near", label: "Blíž", hint: "Skoro stejná kompozice, jen jiný úhel" },
+  { id: "middle", label: "Střed", hint: "Výchozí vzdálenost" },
+  { id: "far", label: "Dál", hint: "Silně jiná póza a kompozice" },
+  { id: "weird", label: "Divně", hint: "Podivný, snový posun, stále stejná ruka" },
+];
+const VARIANT_DENOISE_FACTOR = { near: 0.7, middle: 1, far: 1.35, weird: 1.65 };
+const VARIANT_SUFFIX = {
+  near: "same pose, slightly different camera angle",
+  middle: "",
+  far: "different pose and composition",
+  weird: "surreal, dreamlike, uncanny, distorted space",
+};
+const VARIANT_DIRECTIVES = {
+  near: ["camera a few degrees to the left", "slightly tighter crop", "head tilted slightly", "camera a little to the right and higher", "relaxed pose"],
+  middle: ["seen from the left side at eye level", "closer view from a slightly lower angle", "turned toward the camera", "wider view from the right side", "higher viewpoint looking slightly down"],
+  far: ["low angle from the side, different poses", "seen from behind and above", "wide shot from far away", "tight close-up, different pose", "viewpoint rotated about 90 degrees"],
+  weird: ["distorted proportions, dreamlike scale", "stretched perspective, one impossible detail", "floating figures leaning at impossible angles", "a faint ghost-like double in the background", "a vast unreal room"],
+};
+export const DEFAULT_VARIANTS = { enabled: false, distance: "middle", prompt: "", negative: "", spread: 0.5 };
+export const VARIANTS_STORAGE_KEY = "img2img-variants-v1";
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const clampTo = (value, min, max) => Math.min(max, Math.max(min, value));
+
+export function planVariants({ count, distance, spread = 0.5, prompt = "", negativePrompt = "", base, seed }) {
+  const band = VARIANT_DISTANCES.some((item) => item.id === distance) ? distance : "middle";
+  const wobble = clampTo(spread, 0, 1);
+  const rng = mulberry32(seed);
+  const signed = () => rng() * 2 - 1;
+  const mix = parseMixId(base.modelId);
+  const plan = [];
+  for (let index = 0; index < count; index += 1) {
+    const [rDenoise, rCfg, rLora] = [signed(), signed(), signed()];
+    const rWeights = mix ? mix.map(() => signed()) : [];
+    const modelId = mix
+      ? buildMixId(mix.map((part, i) => ({ id: part.id, weight: Math.max(0.01, part.weight * Math.exp(wobble * 1.2 * rWeights[i])) })))
+      : base.modelId;
+    const directive = VARIANT_DIRECTIVES[band][index % VARIANT_DIRECTIVES[band].length];
+    plan.push({
+      index,
+      modelId,
+      seed: (seed + index) % 4294967296,
+      denoise: Number(clampTo(base.denoise * VARIANT_DENOISE_FACTOR[band] * (1 + wobble * 0.25 * rDenoise), 0.05, 0.95).toFixed(2)),
+      cfg: Number(clampTo(base.cfg * (1 + wobble * 0.2 * rCfg), 0.5, 20).toFixed(1)),
+      loraStrength: Number(clampTo(base.loraStrength * (1 + wobble * 0.25 * rLora), 0, 2).toFixed(2)),
+      prompt: [prompt.trim(), VARIANT_SUFFIX[band], directive].filter(Boolean).join(", "),
+      negativePrompt: negativePrompt.trim(),
+      directive,
+    });
+  }
+  return plan;
+}
+
+export function describeVariant(variant, models) {
+  const parts = [`denoise ${variant.denoise.toFixed(2)}`, `CFG ${variant.cfg.toFixed(1)}`];
+  const mix = parseMixId(variant.modelId);
+  if (mix) parts.push(`váhy ${mix.map((part) => part.weight).join(" / ")}`);
+  const name = mix ? mix.map((part) => models.find((model) => model.id === part.id)?.name || part.id).join(" + ") : "";
+  return { text: parts.join(" · "), name };
+}

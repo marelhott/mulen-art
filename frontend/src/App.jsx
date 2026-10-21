@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
-import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf } from "./studioTools";
+import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { API_URL, buildImageUrl, reconcileOptionIds } from "./api";
 
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
@@ -36,6 +36,13 @@ function App() {
   const [usage, setUsage] = useState(null);
   const [optionsRevision, setOptionsRevision] = useState(0);
   const [archiveStatus, setArchiveStatus] = useState("loading");
+  const [variants, setVariants] = useState(() => {
+    try { return {...DEFAULT_VARIANTS, ...JSON.parse(window.localStorage.getItem(VARIANTS_STORAGE_KEY) || "{}"), enabled: false}; }
+    catch { return DEFAULT_VARIANTS; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem(VARIANTS_STORAGE_KEY, JSON.stringify(variants)); } catch { /* optional convenience */ }
+  }, [variants]);
   const [serverModels, setServerModels] = useState([]);
   // Checkpoint mixes live in the browser; each one is fully described by its id, so there is nothing to sync.
   const [mixIds, setMixIds] = useState(() => {
@@ -171,6 +178,13 @@ function App() {
     setSelectedModelIds(current => { const next = current.filter(item => item !== id); return next.length ? next : [fallback]; });
     setAtelier(current => { const next = current.modelIds.filter(item => item !== id); return {...current, modelIds: next.length ? next : ["tuymans_modal_2400"]}; });
   }
+
+  // What the siblings would get for the first selected model; the real plan is rebuilt per input at submit time.
+  const variantsPlan = useMemo(() => planVariants({
+    count: Math.min(Math.max(1, Number(numImages) || 1), 12), distance: variants.distance, spread: variants.spread,
+    prompt: variants.prompt, negativePrompt: variants.negative, seed: 12345,
+    base: { denoise: Number(denoise), cfg: Number(cfg), loraStrength: Number(loraStrength), modelId: generationMode === "lora" ? "sdxl_base" : modelId },
+  }), [numImages, variants, denoise, cfg, loraStrength, generationMode, modelId]);
 
   async function refreshUsage() {
     try {
@@ -452,19 +466,27 @@ function App() {
       // One random seed per input, shared across models for a fair comparison.
       const inputSeed = settings.seed === -1 ? crypto.getRandomValues(new Uint32Array(1))[0] : settings.seed;
       for (const selectedModelId of modelIds) {
-        for (let offset = 0; offset < count; offset += 8) {
+        // Plain mode: chunks of up to 8 images with consecutive seeds. Variants: one job per sibling, each with
+        // its own seed, settings, fusion weights and prompt (see planVariants).
+        const requests = variants.enabled
+          ? planVariants({
+              count, distance: variants.distance, spread: variants.spread, prompt: variants.prompt, negativePrompt: variants.negative,
+              seed: inputSeed, base: { denoise: settings.denoise, cfg: settings.cfg, loraStrength: settings.lora_strength, modelId: selectedModelId },
+            }).map((sibling) => ({
+              model_id: sibling.modelId, seed: sibling.seed, num_images: 1, denoise: sibling.denoise, cfg: sibling.cfg,
+              lora_strength: sibling.loraStrength, prompt: sibling.prompt, negative_prompt: sibling.negativePrompt,
+            }))
+          : Array.from({ length: Math.ceil(count / 8) }, (_, chunk) => ({
+              model_id: selectedModelId, seed: (inputSeed + chunk * 8) % 4294967296, num_images: Math.min(8, count - chunk * 8),
+            }));
+        for (const request of requests) {
           try {
             const response = await fetch(`${API_URL}/api/generate-batch`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 inputs: [{ name: item.file.name, source_id: sourceId }],
-                settings: {
-                  ...settings,
-                  model_id: selectedModelId,
-                  seed: (inputSeed + offset) % 4294967296,
-                  num_images: Math.min(8, count - offset),
-                },
+                settings: { ...settings, ...request },
               }),
             });
             if (response.status === 401) {
@@ -750,7 +772,7 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
-        gpuHourlyUsd, applySettings, addMix, removeMix, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
+        gpuHourlyUsd, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
         pendingMode: activeJobs.at(-1)?.generation_type === "atelier" ? "atelier" : "results",
       }}
     />
