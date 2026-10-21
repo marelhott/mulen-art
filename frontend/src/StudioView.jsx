@@ -12,7 +12,9 @@ import {
   Moon,
   PanelRightClose,
   PanelRightOpen,
+  Columns2,
   Plus,
+  Search,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -21,6 +23,10 @@ import {
   X,
 } from "lucide-react";
 import { urlFor } from "./shared";
+import { buildImageUrl } from "./api";
+import { filterItems } from "./studioTools";
+import { TEXT } from "./texts";
+import { Compare } from "./components/Compare";
 import { AtelierControls, AtelierQueue } from "./components/Atelier";
 import { ImageCard } from "./components/ImageCard";
 import { ImageViewer } from "./components/ImageViewer";
@@ -42,6 +48,9 @@ export default function StudioView(p) {
   const progressState = progressReset ? {...p, job: {...p.job, status:"idle", progress:0, queue_counts:{}, active_steps:[]}, progressValue:0, readyCount:0, outputCount:0, plannedOutputs:0, submittedOutputs:0} : p;
 
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [filterModel, setFilterModel] = useState("");
+  const [filterText, setFilterText] = useState("");
   const [tab, setTab] = useState("results");
   const isAtelier = tab === "atelier";
   const updateAtelier = patch => p.setAtelier(current => ({...current, ...patch}));
@@ -104,7 +113,10 @@ export default function StudioView(p) {
     return () => window.removeEventListener("keydown", key);
   }, [libraryOpen]);
   const atelierItems = p.results.filter(item => item?.settings?.generation_type === "atelier");
-  const items = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : p.results;
+  const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : p.results;
+  const items = filterItems(unfiltered, { modelId: filterModel, text: filterText });
+  const filtering = Boolean(filterModel || filterText.trim());
+  const modelNameFor = (item) => p.models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name;
   const count = items.length;
   const workspaceRef = useRef(null);
   const [workspaceWidth, setWorkspaceWidth] = useState(600);
@@ -192,6 +204,24 @@ export default function StudioView(p) {
       if (isAtelier) setTab("results");
     } catch (error) {
       p.setError(error.message);
+    }
+  }
+  // Take over the stored settings and bring back the original source image as input.
+  async function repeat(item) {
+    p.applySettings(item.settings || {});
+    const source = item.settings?.source_url || item.source_url;
+    if (!source) return reuse(item);
+    try {
+      const response = await fetch(buildImageUrl(source));
+      if (!response.ok) throw new Error("source unavailable");
+      const blob = await response.blob();
+      addFiles([new File([blob], item.settings?.source_name || "vstup.png", { type: blob.type })]);
+      p.setSelectedImage(null);
+      setLibraryOpen(false);
+      if (isAtelier) setTab("results");
+      p.setError("");
+    } catch {
+      await reuse(item);
     }
   }
   async function drop(event) {
@@ -647,6 +677,9 @@ export default function StudioView(p) {
             <button disabled={exporting} onClick={() => exportImages(true)}>
               Stáhnout výběr
             </button>
+            {selection.size >= 2 && (
+              <button onClick={() => setCompareOpen(true)}><Columns2 size={13} /> {TEXT.compare}</button>
+            )}
             {tab !== "library" && <button onClick={async () => {
               try { for (const item of p.results.filter((item) => item && selection.has(item.id))) await p.saveLibraryItem(item.id); }
               catch (error) { p.setError(error.message); }
@@ -661,6 +694,21 @@ export default function StudioView(p) {
             )}
           </div>
         )}
+        {tab !== "atelier" && unfiltered.filter(Boolean).length > 1 && (
+          <div className="filter-bar" role="search">
+            <select aria-label="Filtrovat podle modelu" value={filterModel} onChange={(event) => setFilterModel(event.target.value)}>
+              <option value="">{TEXT.filterModelAll}</option>
+              {p.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+            </select>
+            <label className="filter-search">
+              <Search size={13} aria-hidden="true" />
+              <input type="search" aria-label="Hledat ve výstupech" placeholder={TEXT.filterSearch}
+                value={filterText} onChange={(event) => setFilterText(event.target.value)} />
+            </label>
+            {filtering && <span className="help-text">{count} / {unfiltered.filter(Boolean).length}</span>}
+          </div>
+        )}
+        {filtering && !count && <p className="help-text filter-empty">{TEXT.filterEmpty}</p>}
         {count ? (
           <div className="results-grid" style={{ "--thumb-size": `${size}px` }}>
             {Array.from({ length: Math.min(visible, count) }, (_, index) => {
@@ -842,6 +890,7 @@ export default function StudioView(p) {
             Výpočty běží na Modalu.
             <br />
             GPU se po nečinnosti vypíná.
+            {p.usageText && (<><br /><span className="usage-text">{p.usageText}</span></>)}
           </p>
         </div>
       </aside>
@@ -887,6 +936,13 @@ export default function StudioView(p) {
           </section>
         </div>
       )}
+      {compareOpen && (
+        <Compare
+          items={unfiltered.filter((item) => item && selection.has(item.id))}
+          modelName={modelNameFor}
+          onClose={() => setCompareOpen(false)}
+        />
+      )}
       {p.selectedImage && (
         <ImageViewer
           image={p.selectedImage}
@@ -895,6 +951,7 @@ export default function StudioView(p) {
           hasPrev={viewerIndex > 0}
           hasNext={viewerIndex >= 0 && viewerIndex < viewerPool.length - 1}
           onReuse={() => reuse(p.selectedImage)}
+          onRepeat={() => repeat(p.selectedImage)}
           onDownload={p.downloadSelectedImage}
           gpuHourlyUsd={p.gpuHourlyUsd}
         />

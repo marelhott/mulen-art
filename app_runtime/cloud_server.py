@@ -56,6 +56,9 @@ class VolumeUsage:
 DEFAULT_MAX_JOBS_PER_REQUEST = 64
 
 
+MAX_EXPORT_PIXELS = 36_000_000
+
+
 def optional_float_env(name, default=None):
     """Positive number from the environment; unset or empty means `default`."""
     value = os.environ.get(name, "").strip()
@@ -508,6 +511,29 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 if target is None:
                     raise HTTPException(404, "Thumbnail not found.")
         return asset_response(target, "image/webp", request)
+
+    @app.get("/api/library/{item_id}/export")
+    def export_print(item_id: str, scale: int = 2):
+        """Print-ready PNG: a separate Lanczos upscale of a finished output, tagged 300 dpi."""
+        import json
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", item_id) or scale not in (2, 3, 4):
+            raise HTTPException(404, "Image not found.")
+        record_path = OUTPUTS_DIR / f"{item_id}.json"
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            path = OUTPUTS_DIR / record["filename"]
+            source = Image.open(path)
+        except (OSError, ValueError, KeyError):
+            raise HTTPException(404, "Image not found.")
+        with source:
+            width, height = source.width * scale, source.height * scale
+            if width * height > MAX_EXPORT_PIXELS:  # the gateway has 512 MB of RAM
+                raise HTTPException(413, "Export would be too large; try a smaller scale.")
+            upscaled = source.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        upscaled.save(buffer, format="PNG", dpi=(300, 300))
+        return Response(buffer.getvalue(), media_type="image/png",
+                        headers={"Content-Disposition": f'attachment; filename="{item_id}_print_{scale}x.png"'})
 
     @app.delete("/api/library/{item_id}")
     def delete(item_id: str):

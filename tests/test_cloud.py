@@ -768,6 +768,23 @@ class CloudFlowTests(unittest.TestCase):
             modal_app.generate_job("test-job", self.payload)
         self.assertEqual(len(self.spend), 1)
 
+    def test_print_export_upscales_tags_dpi_and_rejects_oversize_or_bad_scale(self):
+        import json
+        saved = self.client.post("/api/generate", json=self.payload)
+        self.assertEqual(saved.status_code, 200)
+        Image.new("RGB", (100, 50), "blue").save(self.output / "pic.png")
+        (self.output / "pic.json").write_text(json.dumps({"id": "pic", "filename": "pic.png"}))
+        response = self.client.get("/api/library/pic/export?scale=3")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("pic_print_3x.png", response.headers["content-disposition"])
+        exported = Image.open(io.BytesIO(response.content))
+        self.assertEqual(exported.size, (300, 150))
+        self.assertAlmostEqual(exported.info["dpi"][0], 300, places=0)
+        self.assertEqual(self.client.get("/api/library/pic/export?scale=9").status_code, 404)
+        self.assertEqual(self.client.get("/api/library/missing/export").status_code, 404)
+        with patch.object(cloud_server, "MAX_EXPORT_PIXELS", 1000):
+            self.assertEqual(self.client.get("/api/library/pic/export?scale=2").status_code, 413)
+
 
 if __name__ == "__main__":
     unittest.main()

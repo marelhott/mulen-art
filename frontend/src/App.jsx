@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
+import { averageWorkerSeconds, controlsFromSettings, usageLabel } from "./studioTools";
 import { API_URL, buildImageUrl, reconcileOptionIds } from "./api";
 
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
@@ -32,6 +33,7 @@ function saveStoredPresets(presets) {
 function App() {
   const [archives, setArchives] = useState([]);
   const [gpuHourlyUsd, setGpuHourlyUsd] = useState(null);
+  const [usage, setUsage] = useState(null);
   const [optionsRevision, setOptionsRevision] = useState(0);
   const [archiveStatus, setArchiveStatus] = useState("loading");
   const [models, setModels] = useState([]);
@@ -139,9 +141,35 @@ function App() {
     loadLibrary(true).catch(() => {});
   }, []);
 
+  async function refreshUsage() {
+    try {
+      const response = await fetch(`${API_URL}/api/usage`);
+      if (response.ok) setUsage(await response.json());
+    } catch {
+      /* the budget label is informational; keep the last value */
+    }
+  }
+  useEffect(() => { refreshUsage(); }, []);
+
+  // Seconds of GPU time a typical job took recently; drives the "time remaining" estimate.
+  const averageSeconds = useRef(null);
+  averageSeconds.current = averageWorkerSeconds([...results, ...libraryItems].filter(Boolean));
+
+  function applySettings(settings) {
+    const next = controlsFromSettings(settings);
+    if (next.modelId && models.some((model) => model.id === next.modelId)) setSelectedModelIds([next.modelId]);
+    if (next.loraId && loras.some((lora) => lora.id === next.loraId)) setLoraId(next.loraId);
+    if (next.loraStrength !== undefined) setLoraStrength(next.loraStrength);
+    if (next.denoise !== undefined) setDenoise(next.denoise);
+    if (next.cfg !== undefined) setCfg(next.cfg);
+    if (next.steps !== undefined) setSteps(next.steps);
+    setGenerationMode("checkpoint");
+    setEngine((current) => ({ ...current, ...next.engine }));
+  }
+
   useJobs({
     activeJobs, setActiveJobs, submissionErrors, recordsCache, deletedIds, plannedCount, submitting,
-    setBatchResults, setResults, setJob, setError, loadLibrary,
+    setBatchResults, setResults, setJob, setError, loadLibrary, averageSeconds, onBatchFinished: refreshUsage,
   });
 
   const generationSize = useMemo(() => {
@@ -685,7 +713,7 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
-        gpuHourlyUsd,
+        gpuHourlyUsd, applySettings, usageText: usageLabel(usage),
       }}
     />
   );

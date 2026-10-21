@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { API_URL } from "./api";
+import { etaLabel } from "./studioTools";
 
 export const POLL_INTERVAL = 1500;
 export const EMPTY_JOB = {
@@ -36,7 +37,7 @@ export function loadStoredJobs() {
 // Polls active jobs in bulk, mirrors their state into the canvas/job panel and persists the list.
 export function useJobs({
   activeJobs, setActiveJobs, submissionErrors, recordsCache, deletedIds, plannedCount, submitting,
-  setBatchResults, setResults, setJob, setError, loadLibrary,
+  setBatchResults, setResults, setJob, setError, loadLibrary, averageSeconds, onBatchFinished,
 }) {
   useEffect(() => {
     if (!activeJobs.length) return undefined;
@@ -162,7 +163,8 @@ export function useJobs({
                 .sort()
                 .at(-1)
             : null,
-        message: `${ready.length}/${Math.max(slots.length, plannedCount.current)} obrázků · ${finished}/${Math.max(records.length, plannedCount.current)} úloh hotovo · ${latest}`,
+        message: [`${ready.length}/${Math.max(slots.length, plannedCount.current)} obrázků · ${finished}/${Math.max(records.length, plannedCount.current)} úloh hotovo`,
+          etaLabel({remainingJobs: Math.max(records.length, plannedCount.current) - finished, averageSeconds: averageSeconds?.current}), latest].filter(Boolean).join(" · "),
       });
       const issues = [
         ...submissionErrors,
@@ -178,6 +180,7 @@ export function useJobs({
         );
         setActiveJobs([]);
         loadLibrary().catch(() => {});
+        onBatchFinished?.();
       } else timer = window.setTimeout(poll, POLL_INTERVAL);
     };
     poll();

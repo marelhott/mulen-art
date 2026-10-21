@@ -6,13 +6,16 @@ import {
   Columns2,
   ImagePlus,
   Maximize2,
+  Printer,
+  Repeat,
   X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
 import { urlFor, sourceFor, duration, dateFor } from "../shared";
 import { IconButton, Label } from "./controls";
-import { sourceUrl } from "../api";
+import { sourceUrl, buildImageUrl } from "../api";
+import { TEXT } from "../texts";
 
 export function ImageViewer({
   image,
@@ -21,6 +24,7 @@ export function ImageViewer({
   hasPrev,
   hasNext,
   onReuse,
+  onRepeat,
   onDownload,
   gpuHourlyUsd,
 }) {
@@ -339,10 +343,22 @@ export function ImageViewer({
             <ImagePlus size={16} />
             POUŽÍT JAKO VSTUP
           </button>
+          {onRepeat && image.settings && image.context !== "input" && (
+            <button className="toolbar-button" onClick={onRepeat}>
+              <Repeat size={14} />
+              {TEXT.repeat}
+            </button>
+          )}
           <button className="toolbar-button" onClick={onDownload}>
             <ArrowDownToLine size={14} />
             STÁHNOUT ORIGINÁL
           </button>
+          {image.id && image.url?.startsWith("/library/") && (
+            <a className="toolbar-button" href={buildImageUrl(`/api/library/${image.id}/export?scale=2`)} download>
+              <Printer size={14} />
+              {TEXT.exportPrint}
+            </a>
+          )}
         </footer>
       </aside>
     </div>
