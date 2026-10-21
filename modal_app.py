@@ -8,13 +8,15 @@ models = modal.Volume.from_name("img2img-models", create_if_missing=True)
 archives = modal.Volume.from_name("img2img-archives")
 outputs = modal.Volume.from_name("img2img-outputs", create_if_missing=True)
 jobs = modal.Dict.from_name("img2img-jobs", create_if_missing=True)
+# One entry per admitted GPU job (job_id -> {"ts", "call_id"}); enforces the global GPU cap below.
+slots = modal.Dict.from_name("img2img-slots", create_if_missing=True)
 state = modal.Volume.from_name("img2img-state", create_if_missing=True)
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("fastapi==0.115.6", "pillow==11.1.0")
     .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
-          # Published Modal L4 rate ($0.000222/s); the UI labels the derived number an estimate.
-          "GPU_HOURLY_USD": "0.7992"})
+          # Fallback rate (Modal L4); per-image estimates use the GPU that actually ran the job.
+          "GPU_HOURLY_USD": "0.80"})
     .add_local_python_source("app_runtime")
     .add_local_dir("config", "/app/config")
 )
@@ -32,27 +34,101 @@ gpu_image = (
     .add_local_dir("config", "/app/config")
 )
 
-@app.function(
-    image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=16384,
-    volumes={"/models": models, "/outputs": outputs, "/archives": archives},
-    min_containers=0, max_containers=10, scaledown_window=20,
-    timeout=1200, retries=0,
-)
-def generate_image(job_id: str, payload: dict):
+# GPU concurrency: Modal autoscales each distinct model_id parameter as its own container pool,
+# so max_containers bounds ONE model's pool (10 workers), not the whole app. Total concurrent GPUs
+# are therefore <= 10 x (models in use at the same time) and <= the Modal account's GPU quota.
+# Large batches must keep queueing instead of being rejected (252 jobs is a normal batch), so the
+# gateway only bounds the in-flight BACKLOG, as a guard against runaway submission loops.
+MAX_GPU_JOBS = 10
+MAX_BACKLOG_JOBS = int(os.environ.get("MAX_BACKLOG_JOBS", "1000"))
+SLOT_TTL_SECONDS = 1200 + 300  # worker timeout + slack; reclaims slots leaked by a crashed worker
+SNAPSHOT = os.environ.get("MODAL_GPU_SNAPSHOT") == "1"  # alpha GPU memory snapshot, opt-in at deploy time
+
+
+def acquire_slot(store, job_id, cap=MAX_BACKLOG_JOBS, ttl=SLOT_TTL_SECONDS, now=None):
+    """Reserve a backlog slot for job_id or raise. Called only by the single gateway container."""
+    import time
+    now = time.time() if now is None else now
+    if len(store) >= cap:  # scan for leaked slots only when the cheap length check says we are full
+        for key, entry in list(store.items()):
+            if now - entry.get("ts", 0) > ttl:
+                release_slot(store, key)
+    if len(store) >= cap:
+        raise RuntimeError(f"Job backlog full ({cap} jobs in flight)")
+    store[job_id] = {"ts": now, "call_id": None}
+
+
+def release_slot(store, job_id):
+    try:
+        store.pop(job_id)
+    except KeyError:
+        pass
+
+
+def release_slot_for_call(store, call_id):
+    for key, entry in list(store.items()):
+        if entry.get("call_id") == call_id:
+            release_slot(store, key)
+
+
+def spawn_job(job_id, payload):
+    """Gateway submit: admit under the global cap, route to the model's own worker pool."""
+    acquire_slot(slots, job_id)
+    try:
+        call = ImageWorker(model_id=payload["model_id"]).run.spawn(job_id, payload)
+    except Exception:
+        release_slot(slots, job_id)
+        raise
+    if job_id in slots:  # the worker may already have finished and released it
+        slots[job_id] = {**slots[job_id], "call_id": call.object_id}
+    return call.object_id
+
+
+def cancel_call(call_id):
+    modal.FunctionCall.from_id(call_id).cancel()
+    release_slot_for_call(slots, call_id)
+
+
+# Published Modal per-hour rates, used only for the UI's per-image estimate.
+GPU_RATES_USD_HOUR = {"L4": 0.80, "A10G": 1.10}
+
+
+def gpu_rate():
+    """Rate of the GPU this container really got (L4, or A10G when L4 capacity was short)."""
+    try:
+        import torch
+        name = torch.cuda.get_device_name(0)
+    except Exception:
+        return None, None
+    for key, rate in GPU_RATES_USD_HOUR.items():
+        if key in name:
+            return key, rate
+    return name, None
+
+
+def generate_job(job_id: str, payload: dict):
     import time
     from app_runtime.core import generate
     from app_runtime.server import persist_generated_images, now_iso
     record = jobs[job_id]
+
+    def put(value):
+        # The user may have cancelled meanwhile; never overwrite that state with a progress tick.
+        current = jobs.get(job_id)
+        if current and current.get("status") == "cancelled":
+            return
+        jobs[job_id] = value
     started = time.monotonic()
     last_update = 0.0
     library_items = []
     first_image_seconds = None
+    gpu_name, gpu_hourly = gpu_rate()
 
     def image_ready(image, meta):
         nonlocal record, first_image_seconds
         meta = {**meta, "source_name": meta.get("source_name") or payload.get("source_name", "Input image"), "source_url": meta.get("source_url") or payload.get("source_url")}
         # Real GPU time up to this saved image, so the library can show cost per file.
-        meta = {**meta, "worker_seconds": round(time.monotonic() - started, 2)}
+        meta = {**meta, "worker_seconds": round(time.monotonic() - started, 2), "gpu": gpu_name, "gpu_hourly_usd": gpu_hourly}
         items = persist_generated_images({"images": [image], "meta": dict(meta)})
         # Other containers must see the files before their URLs are published.
         outputs.commit()
@@ -61,7 +137,7 @@ def generate_image(job_id: str, payload: dict):
             first_image_seconds = round(time.monotonic() - started, 2)
         record = {**record, "status": "running", "partial_images": list(library_items),
                   "first_image_seconds": first_image_seconds, "updated_at": now_iso()}
-        jobs[job_id] = record
+        put(record)
 
     def progress(value, message):
         nonlocal last_update, record
@@ -73,7 +149,7 @@ def generate_image(job_id: str, payload: dict):
         record = {**record, "status": "running", "progress": min(value, 0.98),
                   "message": message, "updated_at": now_iso()}
         record["logs"] = (record["logs"] + [{"timestamp": now_iso(), "progress": min(value, 0.98), "message": message}])[-12:]
-        jobs[job_id] = record
+        put(record)
 
     try:
         models.reload()
@@ -88,18 +164,50 @@ def generate_image(job_id: str, payload: dict):
         result["images"] = library_items
         result["library_items"] = library_items
         result["meta"]["worker_seconds"] = round(time.monotonic() - started, 2)
+        result["meta"].update(gpu=gpu_name, gpu_hourly_usd=gpu_hourly)
         result["meta"]["first_image_seconds"] = first_image_seconds
-        jobs[job_id] = {**record, "status": "completed", "progress": 1,
-                        "message": "Completed", "updated_at": now_iso(), "result": result}
+        put({**record, "status": "completed", "progress": 1,
+             "message": "Completed", "updated_at": now_iso(), "result": result})
     except Exception as exc:
         try:
             outputs.commit()
         except Exception:
             pass
-        jobs[job_id] = {**record, "status": "failed",
-                        "message": "Failed", "updated_at": now_iso(),
-                        "error": {"detail": str(exc)}}
+        put({**record, "status": "failed",
+             "message": "Failed", "updated_at": now_iso(),
+             "error": {"detail": str(exc)}})
         raise
+
+
+@app.cls(
+    image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=16384,
+    volumes={"/models": models, "/outputs": outputs, "/archives": archives},
+    # Per model pool (see MAX_GPU_JOBS above): one container per job, 10 per model.
+    min_containers=0, max_containers=MAX_GPU_JOBS, scaledown_window=20,
+    timeout=1200, retries=0,
+    enable_memory_snapshot=SNAPSHOT,
+    experimental_options={"enable_gpu_snapshot": True} if SNAPSHOT else {},
+)
+class ImageWorker:
+    model_id: str = modal.parameter()
+
+    @modal.enter()
+    def preload(self):
+        """Load this pool's checkpoint at container start so the first job does not pay for it."""
+        try:
+            models.reload()
+            from app_runtime.core import ensure_pipeline, use_demo_mode
+            if not use_demo_mode():
+                ensure_pipeline(self.model_id)
+        except Exception as exc:  # run() retries lazily and reports the real error on the job
+            print(f"preload of {self.model_id} failed: {exc}")
+
+    @modal.method()
+    def run(self, job_id: str, payload: dict):
+        try:
+            return generate_job(job_id, payload)
+        finally:
+            release_slot(slots, job_id)
 
 
 @app.function(
@@ -107,14 +215,21 @@ def generate_image(job_id: str, payload: dict):
     volumes={"/outputs": outputs, "/state": state, "/archives": archives},
     min_containers=0, max_containers=1, scaledown_window=20,
     cpu=0.25, memory=512,
+    # STUDIO_USERNAME / STUDIO_PASSWORD, optional MONTHLY_IMAGE_LIMIT and MAX_JOBS_PER_REQUEST.
+    secrets=[modal.Secret.from_name("img2img-auth")],
 )
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app(label="i")
 def web():
-    from app_runtime.cloud_server import create_app, VolumeUsage
+    from app_runtime.cloud_server import (create_app, VolumeUsage, optional_int_env,
+                                         DEFAULT_MAX_JOBS_PER_REQUEST)
+    # Missing credentials make create_app refuse to start rather than serve an open GPU.
     return create_app(
-        jobs=jobs, usage=VolumeUsage("/state/usage.json", state), submit=lambda job_id, payload: generate_image.spawn(job_id, payload).object_id,
+        jobs=jobs, usage=VolumeUsage("/state/usage.json", state), submit=spawn_job,
         refresh=outputs.reload, commit=outputs.commit,
-        username=None, password=None, auth_enabled=False,
+        cancel=cancel_call,
+        username=os.environ.get("STUDIO_USERNAME"), password=os.environ.get("STUDIO_PASSWORD"),
+        monthly_limit=optional_int_env("MONTHLY_IMAGE_LIMIT"),
+        max_jobs_per_request=optional_int_env("MAX_JOBS_PER_REQUEST", DEFAULT_MAX_JOBS_PER_REQUEST),
         frontend_dir="/app/frontend/dist",
     )

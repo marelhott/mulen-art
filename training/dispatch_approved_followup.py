@@ -22,7 +22,7 @@ try:
     else:raise TimeoutError('No approved training status after 20 minutes')
     state.update(run_id=run,phase='starting_followup');save()
     with (OUT/'approved-cloud-coordinator.log').open('ab') as log:
-        cloud=subprocess.Popen([str(ROOT/'.venv/bin/modal'),'run','--detach','training/evaluate_modal.py','--watch-run',run],cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        cloud=subprocess.Popen([str(ROOT/'.venv/bin/python'),'-m','modal','run','--detach','training/evaluate_modal.py','--watch-run',run],cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
     with (OUT/'approved-download-coordinator.log').open('ab') as log:
         download=subprocess.Popen([str(ROOT/'.venv/bin/python'),'training/finish_run.py',run],cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
     state.update(phase='followup_dispatched',cloud_pid=cloud.pid,download_pid=download.pid);save()

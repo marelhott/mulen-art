@@ -172,28 +172,43 @@ function App() {
     let timer;
     const known = recordsCache.current;
     const poll = async () => {
-      const responses = await mapSettled(activeJobs, 8, async (item) => {
+      // One bulk request per tick instead of one poll per job.
+      const pending = activeJobs.filter((item) => {
         const previous = known.get(item.job_id);
-        if (previous && ["completed", "failed"].includes(previous.status))
-          return previous;
-        const response = await fetch(`${API_URL}/api/jobs/${item.job_id}`);
-        if (response.status === 401) {
-          window.location.assign("/login");
-          throw new Error("Sign in required");
+        return !(previous && ["completed", "failed", "cancelled"].includes(previous.status));
+      });
+      let fetched = {};
+      let failure = null;
+      for (let offset = 0; offset < pending.length && !failure; offset += 200) {
+        const ids = pending.slice(offset, offset + 200).map((item) => item.job_id).join(",");
+        try {
+          const response = await fetch(`${API_URL}/api/jobs?ids=${ids}`);
+          if (response.status === 401) {
+            window.location.assign("/login");
+            throw new Error("Sign in required");
+          }
+          const data = await response.json();
+          if (!response.ok)
+            throw new Error(data.detail || "Connection interrupted");
+          Object.assign(fetched, data.jobs);
+        } catch (error) {
+          failure = error;
         }
-        if (response.status === 404)
-          return {
+      }
+      const responses = activeJobs.map((item) => {
+        if (item.job_id in fetched) {
+          const value = fetched[item.job_id] || {
             id: item.job_id,
             status: "failed",
             progress: 0,
-            error: {
-              detail: "Job expired. Saved images remain in the library.",
-            },
+            error: {detail: "Job expired. Saved images remain in the library."},
           };
-        const data = await response.json();
-        if (!response.ok)
-          throw new Error(data.detail || "Connection interrupted");
-        return data;
+          return {status: "fulfilled", value};
+        }
+        const previous = known.get(item.job_id);
+        if (previous && ["completed", "failed", "cancelled"].includes(previous.status))
+          return {status: "fulfilled", value: previous};
+        return {status: "rejected", reason: failure || new Error("Connection interrupted")};
       });
       if (cancelled) return;
       responses.forEach((response, index) => {
@@ -219,7 +234,7 @@ function App() {
         );
       });
       const finished = records.filter((record) =>
-        ["completed", "failed"].includes(record.status),
+        ["completed", "failed", "cancelled"].includes(record.status),
       ).length;
       const failed = records.filter((record) => record.status === "failed");
       const logs = records
@@ -246,7 +261,9 @@ function App() {
           finished === records.length && !submitting.current
             ? failed.length
               ? "failed"
-              : "completed"
+              : records.some((record) => record.status === "cancelled")
+                ? "cancelled"
+                : "completed"
             : "running",
         progress,
         queue_counts: {
@@ -528,6 +545,26 @@ function App() {
         issues.push(`${item.file.name}: obrázek nelze načíst.`);
         continue;
       }
+      // Upload the input once; every model/chunk below references it by id.
+      let sourceId;
+      try {
+        const upload = await fetch(`${API_URL}/api/sources`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_base64: image }),
+        });
+        if (upload.status === 401) {
+          window.location.assign("/login");
+          throw new Error("Přihlášení vypršelo.");
+        }
+        const uploaded = await upload.json();
+        if (!upload.ok)
+          throw new Error(typeof uploaded.detail === "string" ? uploaded.detail : "Nahrání se nezdařilo.");
+        sourceId = uploaded.source_id;
+      } catch (error) {
+        issues.push(`${item.file.name}: ${error.message}`);
+        continue;
+      }
       // One random seed per input, shared across models for a fair comparison.
       const inputSeed = settings.seed === -1 ? crypto.getRandomValues(new Uint32Array(1))[0] : settings.seed;
       for (const selectedModelId of modelIds) {
@@ -537,7 +574,7 @@ function App() {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                inputs: [{ name: item.file.name, image_base64: image }],
+                inputs: [{ name: item.file.name, source_id: sourceId }],
                 settings: {
                   ...settings,
                   model_id: selectedModelId,
@@ -612,6 +649,7 @@ function App() {
       try {
         const response = await fetch(`${API_URL}/api/atelier-batch`, {method: "POST", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({model_ids: modelIds, count: Math.min(8, count - offset), settings: {...settings, seed: (seed + offset) % 4294967296}})});
+        if (response.status === 401) { window.location.assign("/login"); throw new Error("Přihlášení vypršelo."); }
         const data = await response.json();
         if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Ateliér: odeslání se nezdařilo.");
         const jobs = data.jobs.map(job => ({...job, source_id: `atelier-${seed}-${offset + job.source_index}`, generation_type: "atelier"}));
@@ -625,6 +663,15 @@ function App() {
     if (issues.length) setError(issues.join(" · "));
     plannedCount.current -= total - sent; setPlannedOutputs(plannedCount.current);
     if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: "Ateliér: žádná úloha nebyla přijata."});
+  }
+
+  async function handleCancel() {
+    // The next poll tick sees "cancelled"; images that were already saved stay in the library.
+    await Promise.allSettled(
+      activeJobs.map((item) =>
+        fetch(`${API_URL}/api/jobs/${item.job_id}/cancel`, { method: "POST" }),
+      ),
+    );
   }
 
   async function loadLibrary(restoreRecent = false) {
@@ -766,7 +813,7 @@ function App() {
         setSelectedModelIds,
         generationMode,
         setGenerationMode,
-        atelier, setAtelier, handleGenerateAtelier, archives, archiveStatus, reloadArchives: () => setOptionsRevision(v => v + 1),
+        handleCancel, atelier, setAtelier, handleGenerateAtelier, archives, archiveStatus, reloadArchives: () => setOptionsRevision(v => v + 1),
         loraId,
         setLoraId,
         loraStrength,
@@ -823,27 +870,6 @@ function App() {
       }}
     />
   );
-}
-
-async function mapSettled(items, concurrency, task) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-      while (cursor < items.length) {
-        const index = cursor++;
-        try {
-          results[index] = {
-            status: "fulfilled",
-            value: await task(items[index], index),
-          };
-        } catch (reason) {
-          results[index] = { status: "rejected", reason };
-        }
-      }
-    }),
-  );
-  return results;
 }
 
 export default App;

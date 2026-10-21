@@ -66,8 +66,9 @@ def generate_reference(spec, progress, image_callback):
             'prompt': '', 'negative_prompt': '', 'cfg': spec.cfg}
         def ready(image, meta):
             nonlocal final_meta
+            # Provenance was already embedded by generate(extra_meta=...); no PNG re-encode.
             final_meta = {**meta, **provenance}
-            encoded = {**core.encode_image(core.decode_image(image['image_base64']), final_meta), 'generation_meta': final_meta}
+            encoded = {**image, 'generation_meta': final_meta}
             images.append(encoded)
             if image_callback:
                 image_callback(encoded, final_meta)
@@ -77,5 +78,5 @@ def generate_reference(spec, progress, image_callback):
             'model_id':spec.model_id, 'lora_id':'none', 'seed':seed, 'denoise':spec.denoise,
             'cfg':spec.cfg, 'steps':spec.steps, 'sampler':spec.sampler, 'schedule':spec.schedule,
             'scale':spec.scale, 'num_images':1, 'render_mode':'quick', 'conditioning_mode':'style',
-            'prompt':'', 'negative_prompt':'', 'max_side':max(spec.width,spec.height)}, report, ready)
+            'prompt':'', 'negative_prompt':'', 'max_side':max(spec.width,spec.height)}, report, ready, extra_meta=provenance)
     return {'images':images, 'meta':final_meta}

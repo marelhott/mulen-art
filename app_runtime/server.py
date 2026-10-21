@@ -94,6 +94,7 @@ def set_library_membership(item_id: str, saved: bool):
     temporary = metadata_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
     temporary.replace(metadata_path)
+    _RECORD_CACHE.pop(str(metadata_path), None)
     return {"ok": True, "id": item_id, "item": data}
 
 
@@ -272,11 +273,37 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
     return saved_items
 
 
+_RECORD_CACHE: dict[str, tuple[int, int, int, Any]] = {}
+
+
+def read_record(path: Path) -> Any:
+    """Parse a metadata JSON once per (mtime, size); the gallery rescans on every request."""
+    stat = path.stat()
+    # Writers replace the file atomically, so the inode changes even when mtime and size do not.
+    key = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+    cached = _RECORD_CACHE.get(str(path))
+    if cached and cached[:3] == key:
+        data = cached[3]
+    else:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        _RECORD_CACHE[str(path)] = (*key, data)
+    return dict(data) if isinstance(data, dict) else data
+
+
+def metadata_paths() -> list[Path]:
+    paths = list(OUTPUTS_DIR.glob("*.json"))
+    if len(_RECORD_CACHE) > len(paths) + 256:  # forget records of files that vanished
+        live = {str(path) for path in paths}
+        for key in [key for key in _RECORD_CACHE if key not in live]:
+            del _RECORD_CACHE[key]
+    return paths
+
+
 def load_deleted_ids():
     ids = []
-    for path in OUTPUTS_DIR.glob("*.json"):
+    for path in metadata_paths():
         try:
-            item = json.loads(path.read_text(encoding="utf-8"))
+            item = read_record(path)
             if isinstance(item, dict) and item.get("deleted"):
                 ids.append(item["id"])
         except (OSError, ValueError, KeyError):
@@ -323,9 +350,9 @@ def ensure_thumbnail(filename: str) -> Path | None:
 
 def load_history_items() -> list[dict[str, Any]]:
     items = []
-    for metadata_path in sorted(OUTPUTS_DIR.glob("*.json"), reverse=True):
+    for metadata_path in sorted(metadata_paths(), reverse=True):
         try:
-            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+            data = read_record(metadata_path)
             if data.get("deleted", False):
                 continue
             image_path = OUTPUTS_DIR / data["filename"]

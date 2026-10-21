@@ -41,7 +41,7 @@ class AtelierTests(unittest.TestCase):
 
     def run_study(self, **overrides):
         text = TextPipeline(); painting = Pipeline(); base = Pipeline()
-        ensure = Mock(side_effect=lambda model: base if model == 'sdxl_base' else painting)
+        ensure = Mock(side_effect=lambda model, resident=1: base if model == 'sdxl_base' else painting)
         updates, emitted = [], []
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(server, 'OUTPUTS_DIR', Path(tmp)), \

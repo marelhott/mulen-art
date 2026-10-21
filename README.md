@@ -21,11 +21,11 @@ combinations and requires a LoRA when using the base. Old saved LoRA presets
 are migrated to the base-model mode when applied.
 
 Download the base directly on Modal (not onto the Mac):
-`.venv/bin/modal run scripts/download_sdxl_base.py`.
+`.venv/bin/python -m modal run scripts/download_sdxl_base.py`.
 The script pins Stability AI's official checkpoint revision and verifies SHA-256
 before committing it. Source: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0
 An optional faster migration from the existing R2 copies is available with
-`.venv/bin/modal run scripts/import_models.py`. It verifies the full SHA-256 of
+`.venv/bin/python -m modal run scripts/import_models.py`. It verifies the full SHA-256 of
 every cloud file against the local source before committing it.
 
 ## Setup and deploy
@@ -38,21 +38,35 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 npm ci
 .venv/bin/python scripts/prepare_modal.py
-.venv/bin/modal token new
+.venv/bin/python -m modal token new
 .venv/bin/python scripts/upload_models.py --dry-run
 .venv/bin/python scripts/upload_models.py
+.venv/bin/python -m modal secret create img2img-auth --from-json .modal-app-credentials.json
 npm run modal:deploy
 ```
 
-Use the HTTPS URL printed by Modal. The deployed studio is public and does not
-require a username or password. Anyone with the URL can access gallery images
-and submit image-generation jobs charged to this Modal workspace. No separate
-frontend host or Vercel account is required.
+The web app reads its sign-in from the `img2img-auth` Modal Secret
+(`STUDIO_USERNAME`, `STUDIO_PASSWORD`) and refuses to start without them. Every
+route except `/health` and `/login` needs either the session cookie set by
+`/login` or HTTP Basic auth; unauthenticated API calls get 401 and browsers are
+redirected to `/login`. Optional keys in the same Secret:
+
+- `MONTHLY_IMAGE_LIMIT` — monthly output cap; requests over it get 429. Unset = no cap.
+- `MAX_JOBS_PER_REQUEST` — GPU jobs one `/api/generate-batch` or `/api/atelier-batch`
+  request may queue (default 64; the UI sends at most 8 studies × 7 checkpoints = 56).
+  Larger requests get 413.
+
+`scripts/prepare_modal.py` writes the username and a random password to the ignored
+`.modal-app-credentials.json` (migrating older `APP_*` files) without printing them.
+Add optional keys to that JSON if wanted. To change them, re-run `modal secret create … --force`
+and redeploy. Keep the URL
+private anyway: it is the entry point to GPU spend on this Modal workspace. No
+separate frontend host or Vercel account is required.
 
 ## Architecture and cost control
 
 - `modal_app.py`: deployable CPU web service and independent GPU function.
-- The production web app is intentionally unauthenticated; protect the URL if you need to restrict access.
+- The production web app requires sign-in (Modal Secret `img2img-auth`); only `/health` and `/login` are public.
 - Models live in `img2img-models` Volume (~26.69 GiB including SDXL Base).
 - Gallery files/metadata live in `img2img-outputs` Volume.
 - Jobs/progress live in a shared Modal Dict so CPU restarts do not lose them.
@@ -60,13 +74,15 @@ frontend host or Vercel account is required.
   subject to the account GPU quota and available capacity. Each worker runs one
   input at a time; it scales to zero after a 20-second idle
   window. Browsing/polling never starts it. Starts and the idle window can be billed.
-- Input count, variants per input and monthly output count have no application cap.
+- Input count and variants per input have no application cap; the UI splits them into
+  transport requests below `MAX_JOBS_PER_REQUEST`, and the monthly output count is
+  capped only when `MONTHLY_IMAGE_LIMIT` is set.
   Inputs remain independent; there are no composite inputs. The browser sends small
   transport batches, and each output has its own GPU job. The worker concurrency
   setting (10), account capacity, billing limits and per-request byte/time limits
   still apply; large batches queue instead of increasing one worker's duration.
-- Monthly reservations remain as usage telemetry only. There is no production
-  `MONTHLY_IMAGE_LIMIT`; `/api/usage` reports `limit: null`.
+- Monthly reservations are always recorded. `/api/usage` reports the configured
+  `MONTHLY_IMAGE_LIMIT`, or `limit: null` when it is unset.
 - Completed images appear while the rest of the batch runs. The gallery renders
   incrementally while scrolling, with automatic or manually adjusted thumbnail
   size, multi-selection, ZIP export and reuse of an output as an input.
@@ -212,7 +228,7 @@ nechceš obnovit, vrať pouze frontendové soubory z tagu.
 
 ## Tuymans Modal checkpoints and model comparisons
 
-The selector includes **Tuymans Modal — 800 / 1600 / 2400 kroků**, from the completed approved 247-file run `full-unet-approved-20261019T203404Z`. These are separate checkpoints, not quality levels. They are copied privately into `img2img-models` using `.venv/bin/modal run scripts/promote_tuymans.py`; the copy validates the tensor payload size and full SHA-256 before publishing each file. Their hashes are recorded locally in `outputs/verification/tuymans-promoted.json`. Standard source-model import/upload skips these cloud-trained entries.
+The selector includes **Tuymans Modal — 800 / 1600 / 2400 kroků**, from the completed approved 247-file run `full-unet-approved-20261019T203404Z`. These are separate checkpoints, not quality levels. They are copied privately into `img2img-models` using `.venv/bin/python -m modal run scripts/promote_tuymans.py`; the copy validates the tensor payload size and full SHA-256 before publishing each file. Their hashes are recorded locally in `outputs/verification/tuymans-promoted.json`. Standard source-model import/upload skips these cloud-trained entries.
 
 Select one or more checkpoint buttons. Every input is submitted separately to every selected checkpoint, with the same parameters and matching seeds across models. Variants still receive distinct incremented seeds. For example, 2 inputs × 3 models × 2 variants produces 12 outputs; GPU concurrency remains managed by Modal. Results identify the checkpoint beside their dimensions and retain it in saved metadata. Presets save multiple selections and continue to support older single-model presets. LoRA mode continues to use SDXL Base and one LoRA.
 

@@ -2026,3 +2026,23 @@ input[type="range"]::-moz-range-progress {
 .atelier-queue-stats { gap:8px 16px; margin-top:8px; font-size:10px; }
 .atelier-queue-steps { margin-top:8px; gap:8px; }
 @media (max-width:700px) { .atelier-queue { padding:10px 12px; } }
+
+.progress-cancel {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.35));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.progress-cancel:hover,
+.progress-cancel:focus-visible {
+  opacity: 1;
+  border-color: currentColor;
+}

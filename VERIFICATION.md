@@ -2,8 +2,6 @@
 
 Datum: 19. 10. 2026
 
-Živá aplikace: https://mailhospodarsky--i.modal.run
-
 ## Skutečné generování na NVIDIA L4
 
 Všechny následující běhy dokončily skutečnou CUDA inferenci (`demo_mode: false`),
@@ -43,8 +41,7 @@ soubory jsou bajtově shodné s místními originály. Zálohy `.bak` se nepřen
 - GPU má min_containers=0 a vypíná se po 20 s nečinnosti.
 - Měsíční aplikační strop byl odstraněn; produkční `/api/usage` ověřeno s `limit: null`.
 
-Přihlášení: uživatel `studio`, heslo v místním souboru `.modal-app-credentials.json`.
-Soubor není součástí Gitu. Zkušební výsledky jsou ponechány v galerii.
+Zkušební výsledky jsou ponechány v galerii.
 
 ## Oficiální SDXL Base 1.0
 

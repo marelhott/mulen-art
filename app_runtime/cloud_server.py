@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from PIL import Image
 
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image
@@ -50,12 +51,29 @@ class VolumeUsage:
         self.volume.commit()
 
 
+# Frontend transport chunks are at most 8 studies x 7 checkpoints (56 jobs).
+DEFAULT_MAX_JOBS_PER_REQUEST = 64
+
+
+def optional_int_env(name, default=None):
+    """Positive integer from the environment; unset or empty means `default`."""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    number = int(value)
+    if number < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return number
+
+
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
-               monthly_limit=None, frontend_dir=None, auth_enabled=True):
+               monthly_limit=None, max_jobs_per_request=DEFAULT_MAX_JOBS_PER_REQUEST, cancel=None,
+               frontend_dir=None, auth_enabled=True):
     if auth_enabled and (not username or not password):
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
     lock = threading.Lock()
+    thumb_lock = threading.Lock()  # asset reads must not queue behind enqueue/commit calls
     refresh_state = {"at": 0.0}
 
     def refresh_cached(*, force=False):
@@ -100,7 +118,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
-        if not auth_enabled or request.url.path == "/login":
+        if not auth_enabled or request.url.path in {"/login", "/health"}:
             return await call_next(request)
         authorized = session_valid(request.cookies.get("studio_session", ""))
         try:
@@ -176,6 +194,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def enqueue(payloads):
         month = datetime.now(UTC).strftime("%Y-%m")
         requested = sum(payload["num_images"] for payload in payloads)
+        if max_jobs_per_request is not None and len(payloads) > max_jobs_per_request:
+            raise HTTPException(413, f"Too many jobs in one request ({len(payloads)} > {max_jobs_per_request}); send smaller batches.")
         submitted, errors = [], []
         with lock:
             used = usage.get(month, 0)
@@ -189,8 +209,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     payload["source_url"] = None
                     continue
                 has_sources = True
-                digest = hashlib.sha256(payload["image_base64"].encode()).hexdigest()
-                filename = f"source_{digest}.png"
+                filename = payload.get("source_file")
+                if not filename:
+                    digest = hashlib.sha256(payload["image_base64"].encode()).hexdigest()
+                    filename = payload["source_file"] = f"source_{digest}.png"
                 path = OUTPUTS_DIR / filename
                 if not path.exists():
                     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -212,7 +234,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     "created_at": now_iso(), "updated_at": now_iso(),
                 }
                 try:
-                    submit(job_id, payload)
+                    call_id = submit(job_id, payload)
+                    if call_id:
+                        jobs[f"call:{job_id}"] = call_id
                     submitted.append({"job_id": job_id, "source_name": payload["source_name"],
                                       "source_index": payload.get("source_index", index), "variant_index": payload.get("variant_index", 0),
                                       "expected_images": payload["num_images"]})
@@ -234,7 +258,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             payload = validate_payload(payload)
         except Exception as exc:
             raise HTTPException(422, f"Invalid generation input: {exc}") from exc
-        result = enqueue([payload])
+        result = await run_in_threadpool(enqueue, [payload])
         return {"job_id": result["jobs"][0]["job_id"], "status": "queued"}
 
     @app.post("/api/atelier-batch")
@@ -282,7 +306,41 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     payloads.append(payload)
         except Exception as exc:
             raise HTTPException(422, f"Invalid atelier request: {exc}") from exc
-        return enqueue(payloads)
+        return await run_in_threadpool(enqueue, payloads)
+
+    def store_source(image_base64):
+        digest = hashlib.sha256(image_base64.encode()).hexdigest()
+        filename = f"source_{digest}.png"
+        path = OUTPUTS_DIR / filename
+        if not path.exists():
+            OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+            decode_image(image_base64).save(path, format="PNG")
+        return digest, filename
+
+    @app.post("/api/sources")
+    async def upload_source(request: Request):
+        """Upload an input once; later batches reference it by id instead of resending the bytes."""
+        data = await read_payload(request, 24 * 1024 * 1024)
+        try:
+            if not isinstance(data, dict) or not isinstance(data.get("image_base64"), str):
+                raise ValueError("image_base64 is required")
+            digest, _ = await run_in_threadpool(store_source, data["image_base64"])
+            await run_in_threadpool(commit)
+        except Exception as exc:
+            raise HTTPException(422, f"Invalid source image: {exc}") from exc
+        return {"source_id": digest}
+
+    def load_source(source_id):
+        if not isinstance(source_id, str) or not re.fullmatch(r"[0-9a-f]{64}", source_id):
+            raise ValueError("Invalid source id")
+        filename = f"source_{source_id}.png"
+        path = OUTPUTS_DIR / filename
+        if not path.is_file():
+            with thumb_lock:
+                refresh_cached(force=True)
+        if not path.is_file():
+            raise ValueError("Uploaded source not found; upload it again")
+        return base64.b64encode(path.read_bytes()).decode(), filename
 
     @app.post("/api/generate-batch")
     async def generate_batch(request: Request):
@@ -295,9 +353,22 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 raise ValueError("Select at least one separate input image")
             if not isinstance(settings, dict):
                 raise ValueError("Invalid settings")
-            payloads = [validate_payload({**settings, "image_base64": item["image_base64"],
-                                         "source_name": item.get("name", f"Input {index + 1}")})
-                        for index, item in enumerate(inputs)]
+        except Exception as exc:
+            raise HTTPException(422, f"Invalid batch input: {exc}") from exc
+        # Reject oversized batches before decoding every image.
+        if max_jobs_per_request is not None and len(inputs) > max_jobs_per_request:
+            raise HTTPException(413, f"Too many inputs in one request ({len(inputs)} > {max_jobs_per_request}); send smaller batches.")
+        try:
+            payloads = []
+            for index, item in enumerate(inputs):
+                image_base64, source_file = item.get("image_base64"), None
+                if image_base64 is None:
+                    image_base64, source_file = load_source(item.get("source_id"))
+                payload = validate_payload({**settings, "image_base64": image_base64,
+                                           "source_name": item.get("name", f"Input {index + 1}")})
+                if source_file:
+                    payload["source_file"] = source_file
+                payloads.append(payload)
         except Exception as exc:
             raise HTTPException(422, f"Invalid batch input: {exc}") from exc
         # Každá varianta má vlastní úlohu, takže velká dávka nepřekročí čas jednoho GPU workeru.
@@ -305,17 +376,52 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         for source_index, payload in enumerate(payloads):
             for variant_index in range(payload["num_images"]):
                 expanded.append({**payload, "seed": -1 if payload["seed"] == -1 else (payload["seed"] + variant_index) % 2**32, "num_images": 1, "source_index": source_index, "variant_index": variant_index})
-        return enqueue(expanded)
+        return await run_in_threadpool(enqueue, expanded)
+
+    def with_timeout(job):
+        if job["status"] == "running":
+            age = (datetime.now(UTC) - datetime.fromisoformat(job["updated_at"])).total_seconds()
+            if age > 1800:
+                return {**job, "status": "failed", "error": {"detail": "Cloud job timed out. Try again."}}
+        return job
+
+    @app.get("/api/jobs")
+    def bulk_status(ids: str = ""):
+        """One request instead of one poll per job; unknown or expired ids map to null."""
+        wanted = [item for item in dict.fromkeys(ids.split(",")) if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item)]
+        if not wanted or len(wanted) > 200:
+            raise HTTPException(422, "Pass between 1 and 200 job ids.")
+        found = {}
+        for job_id in wanted:
+            job = jobs.get(job_id)
+            found[job_id] = None if job is None else with_timeout(job)
+        return {"jobs": found}
 
     @app.get("/api/jobs/{job_id}")
     def status(job_id: str):
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "Job not found or expired.")
-        if job["status"] == "running":
-            age = (datetime.now(UTC) - datetime.fromisoformat(job["updated_at"])).total_seconds()
-            if age > 1800:
-                return {**job, "status": "failed", "error": {"detail": "Cloud job timed out. Try again."}}
+        return with_timeout(job)
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str):
+        if cancel is None:
+            raise HTTPException(501, "Cancellation is not available.")
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found or expired.")
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            return job
+        call_id = jobs.get(f"call:{job_id}")
+        if call_id:
+            try:
+                cancel(call_id)
+            except Exception as exc:
+                raise HTTPException(502, "Could not cancel the cloud job.") from exc
+        # Images already saved by the worker stay in the library.
+        job = {**job, "status": "cancelled", "message": "Cancelled", "updated_at": now_iso()}
+        jobs[job_id] = job
         return job
 
     @app.get("/api/usage")
@@ -356,21 +462,23 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def asset(filename: str, request: Request):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+\.(png|webp)", filename):
             raise HTTPException(404, "Image not found.")
-        with lock:
-            path = OUTPUTS_DIR / filename
-            if not path.is_file():
+        path = OUTPUTS_DIR / filename
+        if not path.is_file():
+            with thumb_lock:
                 refresh_cached(force=True)
-                if not path.is_file():
-                    raise HTTPException(404, "Image not found.")
-            return asset_response(path, "image/png" if filename.endswith(".png") else "image/webp", request)
+            if not path.is_file():
+                raise HTTPException(404, "Image not found.")
+        return asset_response(path, "image/png" if filename.endswith(".png") else "image/webp", request)
 
     @app.get("/thumb/{filename}")
     @app.head("/thumb/{filename}")
     def thumbnail(filename: str, request: Request):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+\.(webp|png|jpg|jpeg)", filename):
             raise HTTPException(404, "Thumbnail not found.")
-        with lock:
-            target = THUMBS_DIR / filename
+        target = THUMBS_DIR / filename
+        if target.is_file():
+            return asset_response(target, "image/webp", request)
+        with thumb_lock:
             if not target.is_file():
                 stem = Path(filename).stem
                 source = next((p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None)
@@ -382,7 +490,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 target = ensure_thumbnail(source.name)
                 if target is None:
                     raise HTTPException(404, "Thumbnail not found.")
-            return asset_response(target, "image/webp", request)
+        return asset_response(target, "image/webp", request)
 
     @app.delete("/api/library/{item_id}")
     def delete(item_id: str):

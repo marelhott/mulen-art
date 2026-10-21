@@ -27,7 +27,7 @@ class ArchiveTests(unittest.TestCase):
         spec=core.parse_input({'generation_type':'atelier','atelier_mode':'archive','atelier_archive':'hofmann',
             'model_id':'tuymans_modal_2400','seed':5,'width':1024,'height':1024,'denoise':0.55,'cfg':0.5,'steps':28})
         seen=[];emitted=[]
-        def generate(payload,progress,callback):
+        def generate(payload,progress,callback,extra_meta=None):
             seen.append(payload)
             image=core.decode_image(payload['image_base64'])
             callback(core.encode_image(image),{'model_id':payload['model_id'],'seed':payload['seed'],'denoise':payload['denoise']})

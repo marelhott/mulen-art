@@ -29,10 +29,10 @@ class CloudFlowTests(unittest.TestCase):
         self.payload = {"image_base64": base64.b64encode(buffer.getvalue()).decode(),
                         "model_id": "tuymans_sdxl", "lora_id": "none", "num_images": 1}
 
-    def make_app(self, submit, monthly_limit=2):
+    def make_app(self, submit, monthly_limit=2, **options):
         return create_app(jobs=self.jobs, usage=self.usage, submit=submit,
                           refresh=lambda: None, commit=lambda: self.commits.append(True),
-                          username="studio", password="test-password", monthly_limit=monthly_limit)
+                          username="studio", password="test-password", monthly_limit=monthly_limit, **options)
 
     def tearDown(self):
         for p in self.patches:
@@ -44,6 +44,63 @@ class CloudFlowTests(unittest.TestCase):
         for method, path in [("get", "/api/library"), ("post", "/api/generate"), ("get", "/library/x.png")]:
             self.assertEqual(getattr(client, method)(path).status_code, 401)
         self.assertEqual(len(self.submissions), 0)
+
+    def test_unauthenticated_writes_are_rejected_but_health_and_login_stay_public(self):
+        client = TestClient(self.app)
+        source = {"image_base64": self.payload["image_base64"]}
+        writes = [("post", "/api/generate-batch", {"json": {"inputs": [source]}}),
+                  ("post", "/api/atelier-batch", {"json": {"model_ids": ["tuymans_modal_800"], "count": 1}}),
+                  ("post", "/api/library/x", {}), ("delete", "/api/library/x", {}),
+                  ("put", "/api/library/order", {"json": {"ids": []}})]
+        for method, path, kwargs in writes:
+            self.assertEqual(getattr(client, method)(path, **kwargs).status_code, 401, path)
+        client.auth = ("studio", "wrong")
+        self.assertEqual(client.post("/api/generate-batch", json={"inputs": [source]}).status_code, 401)
+        self.assertEqual(self.submissions, [])
+        self.assertEqual(self.usage, {})
+        public = TestClient(self.app)
+        self.assertEqual(public.get("/health").status_code, 200)
+        self.assertEqual(public.get("/login").status_code, 200)
+
+    def test_enabled_auth_refuses_to_start_without_credentials(self):
+        for username, password in ((None, None), ("studio", ""), ("", "secret")):
+            with self.assertRaises(ValueError):
+                create_app(jobs={}, usage={}, submit=lambda *_: None, refresh=lambda: None,
+                           commit=lambda: None, username=username, password=password)
+
+    def test_monthly_limit_and_job_cap_come_from_optional_env(self):
+        from app_runtime.cloud_server import optional_int_env
+        with patch.dict("os.environ", {"MONTHLY_IMAGE_LIMIT": ""}):
+            self.assertIsNone(optional_int_env("MONTHLY_IMAGE_LIMIT"))
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(optional_int_env("MAX_JOBS_PER_REQUEST", 64), 64)
+        with patch.dict("os.environ", {"MONTHLY_IMAGE_LIMIT": "300"}):
+            self.assertEqual(optional_int_env("MONTHLY_IMAGE_LIMIT"), 300)
+        for bad in ("0", "-5", "many"):
+            with patch.dict("os.environ", {"MONTHLY_IMAGE_LIMIT": bad}), self.assertRaises(ValueError):
+                optional_int_env("MONTHLY_IMAGE_LIMIT")
+
+    def test_monthly_limit_returns_429_for_atelier_without_submitting(self):
+        response = self.client.post("/api/atelier-batch", json={"model_ids": ["tuymans_modal_800"], "count": 3,
+            "settings": {"atelier_mode": "subject", "atelier_theme": "face", "seed": 1}})
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(self.submissions, [])
+        self.assertEqual(self.usage, {})
+
+    def test_per_request_job_cap_rejects_oversized_batches_before_gpu(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)),
+                                          monthly_limit=None, max_jobs_per_request=4))
+        client.auth = self.client.auth
+        source = {"image_base64": self.payload["image_base64"]}
+        self.assertEqual(client.post("/api/generate-batch", json={"inputs": [source] * 5}).status_code, 413)
+        self.assertEqual(client.post("/api/generate-batch", json={"inputs": [source] * 2, "settings": {"num_images": 3}}).status_code, 413)
+        atelier = {"atelier_mode": "subject", "atelier_theme": "face", "seed": 1}
+        self.assertEqual(client.post("/api/atelier-batch", json={"model_ids": ["tuymans_modal_800", "tuymans_modal_2400"],
+                                                                  "count": 3, "settings": atelier}).status_code, 413)
+        self.assertEqual(self.submissions, [])
+        self.assertEqual(self.usage, {})
+        self.assertEqual(client.post("/api/generate-batch", json={"inputs": [source] * 2, "settings": {"num_images": 2}}).status_code, 200)
+        self.assertEqual(len(self.submissions), 4)
 
     def test_login_cookie_and_tamper_rejection(self):
         client = TestClient(self.app, base_url="https://studio.test")
@@ -214,7 +271,7 @@ class CloudFlowTests(unittest.TestCase):
         from unittest.mock import Mock
         self.jobs["test-job"] = {"id": "test-job", "status": "queued", "logs": []}
         with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
-            modal_app.generate_image.local("test-job", self.payload)
+            modal_app.generate_job("test-job", self.payload)
         job = self.jobs["test-job"]
         self.assertEqual(job["status"], "completed")
         image = job["result"]["images"][0]
@@ -239,7 +296,7 @@ class CloudFlowTests(unittest.TestCase):
         self.jobs["test-job"] = {"id": "test-job", "status": "queued", "logs": []}
         with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch("app_runtime.core.generate", side_effect=RuntimeError("model unavailable")):
             with self.assertRaisesRegex(RuntimeError, "model unavailable"):
-                modal_app.generate_image.local("test-job", self.payload)
+                modal_app.generate_job("test-job", self.payload)
         self.assertEqual(self.jobs["test-job"]["status"], "failed")
         self.assertIn("model unavailable", self.jobs["test-job"]["error"]["detail"])
 
@@ -269,7 +326,7 @@ class CloudFlowTests(unittest.TestCase):
                 self.assertEqual(self.client.get(live["partial_images"][-1]["url"]).status_code, 200)
             return {"images": [image, image], "meta": meta}
         with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", volume), patch("app_runtime.core.generate", side_effect=fake_generate):
-            modal_app.generate_image.local("stream-job", self.payload)
+            modal_app.generate_job("stream-job", self.payload)
         self.assertEqual(self.jobs["stream-job"]["status"], "completed")
         self.assertEqual(len(self.jobs["stream-job"]["result"]["images"]), 2)
         self.assertEqual(len(self.client.get("/api/history").json()["items"]), 2)
@@ -321,7 +378,7 @@ class CloudFlowTests(unittest.TestCase):
                 return {"images": [image], "meta": meta}
             with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", volume), patch("app_runtime.core.generate", side_effect=generate):
                 with self.assertRaisesRegex(RuntimeError, "storage unavailable"):
-                    modal_app.generate_image.local("failed-commit", self.payload)
+                    modal_app.generate_job("failed-commit", self.payload)
             self.assertEqual(self.jobs["failed-commit"]["status"], "failed")
             self.assertNotIn("partial_images", self.jobs["failed-commit"])
             self.assertNotIn("result", self.jobs["failed-commit"])
@@ -393,7 +450,8 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(self.usage, {})
 
     def test_unlimited_counts_split_variants_and_no_monthly_cap(self):
-        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)),
+                                          monthly_limit=None, max_jobs_per_request=None))
         client.auth = self.client.auth
         response = client.post("/api/generate-batch", json={"inputs": [
             {"name": f"source-{i}", "image_base64": self.payload["image_base64"]} for i in range(12)],
@@ -492,6 +550,125 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(get.status_code, 200)
         self.assertIn("immutable", get.headers["cache-control"])
         self.assertEqual(self.client.head("/library/missing.png").status_code, 404)
+
+    def test_bulk_status_returns_many_jobs_in_one_request_and_null_for_unknown(self):
+        self.jobs["aaa"] = {"id": "aaa", "status": "queued", "progress": 0}
+        self.jobs["bbb"] = {"id": "bbb", "status": "completed", "progress": 1}
+        data = self.client.get("/api/jobs", params={"ids": "aaa,bbb,missing,bad id!"}).json()
+        self.assertEqual(data["jobs"]["aaa"]["status"], "queued")
+        self.assertEqual(data["jobs"]["bbb"]["status"], "completed")
+        self.assertIsNone(data["jobs"]["missing"])
+        self.assertNotIn("bad id!", data["jobs"])
+        self.assertEqual(self.client.get("/api/jobs").status_code, 422)
+        self.assertEqual(self.client.get("/api/jobs", params={"ids": ",".join(f"j{i}" for i in range(201))}).status_code, 422)
+
+    def test_cancel_stops_the_cloud_call_and_keeps_finished_jobs_untouched(self):
+        cancelled = []
+        app = self.make_app(lambda key, payload: f"fc-{key}", monthly_limit=None, cancel=cancelled.append)
+        client = TestClient(app)
+        client.auth = ("studio", "test-password")
+        job_id = client.post("/api/generate", json=self.payload).json()["job_id"]
+        self.assertEqual(self.jobs[f"call:{job_id}"], f"fc-{job_id}")
+        result = client.post(f"/api/jobs/{job_id}/cancel").json()
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(cancelled, [f"fc-{job_id}"])
+        self.jobs["done"] = {"id": "done", "status": "completed"}
+        self.assertEqual(client.post("/api/jobs/done/cancel").json()["status"], "completed")
+        self.assertEqual(cancelled, [f"fc-{job_id}"])
+        self.assertEqual(client.post("/api/jobs/missing/cancel").status_code, 404)
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/cancel").status_code, 501)
+
+    def test_source_uploaded_once_can_back_many_batches_without_resending_bytes(self):
+        app = self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None)
+        client = TestClient(app)
+        client.auth = ("studio", "test-password")
+        upload = client.post("/api/sources", json={"image_base64": self.payload["image_base64"]})
+        self.assertEqual(upload.status_code, 200)
+        source_id = upload.json()["source_id"]
+        self.assertEqual(len(list(self.output.glob("source_*.png"))), 1)
+        for model_id in ("tuymans_sdxl", "tuy_small"):
+            response = client.post("/api/generate-batch", json={
+                "inputs": [{"name": "a.png", "source_id": source_id}], "settings": {"model_id": model_id}})
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.submissions), 2)
+        # The stored file is reused; no duplicate source is written per batch.
+        self.assertEqual(len(list(self.output.glob("source_*.png"))), 1)
+        self.assertTrue(all(p["source_url"] == f"/library/source_{source_id}.png" for _, p in self.submissions))
+        for bad in ("../x", "0" * 64, None):
+            response = client.post("/api/generate-batch", json={"inputs": [{"source_id": bad}], "settings": {}})
+            self.assertEqual(response.status_code, 422)
+        self.assertEqual(client.post("/api/sources", json={"image_base64": "invalid"}).status_code, 422)
+        self.assertEqual(TestClient(app).post("/api/sources", json={}).status_code, 401)
+
+    def test_worker_does_not_overwrite_a_cancelled_job(self):
+        import modal_app
+        from unittest.mock import Mock
+        self.jobs["test-job"] = {"id": "test-job", "status": "cancelled", "logs": []}
+        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
+            modal_app.generate_job("test-job", self.payload)
+        self.assertEqual(self.jobs["test-job"]["status"], "cancelled")
+
+    def test_record_cache_sees_same_size_same_mtime_rewrites(self):
+        import json, os
+        path = self.output / "rec.json"
+        path.write_text(json.dumps({"state": "aaaa"}))
+        before = path.stat()
+        self.assertEqual(server.read_record(path), {"state": "aaaa"})
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"state": "bbbb"}))
+        os.utime(temporary, ns=(before.st_atime_ns, before.st_mtime_ns))
+        temporary.replace(path)
+        self.assertEqual(path.stat().st_size, before.st_size)
+        self.assertEqual(server.read_record(path), {"state": "bbbb"})
+
+    def test_gpu_cap_is_global_across_models_and_expires_leaked_slots(self):
+        import modal_app
+        slots = {}
+        for index in range(3):
+            modal_app.acquire_slot(slots, f"j{index}", cap=3, now=100)
+        with self.assertRaisesRegex(RuntimeError, "backlog"):
+            modal_app.acquire_slot(slots, "j3", cap=3, now=101)
+        modal_app.release_slot(slots, "j0")
+        modal_app.release_slot(slots, "j0")  # idempotent
+        modal_app.acquire_slot(slots, "j3", cap=3, now=102)
+        # A crashed worker never releases; its slot is reclaimed after the TTL.
+        modal_app.acquire_slot(slots, "j4", cap=3, ttl=50, now=1000)
+        self.assertEqual(list(slots), ["j4"])
+
+    def test_spawn_routes_to_model_pool_returns_call_id_and_cancel_releases_slot(self):
+        import modal_app
+        from unittest.mock import Mock
+        slots, worker = {}, Mock()
+        worker.return_value.run.spawn.return_value.object_id = "fc-123"
+        with patch.object(modal_app, "slots", slots), patch.object(modal_app, "ImageWorker", worker), \
+                patch.object(modal_app.modal.FunctionCall, "from_id") as from_id:
+            self.assertEqual(modal_app.spawn_job("job", {"model_id": "hofmann_sdxl"}), "fc-123")
+            worker.assert_called_once_with(model_id="hofmann_sdxl")
+            self.assertEqual(slots["job"]["call_id"], "fc-123")
+            modal_app.cancel_call("fc-123")
+            from_id.assert_called_once_with("fc-123")
+            from_id.return_value.cancel.assert_called_once()
+        self.assertEqual(slots, {})
+
+    def test_spawn_failure_releases_slot(self):
+        import modal_app
+        from unittest.mock import Mock
+        slots, worker = {}, Mock()
+        worker.return_value.run.spawn.side_effect = RuntimeError("offline")
+        with patch.object(modal_app, "slots", slots), patch.object(modal_app, "ImageWorker", worker):
+            with self.assertRaises(RuntimeError):
+                modal_app.spawn_job("job", {"model_id": "tuymans_sdxl"})
+        self.assertEqual(slots, {})
+
+    def test_worker_is_parameterized_by_model_and_releases_slot(self):
+        import modal_app
+        from unittest.mock import Mock
+        slots = {"test-job": {"ts": 1, "call_id": None}}
+        self.jobs["test-job"] = {"id": "test-job", "status": "queued", "logs": []}
+        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "slots", slots), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
+            modal_app.ImageWorker(model_id="tuymans_sdxl").run.local("test-job", self.payload)
+        self.assertEqual(self.jobs["test-job"]["status"], "completed")
+        self.assertEqual(slots, {})
 
 
 if __name__ == "__main__":

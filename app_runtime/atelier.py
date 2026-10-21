@@ -72,7 +72,7 @@ def generate_study(spec, progress, image_callback):
         source_url = None
         # The optional photographic study uses SDXL Base, then releases its pipeline before painting.
         if spec.atelier_mode == "photo":
-            pipe = core.ensure_pipeline("sdxl_base")
+            pipe = core.ensure_pipeline("sdxl_base", resident=2)
             core.ensure_lora(pipe, "none", 0)
             pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
             text_pipe = modules["text_pipeline"].from_pipe(pipe)
@@ -92,7 +92,7 @@ def generate_study(spec, progress, image_callback):
             (OUTPUTS_DIR / filename).write_bytes(data)
             source_url = f"/library/{filename}"
             notify(.45, "Ateliér: přemalování vlastním checkpointem")
-            pipe = core.ensure_pipeline(spec.model_id)
+            pipe = core.ensure_pipeline(spec.model_id, resident=2)
             core.ensure_lora(pipe, "none", 0)
             pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
             result = pipe(prompt="", negative_prompt=None, image=photo, strength=spec.denoise,

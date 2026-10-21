@@ -27,10 +27,12 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config" / "models.json"
 SAMPLER_OPTIONS = {"dpmpp_2m", "dpmpp_2m_sde", "euler_a", "ddim"}
 SCHEDULE_OPTIONS = {"karras", "normal"}
 
-CURRENT_MODEL_ID = None
-CURRENT_PIPELINE = None
-CURRENT_LORA_ID = "none"
-CURRENT_LORA_STRENGTH = 0.0
+# Loaded pipelines by model id, most recently used last. Only Atelier "photo" mode asks for
+# two resident pipelines (SDXL Base + artist checkpoint); everything else keeps one in VRAM.
+PIPELINES: dict[str, Any] = {}
+# Decompression-bomb guard for uploaded sources (pixels, not bytes).
+MAX_INPUT_PIXELS = int(os.getenv("MAX_INPUT_PIXELS", str(48_000_000)))
+Image.MAX_IMAGE_PIXELS = MAX_INPUT_PIXELS
 MODEL_CONFIG = None
 MODEL_CONFIG_MTIME_NS = None
 TORCH_MODULE = None
@@ -69,7 +71,7 @@ class GenerationInput:
 
 
 def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None,
-             image_callback: Callable | None = None) -> dict[str, Any]:
+             image_callback: Callable | None = None, extra_meta: dict[str, Any] | None = None) -> dict[str, Any]:
     started = time.monotonic()
     generation_input = parse_input(payload)
     report_progress(progress_callback, 0.02, "Input validated")
@@ -160,7 +162,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
                       "effective_strength": effective_strength,
                       "effective_detail_strength": effective_detail_strength,
                       "actual_detail_steps": int(pipe.num_timesteps) if detail else 0,
-                      "output_width": result.width, "output_height": result.height}
+                      "output_width": result.width, "output_height": result.height, **(extra_meta or {})}
         output_images.append({**encode_image(result, image_meta), "generation_meta": image_meta})
         if image_callback is not None:
             image_callback(output_images[-1], image_meta)
@@ -326,20 +328,23 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     )
 
 
-def ensure_pipeline(model_id: str):
-    global CURRENT_MODEL_ID, CURRENT_PIPELINE, CURRENT_LORA_ID, CURRENT_LORA_STRENGTH
-
-    if CURRENT_PIPELINE is not None and CURRENT_MODEL_ID == model_id:
-        return CURRENT_PIPELINE
+def ensure_pipeline(model_id: str, resident: int = 1):
+    resident = max(1, resident)
+    cached = PIPELINES.pop(model_id, None)
+    if cached is not None:
+        PIPELINES[model_id] = cached  # mark as most recently used
+        while len(PIPELINES) > resident:
+            PIPELINES.pop(next(iter(PIPELINES)))
+            clear_cuda()
+        return cached
 
     model = get_config_item("models", model_id)
     model_path = model.get("path")
     if not model_path or not Path(model_path).exists():
         raise FileNotFoundError(f"Model checkpoint not found for '{model_id}': {model_path}")
 
-    if CURRENT_PIPELINE is not None:
-        del CURRENT_PIPELINE
-        CURRENT_PIPELINE = None
+    while PIPELINES and len(PIPELINES) >= resident:
+        PIPELINES.pop(next(iter(PIPELINES)))
         clear_cuda()
 
     torch = get_torch()
@@ -361,21 +366,18 @@ def ensure_pipeline(model_id: str):
     if os.getenv("ENABLE_CPU_OFFLOAD", "false").lower() == "true":
         pipe.enable_model_cpu_offload()
 
-    CURRENT_MODEL_ID = model_id
-    CURRENT_PIPELINE = pipe
-    CURRENT_LORA_ID = "none"
-    CURRENT_LORA_STRENGTH = 0.0
+    pipe._studio_lora = ("none", 0.0)
+    PIPELINES[model_id] = pipe
     return pipe
 
 
 def ensure_lora(pipe, lora_id: str, lora_strength: float) -> None:
-    global CURRENT_LORA_ID, CURRENT_LORA_STRENGTH
+    current_id, current_strength = getattr(pipe, "_studio_lora", ("none", 0.0))
 
     if lora_id == "none":
-        if CURRENT_LORA_ID != "none":
+        if current_id != "none":
             pipe.unload_lora_weights()
-            CURRENT_LORA_ID = "none"
-            CURRENT_LORA_STRENGTH = 0.0
+            pipe._studio_lora = ("none", 0.0)
         return
 
     lora = get_config_item("loras", lora_id)
@@ -383,16 +385,16 @@ def ensure_lora(pipe, lora_id: str, lora_strength: float) -> None:
     if not lora_path or not Path(lora_path).exists():
         raise FileNotFoundError(f"LoRA not found for '{lora_id}': {lora_path}")
 
-    if CURRENT_LORA_ID != lora_id:
-        if CURRENT_LORA_ID != "none":
+    if current_id != lora_id:
+        if current_id != "none":
             pipe.unload_lora_weights()
         pipe.load_lora_weights(lora_path, adapter_name="default")
-        CURRENT_LORA_ID = lora_id
-        CURRENT_LORA_STRENGTH = None
+        current_id, current_strength = lora_id, None
 
-    if CURRENT_LORA_STRENGTH != lora_strength:
+    if current_strength != lora_strength:
         pipe.set_adapters(["default"], adapter_weights=[lora_strength])
-        CURRENT_LORA_STRENGTH = lora_strength
+        current_strength = lora_strength
+    pipe._studio_lora = (current_id, current_strength)
 
 
 def make_scheduler(config: Any, sampler: str, schedule: str):
@@ -416,6 +418,8 @@ def decode_image(image_base64: str) -> Image.Image:
         image_base64 = image_base64.split(",", 1)[1]
     raw = base64.b64decode(image_base64)
     image = Image.open(io.BytesIO(raw))
+    if image.width * image.height > MAX_INPUT_PIXELS:
+        raise ValueError(f"Image is too large ({image.width}x{image.height}); the limit is {MAX_INPUT_PIXELS // 1_000_000} megapixels")
     image = ImageOps.exif_transpose(image)
     return image.convert("RGB")
 

@@ -11,9 +11,15 @@
     "start:local-demo": "IMG2IMG_DEMO_MODE=true .venv/bin/python -m uvicorn app_runtime.server:app --host 127.0.0.1 --port 8000",
     "start:local": ".venv/bin/python -m uvicorn app_runtime.server:app --host 127.0.0.1 --port 8000",
     "modal:upload": ".venv/bin/python scripts/upload_models.py",
-    "modal:deploy": "npm run build:frontend && .venv/bin/modal deploy modal_app.py",
+    "modal:deploy": "npm run build:frontend && .venv/bin/python -m modal deploy modal_app.py",
     "test:python": ".venv/bin/python -m unittest discover -s tests -v",
     "test:frontend": "node --test frontend/src/*.test.js",
-    "test": "npm run test:python && npm run test:frontend"
+    "test": "npm run lint && npm run test:python && npm run test:frontend",
+    "lint": "eslint frontend/src"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^15.15.0"
   }
 }

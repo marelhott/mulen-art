@@ -1,6 +1,6 @@
 """Optional fast migration from existing public R2 copies, verified against local files.
 
-Run: .venv/bin/modal run scripts/import_models.py
+Run: .venv/bin/python -m modal run scripts/import_models.py
 """
 import hashlib
 import base64
