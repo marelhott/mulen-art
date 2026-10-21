@@ -58,6 +58,106 @@ def painting_prompt(model_id, text):
     return f"{trigger}, {text}"
 
 
+# Colour. Sampled from pure noise with an empty prompt, a fine-tuned checkpoint falls to one average palette
+# (measured: ~98 % of "Volná studie" outputs share the same dominant hue, while the artists' paintings vary
+# widely). Biasing the start latent cannot fix that without destroying the painting (any offset makes the
+# model draw a flat field). What does work, because the training captions contained colour words, is a short
+# colour hint - never a subject - at a guidance scale where text acts: "pale blue and grey". The hint is
+# derived from the dominant colours of a random real painting of the same artist, so palettes follow the
+# artist's actual distribution.
+COLOR_GUIDANCE_VIVID = 4.5  # level 2: stronger text pull, no "muted/pale" qualifiers
+COLOR_GUIDANCE = 3.0  # lowest CFG at which the colour hint reliably shows (0.5 ignores text entirely)
+COLOR_ARCHIVES = {"hofmann_sdxl": "hofmann"}
+FALLBACK_COLORS = ["red", "pink", "orange", "yellow", "green", "teal", "blue", "violet", "brown", "grey", "white", "black"]
+
+
+def color_archive_for(model_id):
+    if model_id.startswith("mix:"):
+        from .core import parse_mix_id
+        return color_archive_for(parse_mix_id(model_id)[0][0])
+    if model_id in COLOR_ARCHIVES:
+        return COLOR_ARCHIVES[model_id]
+    return "tuymans" if model_id.startswith("tuymans_") or model_id == "tuy_small" else None
+
+
+def color_name(hue, saturation, value):
+    """Name of one pixel's colour in the vocabulary the training captions used."""
+    if value < 0.22:
+        return "black"
+    if saturation < 0.12:
+        return "white" if value > 0.82 else "grey"
+    hue = hue % 1.0
+    if hue >= 0.95 or hue < 0.04:
+        name = "pink" if (value > 0.72 and saturation < 0.5) else ("brown" if value < 0.5 else "red")
+    elif hue < 0.11:
+        name = "brown" if value < 0.6 else "orange"
+    elif hue < 0.19:
+        name = "yellow" if value >= 0.55 else "brown"
+    elif hue < 0.42:
+        name = "green"
+    elif hue < 0.53:
+        name = "teal"
+    elif hue < 0.72:
+        name = "blue"
+    elif hue < 0.83:
+        name = "violet"
+    else:
+        name = "pink"
+    return name
+
+
+NEUTRALS = {"white", "grey", "black"}
+
+
+def color_phrase_from_image(image, adjectives=True):
+    """The painting's colour in the captions' vocabulary, e.g. "pale blue and grey".
+
+    Chromatic colours lead (two of them when the second is substantial); a neutral only fills in when the
+    painting has one chromatic colour, or is itself almost neutral (about a third of the archive).
+    """
+    small = image.convert("RGB").resize((48, 48))
+    counts, stats = {}, {}
+    raw = small.convert("HSV").tobytes()
+    for h, s_, v in zip(raw[0::3], raw[1::3], raw[2::3]):
+        name = color_name(h / 255, s_ / 255, v / 255)
+        counts[name] = counts.get(name, 0) + 1
+        agg = stats.setdefault(name, [0.0, 0.0])
+        agg[0] += s_ / 255; agg[1] += v / 255
+    total = sum(counts.values())
+    chromatic = sorted(((n, c) for n, c in counts.items() if n not in NEUTRALS), key=lambda item: -item[1])
+    neutral = sorted(((n, c) for n, c in counts.items() if n in NEUTRALS), key=lambda item: -item[1])
+    if sum(c for _, c in chromatic) < 0.05 * total:
+        ranked = [n for n, _ in neutral[:2]]
+    else:
+        ranked = [chromatic[0][0]]
+        if len(chromatic) > 1 and chromatic[1][1] >= 0.25 * chromatic[0][1]:
+            ranked.append(chromatic[1][0])
+        elif neutral:
+            ranked.append(neutral[0][0])
+    parts = []
+    for name in ranked:
+        sat, val = (stats[name][0] / counts[name], stats[name][1] / counts[name])
+        adjective = "" if (name in NEUTRALS or not adjectives) else ("dark" if val < 0.4 else ("pale" if sat < 0.32 and val > 0.7 else ("muted" if sat < 0.35 else "")))
+        parts.append(f"{adjective} {name}".strip())
+    return " and ".join(parts)
+
+
+def color_hint(model_id, seed, adjectives=True):
+    """(phrase, source) for this study; the source names the archive painting the palette came from."""
+    import random as _random
+    from PIL import Image, ImageOps
+    from .archives import load_manifest, reference_for
+    archive_id = color_archive_for(model_id)
+    if archive_id and any(a["id"] == archive_id and a.get("items") for a in load_manifest()["archives"]):
+        _, item, path = reference_for(archive_id, (seed * 2654435761) % 2**32)
+        with Image.open(path) as raw:
+            phrase = color_phrase_from_image(ImageOps.exif_transpose(raw), adjectives)
+        return phrase, item.get("filename") or item.get("id")
+    rng = _random.Random(seed)
+    first, second = rng.sample(FALLBACK_COLORS, 2)
+    return f"{first} and {second}", None
+
+
 def generate_study(spec, progress, image_callback):
     if spec.atelier_mode == "archive":
         from .archives import generate_reference
@@ -81,6 +181,17 @@ def generate_study(spec, progress, image_callback):
         def generator():
             return torch.Generator(device="cuda").manual_seed(seed)
         prompt = "" if spec.atelier_mode == "noise" else painting_prompt(spec.model_id, text)
+        # Colour hint for the two modes that start from nothing (noise, subject). The photo mode already gets its
+        # colours from the photograph and the archive mode from the reference painting.
+        color_text, color_source, cfg = None, None, spec.cfg
+        if spec.atelier_mode in {"noise", "subject"} and (spec.atelier_color_level > 0 or spec.atelier_color_text):
+            if spec.atelier_color_text:
+                color_text = spec.atelier_color_text
+            else:
+                color_text, color_source = color_hint(spec.model_id, seed, adjectives=spec.atelier_color_level != 2)
+            # For a subject the colour comes first, so the subject text cannot drown it out.
+            prompt = painting_prompt(spec.model_id, color_text if spec.atelier_mode == "noise" else f"{color_text}, {text}")
+            cfg = max(spec.cfg, COLOR_GUIDANCE_VIVID if spec.atelier_color_level == 2 else COLOR_GUIDANCE)
         notify(.02, "Ateliér: načítání modelu")
         source_url = None
         # The optional photographic study uses SDXL Base, then releases its pipeline before painting.
@@ -121,7 +232,7 @@ def generate_study(spec, progress, image_callback):
             text_pipe = modules["text_pipeline"].from_pipe(pipe)
             notify(.15, "Ateliér: nový obraz z šumu")
             result = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
-                guidance_scale=spec.cfg, num_inference_steps=spec.steps, generator=generator(),
+                guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(),
                 callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72, stage="Ateliér"),
                 callback_on_step_end_tensor_inputs=[]).images[0]
             actual_steps = int(text_pipe.num_timesteps)
@@ -132,7 +243,7 @@ def generate_study(spec, progress, image_callback):
             "subject_text": text, "subject_origin": "none" if subject_id is None else "curated-starter-v1",
             "model_id": spec.model_id, "model_name": core.get_config_item("models", spec.model_id)["name"],
             "lora_id": "none", "seed": seed, "steps": spec.steps, "actual_steps": actual_steps,
-            "guidance_scale": spec.cfg, "cfg": spec.cfg, "sampler": spec.sampler, "schedule": spec.schedule,
+            "guidance_scale": cfg, "cfg": cfg, "requested_cfg": spec.cfg, "sampler": spec.sampler, "schedule": spec.schedule,
             "generation_width": spec.width, "generation_height": spec.height,
             "output_width": result.width, "output_height": result.height,
             "scale": spec.scale, "upscaler": "lanczos", "render_mode": "quick",
@@ -140,7 +251,8 @@ def generate_study(spec, progress, image_callback):
             "source_url": source_url, "source_name": title, "demo_mode": False,
             "photo_prompt": photo_prompt if spec.atelier_mode == "photo" else None,
             "photo_model_id": "sdxl_base" if spec.atelier_mode == "photo" else None,
-            "generation_and_save_seconds": round(time.monotonic() - started, 2)}
+            "generation_and_save_seconds": round(time.monotonic() - started, 2),
+            "color_hint": color_text, "color_source": color_source, "color_level": spec.atelier_color_level if color_text else 0}
         image = {**core.encode_image(result, meta), "generation_meta": meta}
         output_images.append(image)
         if image_callback: image_callback(image, meta)

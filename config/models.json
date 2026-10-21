@@ -22,6 +22,11 @@
       "path": "/models/checkpoints/hofmann_SDXL.safetensors"
     },
     {
+      "id": "mulen_mara",
+      "name": "Mulen Mara",
+      "path": "/models/checkpoints/mulen_mara.safetensors"
+    },
+    {
       "id": "sdxl_base",
       "name": "SDXL Base 1.0",
       "kind": "base",

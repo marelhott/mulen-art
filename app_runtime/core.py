@@ -67,6 +67,8 @@ class GenerationInput:
     atelier_mode: str = "noise"
     atelier_theme: str = "all"
     atelier_archive: str = "hofmann"
+    atelier_color_level: int = 2  # 0 off, 1 archive-like palette, 2 vivid
+    atelier_color_text: str = ""
     width: int = 1024
     height: int = 1024
 
@@ -326,6 +328,8 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
+        atelier_color_level=0 if payload.get("atelier_color") is False else int(clamp(int(payload.get("atelier_color_level", 2)), 0, 2)),
+        atelier_color_text=str(payload.get("atelier_color_text", ""))[:80],
     )
 
 
