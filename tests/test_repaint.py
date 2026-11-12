@@ -36,3 +36,29 @@ class RepaintTests(unittest.TestCase):
             self.assertEqual(core.parse_input(payload).denoise, DEFAULT_REPAINT_DENOISE)
             self.assertEqual(core.parse_input({**payload, 'denoise': .2}).denoise, .2)
         self.assertEqual(core.parse_input({'image_base64': 'x', 'model_id': 'hofmann_sdxl'}).denoise, .35)
+
+    def test_new_switches_default_to_the_existing_behaviour(self):
+        spec = core.parse_input({'generation_type': 'atelier', 'atelier_mode': 'photo', 'model_id': 'tuymans_modal_2400', 'cfg': .5})
+        self.assertEqual((spec.repaint_cfg_floor, spec.vae_tiling), (3.0, True))
+        off = core.parse_input({'generation_type': 'atelier', 'atelier_mode': 'photo', 'model_id': 'tuymans_modal_2400',
+                                'cfg': .5, 'repaint_cfg_floor': 0, 'vae_tiling': False})
+        self.assertEqual((off.repaint_cfg_floor, off.vae_tiling), (0.0, False))
+        pipe = Pipeline()
+        with patch.object(core, 'ensure_pipeline', return_value=pipe), patch.object(core, 'ensure_lora'), \
+             patch.object(core, 'make_scheduler', return_value=SimpleNamespace(config={})), \
+             patch.object(core, 'get_torch', return_value=SimpleNamespace(Generator=Generator)):
+            _, meta = repaint(Image.new('RGB', (512, 512)), off, 7, None)
+        self.assertEqual(meta['cfg'], .5)
+        self.assertEqual(meta['repaint_cfg_floor'], 0.0)
+        self.assertIn('recipe_version', meta['recipe'])
+
+    def test_vae_tiling_switch_and_recipe_never_raise(self):
+        class Vae:
+            def __init__(self): self.on = None
+            def enable_tiling(self): self.on = True
+            def disable_tiling(self): self.on = False
+        pipe = SimpleNamespace(vae=Vae())
+        core.set_vae_tiling(pipe, False); self.assertFalse(pipe.vae.on)
+        core.set_vae_tiling(pipe, True); self.assertTrue(pipe.vae.on)
+        core.set_vae_tiling(SimpleNamespace(), False)
+        self.assertEqual(core.runtime_recipe(pipe)['recipe_version'], 1)

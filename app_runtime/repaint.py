@@ -12,7 +12,8 @@ def repaint(source, spec, seed, progress):
     pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
     # Only verified learned caption tokens, never an invented artist/style description.
     prompt = painting_prompt(spec.model_id, "").rstrip(", ")
-    cfg = max(spec.cfg, 3.0) if prompt else spec.cfg
+    cfg = max(spec.cfg, spec.repaint_cfg_floor) if prompt else spec.cfg
+    core.set_vae_tiling(pipe, spec.vae_tiling)
     schedule_steps, strength = core.inference_schedule(spec.steps, spec.denoise, True)
     result = pipe(
         prompt=prompt, negative_prompt=None, image=source, strength=strength,
@@ -22,7 +23,8 @@ def repaint(source, spec, seed, progress):
         callback_on_step_end_tensor_inputs=[],
     ).images[0]
     return result, {
-        "repaint_version": "artist-v2", "prompt": prompt, "negative_prompt": "",
+        "repaint_version": "artist-v2", "repaint_cfg_floor": spec.repaint_cfg_floor,
+        "vae_tiling": spec.vae_tiling, "recipe": core.runtime_recipe(pipe), "prompt": prompt, "negative_prompt": "",
         "cfg": cfg, "guidance_scale": cfg, "requested_cfg": spec.cfg,
         "denoise": spec.denoise, "effective_strength": strength,
         "steps": spec.steps, "schedule_steps": schedule_steps,

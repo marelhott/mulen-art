@@ -77,6 +77,8 @@ class GenerationInput:
     atelier_color_text: str = ""
     atelier_color_cfg: float = 0.0  # 0 = the level's default guidance
     atelier_color_until: float = 0.2  # fraction of the steps the colour hint is active; 1 = all steps
+    repaint_cfg_floor: float = 3.0  # lowest guidance of a repaint with a trigger token; 0 lets the requested cfg through
+    vae_tiling: bool = True  # tiled VAE decode (the long-standing default); off only for A/B comparison
     width: int = 1024
     height: int = 1024
 
@@ -103,6 +105,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
     pipe.scheduler = make_scheduler(pipe.scheduler.config, generation_input.sampler, generation_input.schedule)
     report_progress(progress_callback, 0.22, f"Scheduler ready: {generation_input.sampler} / {generation_input.schedule}")
     ensure_lora(pipe, generation_input.lora_id, generation_input.lora_strength)
+    set_vae_tiling(pipe, generation_input.vae_tiling)
     report_progress(progress_callback, 0.28, f"LoRA ready: {generation_input.lora_id}")
     setup_seconds = time.monotonic() - started
 
@@ -118,7 +121,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
         "denoise": generation_input.denoise, "lora_strength": generation_input.lora_strength,
         "steps": steps, "scale": generation_input.scale, "guidance_scale": guidance_scale,
         "sampler": generation_input.sampler, "schedule": generation_input.schedule,
-        "demo_mode": False,
+        "demo_mode": False, "recipe": runtime_recipe(pipe), "vae_tiling": generation_input.vae_tiling,
         "render_mode": generation_input.render_mode,
         "input_scale": generation_input.input_scale,
         "conditioning_mode": generation_input.conditioning_mode,
@@ -361,6 +364,8 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         atelier_color_text=str(payload.get("atelier_color_text", ""))[:80],
         atelier_color_cfg=clamp(float(payload.get("atelier_color_cfg", 0.0)), 0.0, 8.0),
         atelier_color_until=clamp(float(payload.get("atelier_color_until", 0.2)), 0.1, 1.0),
+        repaint_cfg_floor=clamp(float(payload.get("repaint_cfg_floor", 3.0)), 0.0, 8.0),
+        vae_tiling=payload.get("vae_tiling", True) is not False,
     )
 
 
@@ -369,6 +374,7 @@ def ensure_pipeline(model_id: str, resident: int = 1):
     cached = PIPELINES.pop(model_id, None)
     if cached is not None:
         PIPELINES[model_id] = cached  # mark as most recently used
+        set_vae_tiling(cached, True)  # a request that switched tiling off must not leak into the next one
         while len(PIPELINES) > resident:
             PIPELINES.pop(next(iter(PIPELINES)))
             clear_cuda()
@@ -386,10 +392,11 @@ def ensure_pipeline(model_id: str, resident: int = 1):
     pipe = pipe.to("cuda")
     pipe.enable_vae_tiling()
 
+    pipe._studio_xformers = True
     try:
         pipe.enable_xformers_memory_efficient_attention()
     except Exception:
-        pass
+        pipe._studio_xformers = False  # recorded in the output's recipe; attention then differs slightly
 
     if os.getenv("ENABLE_CPU_OFFLOAD", "false").lower() == "true":
         pipe.enable_model_cpu_offload()
@@ -436,6 +443,31 @@ def build_mixed_pipeline(parts: list[tuple[str, int]]):
             del other, source
             gc.collect()
     return pipe
+
+
+def set_vae_tiling(pipe, enabled: bool) -> None:
+    vae = getattr(pipe, "vae", None)
+    if vae is not None:
+        (vae.enable_tiling if enabled else vae.disable_tiling)()
+
+
+def runtime_recipe(pipe=None) -> dict[str, Any]:
+    """Library versions and switches that change the pixels, stored with every output so a drift can be traced."""
+    from importlib import metadata
+    recipe: dict[str, Any] = {"recipe_version": 1}
+    for name in ("torch", "diffusers", "transformers", "xformers", "peft", "accelerate"):
+        try:
+            recipe[name] = metadata.version(name)
+        except Exception:
+            recipe[name] = None
+    try:
+        torch = get_torch()
+        recipe["gpu"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    except Exception:
+        recipe["gpu"] = None
+    recipe["xformers_attention"] = getattr(pipe, "_studio_xformers", None)
+    recipe["cpu_offload"] = os.getenv("ENABLE_CPU_OFFLOAD", "false").lower() == "true"
+    return recipe
 
 
 def ensure_lora(pipe, lora_id: str, lora_strength: float) -> None:
