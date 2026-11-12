@@ -58,7 +58,7 @@ def main(model: str = 'tuymans_modal_2400', count: int = 6):
                       auth=(credentials['STUDIO_USERNAME'], credentials['STUDIO_PASSWORD']), timeout=90) as client:
         history = client.get('/api/history').json()['items']
     chosen = [i for i in history if i.get('settings', {}).get('atelier_mode') == 'photo'
-              and i['settings'].get('source_url') and i['settings'].get('seed') is not None][:count]
+              and str(i['settings'].get('source_url', '')).startswith('/library/') and i['settings'].get('seed') is not None][:count]
     if not chosen:
         raise RuntimeError('No retained photo-mode sources available')
     target = root / 'outputs/verification/ab-repaint'
