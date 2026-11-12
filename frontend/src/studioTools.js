@@ -146,11 +146,11 @@ export const idsForSource = (ids, source) => ids.filter((id) => sourceOf(id) ===
 // fusion, all moved within a band set by the distance and a "spread" slider. Fully deterministic per seed.
 export const VARIANT_DISTANCES = [
   { id: "near", label: "Blíž", hint: "Skoro stejná kompozice, jen jiný úhel" },
-  { id: "middle", label: "Střed", hint: "Výchozí vzdálenost" },
+  { id: "middle", label: "Střed", hint: "Jemná výchozí variace, zachovává předlohu" },
   { id: "far", label: "Dál", hint: "Silně jiná póza a kompozice" },
   { id: "weird", label: "Divně", hint: "Podivný, snový posun, stále stejná ruka" },
 ];
-const VARIANT_DENOISE_FACTOR = { near: 0.7, middle: 1, far: 1.35, weird: 1.65 };
+const VARIANT_DENOISE_FACTOR = { near: 0.4, middle: 0.65, far: 1.35, weird: 1.65 };
 const VARIANT_SUFFIX = {
   near: "same pose, slightly different camera angle",
   middle: "",
@@ -188,6 +188,10 @@ export function planVariants({ count, distance, spread = 0.5, prompt = "", negat
   for (let index = 0; index < count; index += 1) {
     const [rDenoise, rCfg, rLora] = [signed(), signed(), signed()];
     const rWeights = mix ? mix.map(() => signed()) : [];
+    // Cover the settings band instead of allowing random samples to cluster or round alike.
+    // Even zero extra spread retains a small sweep when several siblings are requested.
+    const sweep = count > 1 ? (index / (count - 1)) * 2 - 1 : rDenoise;
+    const settingSpread = count > 1 ? Math.max(0.25, wobble) : wobble;
     const modelId = mix
       ? buildMixId(mix.map((part, i) => ({ id: part.id, weight: Math.max(0.01, part.weight * Math.exp(wobble * 1.2 * rWeights[i])) })))
       : base.modelId;
@@ -196,8 +200,8 @@ export function planVariants({ count, distance, spread = 0.5, prompt = "", negat
       index,
       modelId,
       seed: (seed + index) % 4294967296,
-      denoise: Number(clampTo(base.denoise * VARIANT_DENOISE_FACTOR[band] * (1 + wobble * 0.25 * rDenoise), 0.05, 0.95).toFixed(2)),
-      cfg: Number(clampTo(base.cfg * (1 + wobble * 0.2 * rCfg), 0.5, 20).toFixed(1)),
+      denoise: Number(clampTo(base.denoise * VARIANT_DENOISE_FACTOR[band] * (1 + settingSpread * 0.25 * sweep), 0.05, 0.95).toFixed(2)),
+      cfg: Number(clampTo(base.cfg * (1 + settingSpread * 0.2 * (count > 1 ? -sweep : rCfg)), 0.5, 20).toFixed(1)),
       loraStrength: Number(clampTo(base.loraStrength * (1 + wobble * 0.25 * rLora), 0, 2).toFixed(2)),
       prompt: [prompt.trim(), VARIANT_SUFFIX[band], directive].filter(Boolean).join(", "),
       negativePrompt: negativePrompt.trim(),

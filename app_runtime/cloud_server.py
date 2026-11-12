@@ -199,7 +199,24 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     @app.get("/api/options")
     def options():
         from .archives import archive_options
-        return {**get_options(), "archives": archive_options()}
+        from .user_photos import collection_options
+        return {**get_options(), "archives": archive_options(), "atelier_photo_collections": collection_options()}
+
+    @app.get("/api/atelier/photos")
+    def atelier_photos(collection: str = "malba", offset: int = 0, limit: int = 48):
+        from .user_photos import list_photos
+        try:
+            return list_photos(collection, offset, limit)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/atelier-photo/{photo_id}")
+    def atelier_photo(photo_id: str, thumb: bool = False):
+        from .user_photos import photo_path
+        try:
+            return FileResponse(photo_path(photo_id, thumb), headers={"Cache-Control": "private, max-age=86400"})
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(404, "Atelier photo not found") from exc
 
     def validate_payload(payload):
         from dataclasses import asdict
@@ -327,22 +344,34 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             if first.atelier_mode == "archive":
                 from .archives import reference_for
                 reference_for(first.atelier_archive, 0)
+            if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
+                from .user_photos import photo_for
+                photo_for(first.atelier_photo_collection, 0, first.atelier_photo_id)
             seed = secrets.randbits(32) if first.seed == -1 else first.seed
             payloads = []
             for index in range(count):
-                variant_seed = (seed + index) % 2**32
-                title = "Volná studie bez námětu" if first.atelier_mode == "noise" else subject_for(variant_seed, first.atelier_theme)[1]
-                if first.atelier_mode == "archive":
-                    archive, reference, _ = reference_for(first.atelier_archive, variant_seed)
-                    title = archive["name"] + " · " + reference["filename"]
-                dimensions = {}
-                if ratio_mode == "random":
-                    import random
-                    width, height = random.Random(f"atelier-ratio:{variant_seed}").choice([(1024,1024), (832,1216), (1216,832), (896,1152), (1152,896)])
-                    dimensions = {"width": width, "height": height}
                 for model_id in models:
+                    # Stable per-model streams survive transport chunking and model reordering.
+                    model_offset = int.from_bytes(hashlib.sha256(model_id.encode()).digest()[:4], "big")
+                    variant_seed = (seed + index + model_offset) % 2**32
+                    title = "Volná studie bez námětu" if first.atelier_mode == "noise" else subject_for(variant_seed, first.atelier_theme)[1]
+                    if first.atelier_mode == "archive":
+                        archive, reference, _ = reference_for(first.atelier_archive, variant_seed)
+                        title = archive["name"] + " · " + reference["filename"]
+                    if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
+                        from .user_photos import photo_for
+                        collection, photo_item, _, _ = photo_for(first.atelier_photo_collection, variant_seed, first.atelier_photo_id)
+                        title = photo_item["filename"]
+                    dimensions = {}
+                    if ratio_mode == "random":
+                        import random
+                        width, height = random.Random(f"atelier-ratio:{variant_seed}").choice([(1024,1024), (832,1216), (1216,832), (896,1152), (1152,896)])
+                        dimensions = {"width": width, "height": height}
                     payload = validate_payload({**settings, **dimensions, "generation_type": "atelier", "model_id": model_id,
                         "lora_id": "none", "num_images": 1, "seed": variant_seed, "source_name": title})
+                    if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
+                        payload.update(atelier_photo_collection=first.atelier_photo_collection,
+                                       atelier_photo_id=first.atelier_photo_id)
                     payload.update(source_index=index, variant_index=index)
                     payloads.append(payload)
         except Exception as exc:

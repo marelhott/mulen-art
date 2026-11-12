@@ -54,6 +54,9 @@ class GenerationInput:
     schedule: str
     scale: float
     num_images: int
+    use_realsrgan: bool = False
+    output_upscaler: str = 'lanczos'
+    restormer_mode: str = 'off'
     render_mode: str = "quick"
     seed: int = -1
     prompt: str = ""
@@ -67,6 +70,9 @@ class GenerationInput:
     atelier_mode: str = "noise"
     atelier_theme: str = "all"
     atelier_archive: str = "hofmann"
+    atelier_photo_source: str = "generated"
+    atelier_photo_collection: str = "malba"
+    atelier_photo_id: str = ""
     atelier_color_level: int = 2  # 0 off, 1 archive-like palette, 2 vivid
     atelier_color_text: str = ""
     atelier_color_cfg: float = 0.0  # 0 = the level's default guidance
@@ -121,7 +127,7 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
         "generation_width": source_image.width, "generation_height": source_image.height,
         "steps_mode": "schedule" if generation_input.render_mode == "quick" else "actual",
         "detail_strength": generation_input.detail_strength, "detail_steps": generation_input.detail_steps,
-        "upscaler": "sdxl_second_pass" if generation_input.render_mode == "detail" else "lanczos",
+        "upscaler": "swinir_realsr_gan_x4" if generation_input.use_realsrgan else ("sdxl_second_pass" if generation_input.render_mode == "detail" else "lanczos"),
 
     }
 
@@ -161,13 +167,17 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
                     generation_input.num_images, index, generation_input.detail_steps, span=span * 0.55, stage="Detail"),
                 callback_on_step_end_tensor_inputs=[],
             ).images[0]
-        else:
-            result = upscale_if_needed(result, generation_input.scale)
+        result, actual_upscaler = apply_output_upscaler(
+            result, 1.0 if detail else generation_input.scale, generation_input.use_realsrgan,
+            generation_input.output_upscaler, generation_input.restormer_mode)
         image_meta = {**meta, "seed": seed, "actual_steps": actual_steps,
                       "effective_strength": effective_strength,
                       "effective_detail_strength": effective_detail_strength,
                       "actual_detail_steps": int(pipe.num_timesteps) if detail else 0,
-                      "output_width": result.width, "output_height": result.height, **(extra_meta or {})}
+                      "output_width": result.width, "output_height": result.height,
+                      "upscaler": actual_upscaler if not detail else ("sdxl_second_pass+" + actual_upscaler if actual_upscaler != 'lanczos' else 'sdxl_second_pass'),
+                      "restormer_mode": generation_input.restormer_mode,
+                      **(extra_meta or {})}
         output_images.append({**encode_image(result, image_meta), "generation_meta": image_meta})
         if image_callback is not None:
             image_callback(output_images[-1], image_meta)
@@ -245,6 +255,10 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         raise ValueError("image_base64 is required.")
 
     scale = clamp(float(payload.get("scale", 1.0)), MIN_SCALE, MAX_SCALE)
+    upscaler = payload.get('output_upscaler', 'swinir' if payload.get('use_realsrgan') is True else 'lanczos')
+    restormer_mode = payload.get('restormer_mode', 'off')
+    if upscaler not in {'lanczos', 'swinir', 'realesrgan'} or restormer_mode not in {'off', 'motion', 'defocus'}:
+        raise ValueError('Unknown output restoration setting')
 
     quality = str(payload.get("quality", "balanced")).lower()
     if quality not in QUALITY_TO_STEPS:
@@ -304,17 +318,24 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
             raise ValueError("Ateliér uses trained artist checkpoints")
         if atelier_mode == "archive" and payload.get("atelier_archive", "hofmann") not in {"hofmann", "tuymans", "mulen"}:
             raise ValueError("Unknown reference archive")
+        if atelier_mode == "photo":
+            if payload.get("atelier_photo_source", "generated") not in {"generated", "library"}:
+                raise ValueError("Unknown Atelier photo source")
+            if payload.get("atelier_photo_collection", "malba") not in {"malba", "artists"}:
+                raise ValueError("Unknown Atelier photo collection")
         dimensions = [payload.get("width", 1024), payload.get("height", 1024)]
         if any(isinstance(v, bool) or int(v) != float(v) or not 512 <= int(v) <= 1536 or int(v) % 8 for v in dimensions):
             raise ValueError("Atelier dimensions must be multiples of 8 from 512 to 1536")
         width, height = map(int, dimensions)
         if render_mode != "quick":
             raise ValueError("Ateliér does not use AI detail enhancement")
+    from .repaint import DEFAULT_REPAINT_DENOISE
+    default_denoise = DEFAULT_REPAINT_DENOISE if generation_type == "atelier" and atelier_mode in {"photo", "archive"} else 0.35
     return GenerationInput(
         image_base64=str(payload.get("image_base64", "")),
         model_id=model_id,
         lora_id=lora_id,
-        denoise=clamp(float(payload.get("denoise", 0.35)), 0.05, 0.99 if generation_type == "atelier" else 1.0),
+        denoise=clamp(float(payload.get("denoise", default_denoise)), 0.05, 0.99 if generation_type == "atelier" else 1.0),
         lora_strength=clamp(float(payload.get("lora_strength", 0.8)), 0.0, 2.0),
         cfg=cfg,
         steps=steps,
@@ -322,6 +343,9 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         schedule=schedule,
         scale=scale,
         num_images=num_images,
+        use_realsrgan=payload.get("use_realsrgan", False) is True,
+        output_upscaler=upscaler,
+        restormer_mode=restormer_mode,
         conditioning_mode=conditioning_mode,
         input_scale=clamp(float(payload.get("input_scale", 1.0)), 1.0, 4.0),
         render_mode=render_mode, seed=seed, prompt=prompt, negative_prompt=negative_prompt,
@@ -330,6 +354,9 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
+        atelier_photo_source=str(payload.get("atelier_photo_source", "generated")),
+        atelier_photo_collection=str(payload.get("atelier_photo_collection", "malba")),
+        atelier_photo_id=str(payload.get("atelier_photo_id", "")),
         atelier_color_level=0 if payload.get("atelier_color") is False else int(clamp(int(payload.get("atelier_color_level", 2)), 0, 2)),
         atelier_color_text=str(payload.get("atelier_color_text", ""))[:80],
         atelier_color_cfg=clamp(float(payload.get("atelier_color_cfg", 0.0)), 0.0, 8.0),
@@ -479,7 +506,9 @@ def normalize_dimensions(image: Image.Image, max_side: int | None = None) -> Ima
 
 
 def prepare_source(image: Image.Image, scale: float, max_side: int) -> Image.Image:
-    width, height = image.width * scale, image.height * scale
+    longest = max(image.width, image.height)
+    automatic = 1016 / longest if longest < 1000 else 1.0
+    width, height = image.width * automatic * scale, image.height * automatic * scale
     ratio = min(1.0, max_side / max(width, height))
     size = (max(64, math.floor(width * ratio / 8) * 8), max(64, math.floor(height * ratio / 8) * 8))
     return image.resize(size, Image.Resampling.LANCZOS)
@@ -501,7 +530,26 @@ def upscale_if_needed(image: Image.Image, scale: float) -> Image.Image:
     if scale == 1.0:
         return image
     width, height = image.size
-    return image.resize((round(width * scale), round(height * scale)), Image.Resampling.LANCZOS)
+    from PIL import ImageFilter
+    resized = image.resize((round(width * scale), round(height * scale)), Image.Resampling.LANCZOS)
+    return resized.filter(ImageFilter.UnsharpMask(radius=0.6, percent=45, threshold=3)) if scale > 1 else resized
+
+
+def apply_output_upscaler(image: Image.Image, scale: float, use_realsrgan: bool = False,
+                          output_upscaler: str | None = None, restormer_mode: str = 'off') -> tuple[Image.Image, str]:
+    """Upscale an output, optionally using the tested SwinIR real-world GAN model."""
+    target = (round(image.width * scale), round(image.height * scale))
+    upscaler = output_upscaler if output_upscaler is not None else ('swinir' if use_realsrgan else 'lanczos')
+    if restormer_mode != 'off':
+        from .restormer import deblur
+        image = deblur(image, restormer_mode)
+    if upscaler in {'swinir', 'realesrgan'}:
+        from .realsrgan import upscale
+        result = upscale(image) if upscaler == 'swinir' else upscale(image, 'realesrgan')
+        if result.size != target:
+            result = result.resize(target, Image.Resampling.LANCZOS)
+        return result, 'swinir_realsr_gan_x4' if upscaler == 'swinir' else 'realesrgan_x4plus'
+    return upscale_if_needed(image, scale), "lanczos"
 
 
 def encode_image(image: Image.Image, metadata: dict | None = None) -> dict[str, Any]:

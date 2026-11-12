@@ -170,7 +170,7 @@ class CloudFlowTests(unittest.TestCase):
                 self.assertEqual([payload["seed"] for payload in payloads], [4294967295, 0])
                 self.assertTrue(all(payload["num_images"] == 1 for payload in payloads))
 
-    def test_atelier_queues_no_source_files_and_compares_all_models_on_same_studies(self):
+    def test_atelier_queues_independent_reproducible_model_streams(self):
         client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
         client.auth = ("studio", "test-password")
         response = client.post("/api/atelier-batch", json={"model_ids": ["hofmann_sdxl", "tuymans_modal_2400"], "count": 3,
@@ -178,15 +178,23 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(response.json()["jobs"]), 6)
         self.assertEqual(list(self.output.glob('source_*')), [])
-        for index in range(3):
-            pair = [payload for _,payload in self.submissions if payload["seed"] == 231020+index]
-            self.assertEqual(len(pair),2)
-            self.assertEqual(pair[0]["source_name"],pair[1]["source_name"])
-            self.assertTrue(all(payload["cfg"]==.5 and not payload["image_base64"] and payload["source_url"] is None for payload in pair))
+        payloads = [payload for _, payload in self.submissions]
+        self.assertEqual(len({p["seed"] for p in payloads}), 6)
+        from app_runtime.atelier import subject_for
+        for payload in payloads:
+            self.assertEqual(payload["source_name"], subject_for(payload["seed"], "face")[1])
+            self.assertEqual(payload["cfg"], .5)
+            self.assertFalse(payload["image_base64"])
+        # A later transport chunk must continue each model's stream independently.
+        response = client.post("/api/atelier-batch", json={"model_ids": ["tuymans_modal_2400", "hofmann_sdxl"], "count": 1,
+            "settings": {"atelier_mode": "subject", "atelier_theme": "face", "seed": 231022}})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({p["model_id"]: p["seed"] for _, p in self.submissions[-2:]},
+                         {p["model_id"]: p["seed"] for p in payloads[-2:]})
         for invalid in ({"model_ids":["sdxl_base"]}, {"count":9}, {"settings":{"atelier_mode":"missing"}}):
             rejected = client.post("/api/atelier-batch", json={"model_ids":["hofmann_sdxl"], "count":1, **invalid})
             self.assertEqual(rejected.status_code,422)
-        self.assertEqual(len(self.submissions),6)
+        self.assertEqual(len(self.submissions),8)
 
     def test_archive_fusion_validates_source_before_submitting_and_keeps_models_independent(self):
         client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
@@ -203,10 +211,10 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(len(self.submissions), 2)
         pair = [payload for _, payload in self.submissions]
         self.assertEqual([p["model_id"] for p in pair], request["model_ids"])
-        self.assertTrue(all(p["atelier_archive"] == "hofmann" and p["seed"] == 123 and p["steps"] == 28 and p["denoise"] == .55 for p in pair))
-        self.assertEqual(pair[0]["source_name"], pair[1]["source_name"])
+        self.assertTrue(all(p["atelier_archive"] == "hofmann" and p["steps"] == 28 and p["denoise"] == .55 for p in pair))
+        self.assertNotEqual(pair[0]["seed"], pair[1]["seed"])
 
-    def test_random_ratios_are_varied_reproducible_and_shared_between_models(self):
+    def test_random_ratios_are_varied_reproducible_and_independent(self):
         client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
         client.auth = ("studio", "test-password")
         request = {"model_ids": ["tuymans_modal_2400", "hofmann_sdxl"], "count": 8,
@@ -214,8 +222,7 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(client.post("/api/atelier-batch", json=request).status_code, 200)
         first = [p for _,p in self.submissions]
         self.assertGreater(len({(p["width"],p["height"]) for p in first}), 1)
-        for i in range(0,16,2):
-            self.assertEqual((first[i]["width"],first[i]["height"]), (first[i+1]["width"],first[i+1]["height"]))
+        self.assertEqual(len({p["seed"] for p in first}), 16)
         self.assertEqual(client.post("/api/atelier-batch", json=request).status_code, 200)
         self.assertEqual([(p["width"],p["height"]) for p in first], [(p["width"],p["height"]) for _,p in self.submissions[16:]])
         request["settings"]["atelier_ratio"] = "bad"

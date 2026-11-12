@@ -51,8 +51,7 @@ def generate_reference(spec, progress, image_callback):
         archive, item, path = reference_for(spec.atelier_archive, seed)
         with Image.open(path) as raw:
             source = ImageOps.exif_transpose(raw).convert('RGB')
-        source.thumbnail((spec.width, spec.height), Image.Resampling.LANCZOS)
-        source = core.prepare_source(source, 1, max(spec.width, spec.height))
+        source = core.prepare_source(source, spec.input_scale, max(spec.width, spec.height, 1008))
         source_data = core.encode_image(source, {})
         source_name = 'source_archive_' + hashlib.sha256(base64.b64decode(source_data['image_base64'])).hexdigest() + '.png'
         OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -64,19 +63,20 @@ def generate_reference(spec, progress, image_callback):
             'subject_title': archive['name'] + ' · ' + item['filename'],
             'source_name': item['filename'], 'source_url': '/library/' + source_name,
             'prompt': '', 'negative_prompt': '', 'cfg': spec.cfg}
-        def ready(image, meta):
-            nonlocal final_meta
-            # Provenance was already embedded by generate(extra_meta=...); no PNG re-encode.
-            final_meta = {**meta, **provenance}
-            encoded = {**image, 'generation_meta': final_meta}
-            images.append(encoded)
-            if image_callback:
-                image_callback(encoded, final_meta)
         def report(value, message):
             core.report_progress(progress, (index + value) / spec.num_images, 'Archiv · ' + message)
-        result = core.generate({'generation_type':'img2img', 'image_base64':source_data['image_base64'],
-            'model_id':spec.model_id, 'lora_id':'none', 'seed':seed, 'denoise':spec.denoise,
-            'cfg':spec.cfg, 'steps':spec.steps, 'sampler':spec.sampler, 'schedule':spec.schedule,
-            'scale':spec.scale, 'num_images':1, 'render_mode':'quick', 'conditioning_mode':'style',
-            'prompt':'', 'negative_prompt':'', 'max_side':max(spec.width,spec.height)}, report, ready, extra_meta=provenance)
+        from .repaint import repaint
+        result, repaint_meta = repaint(source, spec, seed, report)
+        result, actual_upscaler = core.apply_output_upscaler(result, spec.scale, spec.use_realsrgan, spec.output_upscaler, spec.restormer_mode)
+        final_meta = {**provenance, **repaint_meta,
+            'model_id': spec.model_id, 'model_name': core.get_config_item('models', spec.model_id)['name'],
+            'lora_id': 'none', 'seed': seed, 'sampler': spec.sampler, 'schedule': spec.schedule,
+            'generation_width': source.width, 'generation_height': source.height,
+            'output_width': result.width, 'output_height': result.height,
+            'scale': spec.scale, 'upscaler': actual_upscaler, 'restormer_mode': spec.restormer_mode, 'render_mode': 'quick', 'demo_mode': False}
+        encoded = {**core.encode_image(result, final_meta), 'generation_meta': final_meta}
+        images.append(encoded)
+        if image_callback:
+            image_callback(encoded, final_meta)
+        report(1, 'Obraz uložen')
     return {'images':images, 'meta':final_meta}

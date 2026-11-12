@@ -1981,6 +1981,14 @@ input[type="range"]::-moz-range-progress {
 .atelier-mode[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .atelier-mode span { font-size: 12px; }
 .atelier-mode small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.atelier-photo-source { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.atelier-photo-picker { display: grid; gap: 8px; }
+.atelier-photo-collections { display: flex; flex-wrap: wrap; gap: 6px; }
+.atelier-photo-collections button[aria-pressed="true"] { color: var(--accent); }
+.atelier-photo-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; max-height: 380px; overflow-y: auto; padding: 2px; }
+.atelier-photo-thumb { aspect-ratio: 1; padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel); cursor: pointer; }
+.atelier-photo-thumb[aria-pressed="true"] { border: 2px solid var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
+.atelier-photo-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .atelier-intro { padding: 14px 0; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
 .atelier-intro > span { font-size: 9px; letter-spacing: .15em; color: var(--accent); }
 .atelier-intro p { color: var(--muted); font-size: 11px; line-height: 1.6; max-width: 720px; margin-bottom: 0; }
@@ -2201,6 +2209,7 @@ input[type="range"]::-moz-range-progress {
 .variants-toggle b { display: block; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 .variants-toggle small { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; }
 .variants-toggle input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.realsr-toggle { grid-template-columns: auto 1fr; margin-top: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--card) 70%, transparent); }
 .source-switch.four { grid-template-columns: repeat(4, 1fr); }
 .variants-prompt, .variants-negative { width: 100%; background: var(--input); border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); font: inherit; font-size: 11px; padding: 8px 10px; resize: vertical; }
 .variants-prompt:focus-visible, .variants-negative:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

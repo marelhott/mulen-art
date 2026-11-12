@@ -18,12 +18,30 @@ SUBJECTS = [
     ("landscape", "Výřez vegetace", "a tightly cropped patch of ordinary foliage against a flat wall"),
     ("landscape", "Vzdálený břeh", "a distant bank across a narrow strip of water, flat overcast light"),
     ("landscape", "Část hřiště", "an empty cropped section of a sports field, a faint line across the ground"),
-    ("figure", "Postava zezadu", "a distant ordinary person seen from behind, cropped setting, no visible action"),
-    ("figure", "Část skupiny", "a cropped portion of an ordinary group photograph, partial shoulders and faces"),
-    ("figure", "Sedící postava", "an ordinary seated person, hands partly outside the frame, neutral background"),
-    ("figure", "Gesto ruky", "a close cropped hand resting against ordinary clothing, no visible face"),
+    ("figure", "Stojící dospělá postava", "a full-length adult person standing naturally, realistic human anatomy, entire body and feet visible"),
+    ("figure", "Sedící dospělá postava", "an adult person sitting on a plain chair, full body visible, natural proportions and relaxed hands"),
+    ("figure", "Dospělá postava při chůzi", "a full-length adult person walking across an ordinary room, natural posture, realistic anatomy"),
+    ("figure", "Dvojice dospělých", "two adult people standing together, full bodies visible, natural gestures and realistic proportions"),
+    ("figure", "Ležící dospělá postava", "an adult person reclining on a couch, entire body visible, natural anatomy and quiet daylight"),
+    ("figure", "Dospělá postava u okna", "an adult person standing beside a window, three-quarter length view, clearly visible face and hands"),
+    ("nude", "Stojící dospělý akt", "a non-sexual fine art nude study of an adult standing in a studio, full body, natural anatomy, relaxed pose"),
+    ("nude", "Sedící dospělý akt", "a non-sexual fine art nude study of an adult seated on a stool, full body, natural proportions, soft daylight"),
+    ("nude", "Ležící dospělý akt", "a non-sexual fine art nude study of an adult reclining on plain linen, natural anatomy, quiet studio setting"),
+    ("nude", "Dospělý akt zezadu", "a non-sexual fine art nude study of an adult seen from behind, full body, relaxed standing pose"),
+    ("nude", "Akt dospělé ženy v kontrapostu", "a non-sexual fine art nude study of an adult woman aged forty standing in contrapposto, full body, natural anatomy, charcoal studio backdrop"),
+    ("nude", "Akt dospělého muže vsedě", "a non-sexual fine art nude study of an adult man aged fifty seated sideways on a bench, full body, relaxed shoulders, natural anatomy"),
+    ("nude", "Akt starší dospělé ženy", "a non-sexual fine art nude study of an elderly adult woman aged seventy standing naturally, full body, realistic aging skin and anatomy, soft side light"),
+    ("nude", "Akt staršího dospělého muže", "a non-sexual fine art nude study of an elderly adult man aged seventy sitting on a chair, full body, natural aging body and relaxed posture"),
+    ("nude", "Akt plnoštíhlé dospělé postavy", "a non-sexual fine art nude study of a plus-size adult person aged forty reclining on plain linen, full body, realistic weight and natural folds"),
+    ("nude", "Akt štíhlé dospělé postavy", "a non-sexual fine art nude study of a lean adult person aged thirty stretching their arms overhead while standing, full body, natural anatomy"),
+    ("nude", "Dospělý akt na boku", "a non-sexual fine art nude study of an adult person aged forty lying on their side on a studio couch, full body, bent knees, quiet daylight"),
+    ("intimacy", "Dospělá dvojice v objetí", "a non-sexual intimate portrait of two clothed adults aged forty embracing gently, natural bodies, quiet domestic room, relaxed hands"),
+    ("intimacy", "Dospělá dvojice na pohovce", "a non-sexual intimate study of two clothed adults aged fifty sitting close on a couch, one head resting on the other's shoulder, natural posture"),
+    ("intimacy", "Dospělá postava před zrcadlem", "a non-sexual intimate study of an adult person aged forty in a loose linen robe looking into a mirror, natural body, quiet morning light"),
+    ("intimacy", "Starší dospělá dvojice", "a non-sexual intimate portrait of two elderly clothed adults aged seventy holding hands at a kitchen table, natural faces and hands, ordinary daylight"),
+    ("intimacy", "Odpočívající dospělá postava", "a non-sexual intimate study of an adult person aged thirty resting on a bed in loose everyday clothing, full body, relaxed posture and soft window light"),
 ]
-THEMES = {"all", "face", "interior", "object", "landscape", "figure"}
+THEMES = {"all", "face", "interior", "object", "landscape", "figure", "nude", "intimacy"}
 MODES = {"noise", "subject", "photo", "archive"}
 
 
@@ -36,7 +54,12 @@ def is_atelier_model(model_id):
 
 def subject_for(seed, theme="all"):
     choices = [(i, item) for i, item in enumerate(SUBJECTS) if theme == "all" or item[0] == theme]
-    index, (_, title, text) = random.Random(seed).choice(choices)
+    rng = random.Random(seed)
+    if theme == "all":
+        # Figure studies get more room; nude and intimate categories remain opt-in.
+        category = rng.choice(["face", "figure", "figure", "interior", "object", "landscape"])
+        choices = [(i, item) for i, item in choices if item[0] == category]
+    index, (_, title, text) = rng.choice(choices)
     return index, title, text
 
 
@@ -207,37 +230,52 @@ def generate_study(spec, progress, image_callback):
             cfg = max(spec.cfg, spec.atelier_color_cfg or (COLOR_GUIDANCE_VIVID if spec.atelier_color_level == 2 else COLOR_GUIDANCE))
         notify(.02, "Ateliér: načítání modelu")
         source_url = None
+        repaint_meta = {}
+        photo_prompt = None
+        photo_source_meta = {}
         # The optional photographic study uses SDXL Base, then releases its pipeline before painting.
         if spec.atelier_mode == "photo":
-            pipe = core.ensure_pipeline("sdxl_base", resident=2)
-            core.ensure_lora(pipe, "none", 0)
-            pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
-            text_pipe = modules["text_pipeline"].from_pipe(pipe)
-            photo_prompt = f"An ordinary documentary photograph of {text}. Flat light, no dramatic lighting."
-            notify(.12, "Ateliér: vytváření fotografické předlohy")
-            photo = text_pipe(prompt=photo_prompt, negative_prompt=None, width=spec.width, height=spec.height,
-                guidance_scale=spec.cfg, num_inference_steps=spec.steps, generator=generator(),
-                callback_on_step_end=core.build_step_callback(notify, .12, 1, 0, spec.steps, span=.30, stage="Předloha"),
-                callback_on_step_end_tensor_inputs=[]).images[0]
-            del text_pipe, pipe
-            # Persist the actual generated source for the comparison viewer and audit trail.
-            import hashlib, io
-            from .server import OUTPUTS_DIR
-            buffer = io.BytesIO(); photo.save(buffer, format="PNG"); data = buffer.getvalue()
-            filename = "source_atelier_" + hashlib.sha256(data).hexdigest() + ".png"
-            OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-            (OUTPUTS_DIR / filename).write_bytes(data)
-            source_url = f"/library/{filename}"
+            if spec.atelier_photo_source == "library":
+                from .user_photos import photo_for
+                from PIL import Image, ImageOps
+                collection, photo_item, photo_path, _thumb = photo_for(spec.atelier_photo_collection, seed, spec.atelier_photo_id)
+                with Image.open(photo_path) as raw:
+                    photo = ImageOps.exif_transpose(raw).convert("RGB")
+                photo = core.prepare_source(photo, spec.input_scale, max(spec.width, spec.height, 1008))
+                source_url = f"/atelier-photo/{photo_item['id']}"
+                subject_id, title, text = None, photo_item["filename"], ""
+                photo_source_meta = {"photo_source": "library", "photo_collection": collection["id"],
+                    "photo_album": photo_item.get("album"), "photo_id": photo_item["id"],
+                    "photo_filename": photo_item["filename"], "photo_sha256": photo_item["sha256"]}
+                notify(.35, "Ateliér: načítání vybrané fotografie")
+            else:
+                pipe = core.ensure_pipeline("sdxl_base", resident=2)
+                core.ensure_lora(pipe, "none", 0)
+                pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
+                text_pipe = modules["text_pipeline"].from_pipe(pipe)
+                photo_prompt = f"An ordinary documentary photograph of {text}. Flat light, no dramatic lighting."
+                notify(.12, "Ateliér: vytváření fotografické předlohy")
+                photo = text_pipe(prompt=photo_prompt, negative_prompt=None, width=spec.width, height=spec.height,
+                    guidance_scale=max(5.0, spec.cfg), num_inference_steps=spec.steps, generator=generator(),
+                    callback_on_step_end=core.build_step_callback(notify, .12, 1, 0, spec.steps, span=.30, stage="Předloha"),
+                    callback_on_step_end_tensor_inputs=[]).images[0]
+                del text_pipe, pipe
+                photo_source_meta = {"photo_source": "generated"}
+            # Generated sources live in outputs; library photos are already served from the archive volume.
+            if spec.atelier_photo_source == "generated":
+                import hashlib, io
+                from .server import OUTPUTS_DIR
+                buffer = io.BytesIO(); photo.save(buffer, format="PNG"); data = buffer.getvalue()
+                filename = "source_atelier_" + hashlib.sha256(data).hexdigest() + ".png"
+                OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+                (OUTPUTS_DIR / filename).write_bytes(data)
+                source_url = f"/library/{filename}"
             notify(.45, "Ateliér: přemalování vlastním checkpointem")
-            pipe = core.ensure_pipeline(spec.model_id, resident=2)
-            core.ensure_lora(pipe, "none", 0)
-            pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
-            result = pipe(prompt="", negative_prompt=None, image=photo, strength=spec.denoise,
-                guidance_scale=spec.cfg, num_inference_steps=spec.steps, generator=generator(),
-                callback_on_step_end=core.build_step_callback(notify, .50, 1, 0, spec.steps, span=.40, stage="Malba"),
-                callback_on_step_end_tensor_inputs=[]).images[0]
-            actual_steps = int(pipe.num_timesteps)
-            prompt = ""
+            from .repaint import repaint
+            result, repaint_meta = repaint(photo, spec, seed, lambda value, message: notify(.50 + .40 * value, message))
+            actual_steps = repaint_meta["actual_steps"]
+            prompt, cfg = repaint_meta["prompt"], repaint_meta["cfg"]
+
         else:
             pipe = core.ensure_pipeline(spec.model_id)
             core.ensure_lora(pipe, "none", 0)
@@ -265,22 +303,26 @@ def generate_study(spec, progress, image_callback):
                     callback_on_step_end_tensor_inputs=[]).images[0]
                 actual_steps = int(text_pipe.num_timesteps)
             del text_pipe
-        result = core.upscale_if_needed(result, spec.scale)
+        result, actual_upscaler = core.apply_output_upscaler(result, spec.scale, spec.use_realsrgan, spec.output_upscaler, spec.restormer_mode)
         meta = {"generation_type": "atelier", "atelier_mode": spec.atelier_mode,
             "atelier_theme": spec.atelier_theme, "subject_id": subject_id, "subject_title": title,
-            "subject_text": text, "subject_origin": "none" if subject_id is None else "curated-starter-v1",
+            "subject_text": text, "subject_origin": "photos-library" if spec.atelier_mode == "photo" and spec.atelier_photo_source == "library" else ("none" if subject_id is None else "curated-starter-v1"),
             "model_id": spec.model_id, "model_name": core.get_config_item("models", spec.model_id)["name"],
             "lora_id": "none", "seed": seed, "steps": spec.steps, "actual_steps": actual_steps,
             "guidance_scale": cfg, "cfg": cfg, "requested_cfg": spec.cfg, "sampler": spec.sampler, "schedule": spec.schedule,
-            "generation_width": spec.width, "generation_height": spec.height,
+            "generation_width": photo.width if spec.atelier_mode == "photo" else spec.width,
+            "generation_height": photo.height if spec.atelier_mode == "photo" else spec.height,
             "output_width": result.width, "output_height": result.height,
-            "scale": spec.scale, "upscaler": "lanczos", "render_mode": "quick",
+            "scale": spec.scale, "upscaler": actual_upscaler, "restormer_mode": spec.restormer_mode, "render_mode": "quick",
             "prompt": prompt, "negative_prompt": "", "denoise": spec.denoise if spec.atelier_mode == "photo" else None,
             "source_url": source_url, "source_name": title, "demo_mode": False,
             "photo_prompt": photo_prompt if spec.atelier_mode == "photo" else None,
-            "photo_model_id": "sdxl_base" if spec.atelier_mode == "photo" else None,
+            "photo_model_id": "sdxl_base" if spec.atelier_mode == "photo" and spec.atelier_photo_source == "generated" else None,
+            "photo_cfg": max(5.0, spec.cfg) if spec.atelier_mode == "photo" and spec.atelier_photo_source == "generated" else None,
+            **photo_source_meta,
             "generation_and_save_seconds": round(time.monotonic() - started, 2),
-            "color_hint": color_text, "color_source": color_source, "color_level": spec.atelier_color_level if color_text else 0}
+            "color_hint": color_text, "color_source": color_source, "color_level": spec.atelier_color_level if color_text else 0,
+            **repaint_meta}
         image = {**core.encode_image(result, meta), "generation_meta": meta}
         output_images.append(image)
         if image_callback: image_callback(image, meta)

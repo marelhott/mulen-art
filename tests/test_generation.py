@@ -65,7 +65,7 @@ class GenerationTests(unittest.TestCase):
     def test_detail_reencodes_upscaled_image_and_preserves_per_image_seed(self):
         pipe, result, updates, emitted = self.run_generation(render_mode='detail', num_images=2)
         self.assertEqual(len(pipe.calls), 4)
-        self.assertEqual([call['image'].size for call in pipe.calls], [(128, 96), (256, 192)] * 2)
+        self.assertEqual([call['image'].size for call in pipe.calls], [(1016, 760), (2032, 1520)] * 2)
         self.assertEqual([meta['seed'] for meta in emitted], [42, 43])
         self.assertTrue(all(meta['actual_steps'] == 25 and meta['actual_detail_steps'] == 15 for meta in emitted))
         self.assertIsNone(pipe.calls[0]['negative_prompt'])
@@ -104,19 +104,49 @@ class GenerationTests(unittest.TestCase):
             self.assertEqual(small_pipe.calls[0][key], large_pipe.calls[0][key])
         self.assertEqual(small_pipe.calls[0]['image'].tobytes(), large_pipe.calls[0]['image'].tobytes())
         decode = lambda result: Image.open(io.BytesIO(base64.b64decode(result['images'][0]['image_base64'])))
-        expected = decode(small).resize((256, 192), Image.Resampling.LANCZOS)
+        expected = core.upscale_if_needed(decode(small), 2)
         self.assertEqual(expected.tobytes(), decode(large).tobytes())
 
     def test_input_enlargement_precedes_single_diffusion_pass(self):
         pipe, result, _, _ = self.run_generation(render_mode='quick', input_scale=2, scale=2)
         self.assertEqual(len(pipe.calls), 1)
-        self.assertEqual(pipe.calls[0]['image'].size, (256, 192))
-        self.assertEqual((result['images'][0]['width'], result['images'][0]['height']), (512, 384))
+        self.assertEqual(pipe.calls[0]['image'].size, (1536, 1152))
+        self.assertEqual((result['images'][0]['width'], result['images'][0]['height']), (3072, 2304))
         self.assertEqual(result['meta']['input_scale'], 2)
+
+    def test_optional_realsrgan_is_applied_at_selected_output_size(self):
+        source = Image.new('RGB', (128, 96), 'red')
+        restored = Image.new('RGB', (512, 384), 'blue')
+        with patch('app_runtime.realsrgan.upscale', return_value=restored) as model:
+            result, name = core.apply_output_upscaler(source, 2, True)
+        model.assert_called_once_with(source)
+        self.assertEqual(result.size, (256, 192))
+        self.assertEqual(name, 'swinir_realsr_gan_x4')
+
+    def test_realsrgan_is_disabled_by_default(self):
+        self.assertFalse(core.parse_input(self.payload).use_realsrgan)
+        self.assertTrue(core.parse_input({**self.payload, 'use_realsrgan': True}).use_realsrgan)
+        self.assertFalse(core.parse_input({**self.payload, 'use_realsrgan': 'true'}).use_realsrgan)
         self.assertEqual(core.prepare_source(Image.new('RGB', (1000, 800)), 4, 1536).size, (1536, 1224))
-        for size in ((564, 487), (4480, 5696), (128, 96)):
+        for size, expected in (((564, 487), (1016, 872)), ((4480, 5696), (1208, 1536)), ((128, 96), (1016, 760))):
             image = Image.new('RGB', size)
-            self.assertEqual(core.prepare_source(image, 1, 1536).size, core.normalize_dimensions(image, 1536).size)
+            self.assertEqual(core.prepare_source(image, 1, 1536).size, expected)
+
+    def test_restoration_settings_roundtrip_and_combined_order(self):
+        from dataclasses import asdict
+        settings = {**self.payload, 'output_upscaler': 'realesrgan', 'restormer_mode': 'defocus'}
+        spec = core.parse_input(asdict(core.parse_input(settings)))
+        self.assertEqual((spec.output_upscaler, spec.restormer_mode), ('realesrgan', 'defocus'))
+        source = Image.new('RGB', (64, 64), 'red')
+        deblurred = Image.new('RGB', (64, 64), 'blue')
+        with patch('app_runtime.restormer.deblur', return_value=deblurred) as deblur, \
+             patch('app_runtime.realsrgan.upscale', return_value=Image.new('RGB', (256, 256))) as upscale:
+            output, used = core.apply_output_upscaler(source, 2, False, spec.output_upscaler, spec.restormer_mode)
+        deblur.assert_called_once_with(source, 'defocus')
+        upscale.assert_called_once_with(deblurred, 'realesrgan')
+        self.assertEqual((output.size, used), ((128, 128), 'realesrgan_x4plus'))
+        with self.assertRaises(ValueError):
+            core.parse_input({**self.payload, 'restormer_mode': 'unknown'})
 
     def test_ode_and_sde_are_distinct_and_order_is_explicit(self):
         scheduler = Mock()

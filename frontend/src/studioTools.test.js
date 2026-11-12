@@ -123,13 +123,34 @@ test("variants: distance moves denoise, adds its suffix, and spread 0 keeps the 
   const base = { denoise: 0.5, cfg: 5, loraStrength: 0.8, modelId: "tuymans_sdxl" };
   const at = (distance, spread = 0) => planVariants({ count: 1, distance, spread, base, seed: 7 })[0];
   assert.ok(at("near").denoise < at("middle").denoise && at("middle").denoise < at("far").denoise && at("far").denoise < at("weird").denoise);
-  assert.equal(at("middle").denoise, 0.5);
+  assert.equal(at("middle").denoise, 0.33);
   assert.equal(at("middle").modelId, "tuymans_sdxl");
   assert.equal(at("near").prompt, "same pose, slightly different camera angle, camera a few degrees to the left");
   assert.match(at("weird").prompt, /^surreal, dreamlike/);
-  assert.equal(planVariants({ count: 1, distance: "bogus", spread: 0, base, seed: 7 })[0].denoise, 0.5);
+  assert.equal(planVariants({ count: 1, distance: "bogus", spread: 0, base, seed: 7 })[0].denoise, 0.33);
   assert.equal(VARIANT_DISTANCES.length, 4);
   const mixed = planVariants({ count: 2, distance: "middle", spread: 0, base: { ...base, modelId: "mix:a=70,b=30" }, seed: 1 });
   assert.deepEqual(mixed.map((v) => v.modelId), ["mix:a=70,b=30", "mix:a=70,b=30"]);
   assert.equal(describeVariant(mixed[0], [{ id: "a", name: "A" }, { id: "b", name: "B" }]).text.includes("váhy 70 / 30"), true);
+});
+
+
+test("default canvas variants preserve the source with a lower denoise band", () => {
+  const base = { denoise: 0.52, cfg: 5, loraStrength: 0.8, modelId: "tuymans_sdxl" };
+  const plan = planVariants({ count: 12, distance: "middle", spread: 0.5, base, seed: 12345 });
+  assert.ok(plan.every(item => item.denoise >= 0.29 && item.denoise <= 0.39));
+  assert.equal(planVariants({ count: 1, distance: "near", spread: 0, base, seed: 1 })[0].denoise, 0.21);
+});
+
+
+test("multiple variants sweep distinct denoise and CFG even at zero extra spread", () => {
+  const base = { denoise: 0.52, cfg: 5, loraStrength: 0.8, modelId: "tuymans_sdxl" };
+  for (const spread of [0, 0.05, 0.5, 1]) {
+    const plan = planVariants({ count: 5, distance: "far", spread, base, seed: 12345 });
+    assert.equal(new Set(plan.map(item => item.denoise)).size, 5);
+    assert.equal(new Set(plan.map(item => item.cfg)).size, 5);
+    assert.deepEqual(plan, planVariants({ count: 5, distance: "far", spread, base, seed: 12345 }));
+    assert.ok(plan[0].denoise < plan[4].denoise);
+    assert.ok(plan[0].cfg > plan[4].cfg);
+  }
 });

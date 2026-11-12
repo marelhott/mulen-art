@@ -1,6 +1,8 @@
 import hashlib, json, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
+from test_generation import Generator, Pipeline
 from PIL import Image
 from app_runtime import archives, core, server
 
@@ -23,25 +25,26 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):archives.reference_for('missing',1)
         selected_path=archives.reference_for('hofmann',0)[2];selected_path.write_bytes(b'corrupted')
         with self.assertRaisesRegex(ValueError,'integrity'):archives.reference_for('hofmann',0)
-    def test_cross_artist_repaint_keeps_provenance_and_empty_prompt(self):
+    def test_cross_artist_repaint_keeps_provenance_and_uses_learned_token(self):
         spec=core.parse_input({'generation_type':'atelier','atelier_mode':'archive','atelier_archive':'hofmann',
             'model_id':'tuymans_modal_2400','seed':5,'width':1024,'height':1024,'denoise':0.55,'cfg':0.5,'steps':28})
-        seen=[];emitted=[]
-        def generate(payload,progress,callback,extra_meta=None):
-            seen.append(payload)
-            image=core.decode_image(payload['image_base64'])
-            callback(core.encode_image(image),{'model_id':payload['model_id'],'seed':payload['seed'],'denoise':payload['denoise']})
-            return {'meta':{}}
-        with patch.object(core,'generate',side_effect=generate),patch.object(server,'OUTPUTS_DIR',self.root):
+        emitted=[]
+        pipe = Pipeline()
+        with patch.object(core,'ensure_pipeline',return_value=pipe), \
+             patch.object(core,'ensure_lora'), \
+             patch.object(core,'make_scheduler',return_value=SimpleNamespace(config={})), \
+             patch.object(core,'get_torch',return_value=SimpleNamespace(Generator=Generator)), \
+             patch.object(server,'OUTPUTS_DIR',self.root):
             result=archives.generate_reference(spec,None,lambda image,meta:emitted.append(meta))
-        self.assertEqual(seen[0]['model_id'],'tuymans_modal_2400')
-        self.assertEqual(seen[0]['generation_type'],'img2img')
-        self.assertEqual(seen[0]['prompt'],'')
-        self.assertEqual(seen[0]['denoise'],0.55)
+        self.assertEqual(pipe.calls[0]['prompt'],'mvhpaint')
+        self.assertEqual(pipe.calls[0]['guidance_scale'],3.0)
+        self.assertEqual(emitted[0]['denoise'],0.55)
+        self.assertEqual(emitted[0]['actual_steps'],28)
+        self.assertEqual(emitted[0]['steps_mode'],'actual')
         self.assertEqual(emitted[0]['atelier_archive'],'hofmann')
         self.assertEqual(emitted[0]['generation_type'],'atelier')
         self.assertEqual(emitted[0]['subject_origin'],'reference-archive')
-        self.assertEqual((result['images'][0]['width'],result['images'][0]['height']),(512,768))
+        self.assertEqual((result['images'][0]['width'],result['images'][0]['height']),(672,1016))
         self.assertEqual(len(list(self.root.glob('source_archive_*.png'))),1)
     def test_traversal_is_rejected(self):
         for item in self.manifest['archives'][0]['items']:item['path']='../outside.png'

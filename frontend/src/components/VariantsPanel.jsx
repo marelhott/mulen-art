@@ -42,7 +42,7 @@ export function VariantsPanel({ value, onChange, plan, models }) {
             <span className="label-row"><Label>ROZPTYL VAH A NASTAVENÍ</Label><output>{Math.round(value.spread * 100)} %</output></span>
             <input type="range" min={0} max={1} step={0.05} value={value.spread} aria-label="Rozptyl vah a nastavení"
               onChange={(event) => update({ spread: Number(event.target.value) })} style={{ "--range-fill": `${value.spread * 100}%` }} />
-            <span className="help-text">0 % = stejné nastavení a váhy, mění se jen seed a pokyn. Výš = víc se liší denoise, CFG a váhy fúze.</span>
+            <span className="help-text">Každá varianta má odstupňované denoise a CFG. 0 % = jemné rozdíly a stejné váhy fúze; vyšší rozptyl rozdíly zvětšuje.</span>
           </label>
           <Label>AKTIVNÍ VARIANTY · PRVNÍ MODEL</Label>
           <ol className="variants-plan" aria-label="Aktivní varianty">

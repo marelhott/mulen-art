@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from PIL import Image, ImageOps
 
 from app_runtime.core import generate, get_options, is_cuda_oom
@@ -58,7 +58,26 @@ def health():
 @app.get("/api/options")
 def api_options():
     from .archives import archive_options
-    return {**get_options(), "archives": archive_options()}
+    from .user_photos import collection_options
+    return {**get_options(), "archives": archive_options(), "atelier_photo_collections": collection_options()}
+
+
+@app.get("/api/atelier/photos")
+def api_atelier_photos(collection: str = "malba", offset: int = 0, limit: int = 48):
+    from app_runtime.user_photos import list_photos
+    try:
+        return list_photos(collection, offset, limit)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/atelier-photo/{photo_id}")
+def api_atelier_photo(photo_id: str, thumb: bool = False):
+    from app_runtime.user_photos import photo_path
+    try:
+        return FileResponse(photo_path(photo_id, thumb), headers={"Cache-Control": "private, max-age=86400"})
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(404, "Atelier photo not found") from exc
 
 
 @app.get("/api/history")

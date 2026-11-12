@@ -31,6 +31,14 @@ class AtelierTests(unittest.TestCase):
             'atelier_mode': 'noise', 'seed': 231020, 'cfg': .5, 'steps': 28,
             'width': 512, 'height': 512, 'scale': 2}
 
+    def test_figure_subjects_and_opt_in_adult_nudes(self):
+        for seed in range(100):
+            self.assertIn("adult", subject_for(seed, "figure")[2])
+            self.assertIn("non-sexual", subject_for(seed, "nude")[2])
+            self.assertNotIn("nude", subject_for(seed, "all")[2])
+            self.assertIn("adult", subject_for(seed, "intimacy")[2])
+            self.assertIn("non-sexual", subject_for(seed, "intimacy")[2])
+
     def test_atelier_requires_no_input_and_preserves_half_cfg(self):
         parsed = core.parse_input(self.payload)
         self.assertEqual(parsed.image_base64, '')
@@ -97,8 +105,11 @@ class AtelierTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in ensure.call_args_list], ['sdxl_base','tuymans_modal_2400'])
         self.assertEqual(len(text.calls),1);self.assertEqual(len(painting.calls),1)
         self.assertTrue(text.calls[0]['prompt'].startswith('An ordinary documentary photograph'))
-        self.assertEqual(painting.calls[0]['prompt'],'')
-        self.assertEqual(painting.calls[0]['strength'],.9)
+        self.assertEqual(painting.calls[0]['prompt'],'mvhpaint')
+        self.assertAlmostEqual(painting.calls[0]['strength'],28 / 32)
+        self.assertEqual(emitted[0]['actual_steps'],28)
+        self.assertEqual(emitted[0]['requested_cfg'],.5)
+        self.assertEqual(emitted[0]['cfg'],3.0)
         self.assertEqual(len(sources),1)
         self.assertTrue(emitted[0]['source_url'].startswith('/library/source_atelier_'))
         self.assertEqual(updates, sorted(updates))
@@ -128,10 +139,10 @@ class ColourHintTests(AtelierTests):
         self.assertEqual(text.calls[0]['prompt'], 'mvhpaint, ' + emitted[0]['color_hint'] + ', ' + emitted[0]['subject_text'])
         self.assertEqual(painting.calls[0]['prompt'], 'mvhpaint, ' + emitted[0]['subject_text'])  # the subject alone finishes the image
 
-    def test_photo_and_opt_out_are_untouched(self):
+    def test_photo_uses_artist_token_without_colour_hint_and_noise_opt_out_is_untouched(self):
         text, painting, _, _, _, emitted, _ = self.run_study(atelier_mode='photo', denoise=.9)
-        self.assertEqual(painting.calls[0]['prompt'], '')
-        self.assertEqual(emitted[0]['cfg'], .5)
+        self.assertEqual(painting.calls[0]['prompt'], 'mvhpaint')
+        self.assertEqual(emitted[0]['cfg'], 3.0)
         self.assertIsNone(emitted[0]['color_hint'])
         text, _, _, _, _, emitted, _ = self.run_study(atelier_color_level=0)
         self.assertEqual((text.calls[0]['prompt'], text.calls[0]['guidance_scale']), ('', .5))

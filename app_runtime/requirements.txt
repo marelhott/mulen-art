@@ -9,6 +9,7 @@ accelerate==1.2.1
 peft==0.14.0
 safetensors==0.5.2
 pillow==11.1.0
+spandrel==0.4.1
 sentencepiece==0.2.0
 protobuf==5.29.3
 xformers==0.0.28.post3

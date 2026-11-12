@@ -551,7 +551,7 @@ export default function StudioView(p) {
         <div className="control-block resolution">
           <Label>VSTUP PŘED GENEROVÁNÍM</Label>
           <Range label="ZVĚTŠENÍ VSTUPU" min={1} max={4} step={0.05} value={p.inputScale} onChange={p.setInputScale}
-            hint="Lanczos před SDXL · vyšší rozměry mohou změnit styl a prodloužit výpočet. Max. strana 1536 px." />
+            hint={`Vstupy pod 1000 px automaticky zvětším nad 1000 px; další zvětšení ${p.inputScale.toFixed(2)}×. Maximum 1536 px.`} />
           <p className="help-text">{p.inputItems.length > 1 ? "Každý vstup se zvětší samostatně." : `${p.imageSize.width} × ${p.imageSize.height} → ${p.generationSize.width} × ${p.generationSize.height} px pro model`}</p>
         </div>
         <div className="control-block resolution">
@@ -582,8 +582,19 @@ export default function StudioView(p) {
             step={0.05}
             value={p.resizeScale}
             onChange={p.setResizeScale}
-            hint="Lanczos až po SDXL · bez AI dokreslování, nemění hotový obraz."
+            hint={(p.useRealsrgan || p.useRealEsrgan) ? "AI zvětšení použije zvolený cílový rozměr." : "Lanczos s jemným doostřením po SDXL; bez AI dokreslování."}
           />
+          <label className="variants-toggle realsr-toggle">
+            <input type="checkbox" checked={p.useRealsrgan} onChange={event => {p.setUseRealsrgan(event.target.checked); if (event.target.checked) p.setUseRealEsrgan(false);}} />
+            <span><b>Real-SR GAN · SwinIR</b><small>Volitelné AI zvětšení a obnova detailu. Přidává čas výpočtu na GPU.</small></span>
+          </label>
+          <label className="variants-toggle realsr-toggle">
+            <input type="checkbox" checked={p.useRealEsrgan} onChange={event => {p.setUseRealEsrgan(event.target.checked); if (event.target.checked) p.setUseRealsrgan(false);}} />
+            <span><b>Real-ESRGAN x4plus</b><small>AI zvětšení a obnova textury. Lze kombinovat s Restormerem.</small></span>
+          </label>
+          <Select label="RESTORMER · ODSTRANĚNÍ ROZMAZÁNÍ" value={p.restormerMode} onChange={p.setRestormerMode}
+            items={[{id:'off',name:'Vypnuto'},{id:'defocus',name:'Rozostření'},{id:'motion',name:'Pohybové rozmazání'}]} />
+          <p className="help-text">Restormer se použije před zvětšením; obě volby prodlouží výpočet na GPU.</p>
         </div>
         <button className="library-launch" onClick={() => setLibraryOpen(true)}>
           <Images size={18} />
@@ -798,15 +809,15 @@ export default function StudioView(p) {
           <SlidersHorizontal size={13} />
           <Label>NASTAVENÍ GENEROVÁNÍ</Label>
         </div>
-        <p className="engine-hint">{isAtelier ? "Ateliér tvoří nové obrazy. Zvětšení hotového výsledku je pouze Lanczos, bez AI dokreslování. Stejné seedy umožňují porovnat checkpointy." : "Původní generování v jednom průchodu. Hotový obraz se zvětšuje pouze interpolací Lanczos, bez AI dokreslování a přidávání detailů."}</p>
+        <p className="engine-hint">{isAtelier ? "Ateliér tvoří nové obrazy. Zvětšení hotového výsledku je pouze Lanczos, bez AI dokreslování. Každý checkpoint tvoří nezávisle. Foto a archiv používají naučený token modelu a plný počet kroků přemalování." : "Původní generování v jednom průchodu. Hotový obraz se zvětšuje pouze interpolací Lanczos, bez AI dokreslování a přidávání detailů."}</p>
         {(!isAtelier || ["photo", "archive"].includes(p.atelier.mode)) && <Range
-          label="DENOISE"
+          label={isAtelier ? "SÍLA PŘEMALOVÁNÍ" : "DENOISE"}
           min={0.05}
           max={isAtelier ? 0.99 : 1}
           step={0.01}
           value={isAtelier ? p.atelier.denoise : p.denoise}
           onChange={value => isAtelier ? updateAtelier({denoise: value}) : p.setDenoise(value)}
-          hint="Méně zachová předlohu · více ji promění"
+          hint={isAtelier ? "Výchozí 0,82: výrazné přemalování · nízké hodnoty zachovají fotografii či původní obraz · velmi vysoké mění i kompozici" : "Méně zachová předlohu · více ji promění"}
         />}
         <Range
           label="CFG"

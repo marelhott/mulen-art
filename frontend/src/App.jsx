@@ -70,6 +70,9 @@ function App() {
   const previewUrl = inputItems[0]?.url || "";
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
   const [resizeScale, setResizeScale] = useState(2);
+  const [useRealsrgan, setUseRealsrgan] = useState(false);
+  const [useRealEsrgan, setUseRealEsrgan] = useState(false);
+  const [restormerMode, setRestormerMode] = useState('off');
   const [inputScale, setInputScale] = useState(1);
   const [selectedModelIds, setSelectedModelIds] = useState(["tuymans_sdxl"]);
   // Individual checkpoints and fusions are exclusive: only ids of the active source are ever generated.
@@ -78,7 +81,7 @@ function App() {
   const setModelId = (id) => setSelectedModelIds([id]);
   const [generationMode, setGenerationMode] = useState("checkpoint");
   const [atelier, setAtelier] = useState({mode: "noise", theme: "all", archive: "hofmann", modelIds: ["tuymans_modal_2400"], source: "single", colorLevel: 2, count: 4,
-    width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.52,
+    width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.82,
     sampler: "dpmpp_2m", schedule: "karras"});
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
@@ -240,8 +243,10 @@ function App() {
   });
 
   const generationSize = useMemo(() => {
-    const ratio = Math.min(1, 1536 / Math.max(imageSize.width * inputScale, imageSize.height * inputScale));
-    return {width: Math.max(64, Math.floor(imageSize.width * inputScale * ratio / 8) * 8), height: Math.max(64, Math.floor(imageSize.height * inputScale * ratio / 8) * 8)};
+    const longest = Math.max(imageSize.width, imageSize.height);
+    const automatic = longest < 1000 ? 1016 / longest : 1;
+    const ratio = Math.min(1, 1536 / (Math.max(imageSize.width, imageSize.height) * automatic * inputScale));
+    return {width: Math.max(64, Math.floor(imageSize.width * automatic * inputScale * ratio / 8) * 8), height: Math.max(64, Math.floor(imageSize.height * automatic * inputScale * ratio / 8) * 8)};
   }, [imageSize, inputScale]);
   const targetSize = {width: Math.round(generationSize.width * resizeScale), height: Math.round(generationSize.height * resizeScale)};
 
@@ -429,6 +434,9 @@ function App() {
       max_side: 1536, detail_strength: engine.detailStrength, detail_steps: engine.detailSteps,
       input_scale: inputScale,
       scale: Number(resizeScale.toFixed(2)),
+      use_realsrgan: useRealsrgan,
+      output_upscaler: useRealEsrgan ? 'realesrgan' : useRealsrgan ? 'swinir' : 'lanczos',
+      restormer_mode: restormerMode,
     };
     const count = numImages;
     const total = inputItems.length * count * modelIds.length;
@@ -551,8 +559,8 @@ function App() {
     if (!modelIds.length || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(total)) {
       setError("Vyber checkpoint a kladný celý počet studií."); return;
     }
-    const settings = {generation_type: "atelier", atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_archive: atelier.archive || "hofmann", atelier_ratio: atelier.ratio || "fixed", atelier_color_level: atelier.colorLevel ?? 2,
-      width: atelier.width, height: atelier.height, scale: Number(atelier.scale), cfg: Number(atelier.cfg),
+    const settings = {generation_type: "atelier", input_scale: atelier.inputScale ?? 1, atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_archive: atelier.archive || "hofmann", atelier_photo_source: atelier.photoSource || "generated", atelier_photo_collection: atelier.photoCollection || "malba", atelier_photo_id: atelier.photoId || "", atelier_ratio: atelier.ratio || "fixed", atelier_color_level: atelier.colorLevel ?? 2,
+      width: atelier.width, height: atelier.height, scale: Number(atelier.scale), use_realsrgan: Boolean(atelier.useRealsrgan), output_upscaler: atelier.useRealEsrgan ? 'realesrgan' : atelier.useRealsrgan ? 'swinir' : 'lanczos', restormer_mode: atelier.restormerMode || 'off', cfg: Number(atelier.cfg),
       steps: Number(atelier.steps), sampler: atelier.sampler, schedule: atelier.schedule, denoise: Number(atelier.denoise), render_mode: "quick"};
     const requestedSeed = Number(atelier.seed === "" ? -1 : atelier.seed);
     if (!Number.isInteger(requestedSeed) || requestedSeed < -1 || requestedSeed > 4294967295) {setError("Seed musí být celé číslo od −1 do 4294967295."); return;}
@@ -576,7 +584,7 @@ function App() {
         if (response.status === 401) { window.location.assign("/login"); throw new Error("Přihlášení vypršelo."); }
         const data = await response.json();
         if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Ateliér: odeslání se nezdařilo.");
-        const jobs = data.jobs.map(job => ({...job, source_id: `atelier-${seed}-${offset + job.source_index}`, generation_type: "atelier"}));
+        const jobs = data.jobs.map(job => ({...job, source_id: `atelier-${seed}-${job.model_id}-${offset + job.source_index}`, generation_type: "atelier"}));
         const accepted = jobs.reduce((sum, job) => sum + job.expected_images, 0); sent += accepted;
         setActiveJobs(current => [...current, ...jobs]); setSubmittedOutputs(current => current + accepted);
         issues.push(...(data.errors || []));
@@ -756,7 +764,7 @@ function App() {
         steps,
         setSteps,
         engine, setEngine,
-        resizeScale,
+        resizeScale, useRealsrgan, setUseRealsrgan, useRealEsrgan, setUseRealEsrgan, restormerMode, setRestormerMode,
         setResizeScale,
         inputScale, setInputScale, generationSize,
         targetSize,
