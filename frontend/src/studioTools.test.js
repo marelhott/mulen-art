@@ -154,3 +154,11 @@ test("multiple variants sweep distinct denoise and CFG even at zero extra spread
     assert.ok(plan[0].cfg > plan[4].cfg);
   }
 });
+
+test("expired jobs are not restored again, live ones are", async () => {
+  const { keepUnexpired } = await import("./studioTools.js");
+  const jobs = [{ job_id: "a" }, { job_id: "b" }, { job_id: "c" }];
+  const records = [{ expired: true, status: "failed" }, { status: "completed" }, { expired: true, status: "failed" }];
+  assert.deepEqual(keepUnexpired(jobs, records), [{ job_id: "b" }]);
+  assert.deepEqual(keepUnexpired(jobs, []), jobs);
+});

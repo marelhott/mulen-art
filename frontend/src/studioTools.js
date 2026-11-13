@@ -218,3 +218,11 @@ export function describeVariant(variant, models) {
   const name = mix ? mix.map((part) => models.find((model) => model.id === part.id)?.name || part.id).join(" + ") : "";
   return { text: parts.join(" · "), name };
 }
+
+export const EXPIRED_NOTICE = "Starší úlohy už vypršely a byly vynechány. Uložené obrázky zůstávají v knihovně.";
+
+// Jobs whose cloud record is gone must not be restored again on the next load (that replayed the same
+// "expired" errors and empty cards forever); the images themselves stay in the library.
+export function keepUnexpired(jobs, records) {
+  return jobs.filter((_, index) => !records[index]?.expired);
+}

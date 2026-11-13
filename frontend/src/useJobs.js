@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { API_URL } from "./api";
-import { etaLabel } from "./studioTools";
+import { etaLabel, EXPIRED_NOTICE, keepUnexpired } from "./studioTools";
 
 export const POLL_INTERVAL = 1500;
 export const EMPTY_JOB = {
@@ -74,7 +74,7 @@ export function useJobs({
             id: item.job_id,
             status: "failed",
             progress: 0,
-            error: {detail: "Job expired. Saved images remain in the library."},
+            expired: true,
           };
           return {status: "fulfilled", value};
         }
@@ -92,6 +92,7 @@ export function useJobs({
         (item) => known.get(item.job_id) || { status: "queued", progress: 0 },
       );
       const slots = records.flatMap((record, index) => {
+        if (record.expired) return [];  // an expired job has no images left to place; they live in the library
         const images = record.result?.images || record.partial_images || [];
         return Array.from(
           { length: activeJobs[index].expected_images || images.length || 1 },
@@ -109,7 +110,8 @@ export function useJobs({
       const finished = records.filter((record) =>
         ["completed", "failed", "cancelled"].includes(record.status),
       ).length;
-      const failed = records.filter((record) => record.status === "failed");
+      const expired = records.filter((record) => record.expired);
+      const failed = records.filter((record) => record.status === "failed" && !record.expired);
       const logs = records
         .flatMap((record) => record.logs || [])
         .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
@@ -169,6 +171,7 @@ export function useJobs({
       const issues = [
         ...submissionErrors,
         ...failed.map((record) => record.error?.detail || "Generation failed"),
+        ...(expired.length ? [EXPIRED_NOTICE] : []),
       ];
       if (responses.some((response) => response.status === "rejected"))
         issues.push("Spojení přerušeno, kontrolu opakuji.");
@@ -176,7 +179,7 @@ export function useJobs({
       if (finished === records.length && !submitting.current) {
         window.localStorage.setItem(
           "img2img-last-batch",
-          JSON.stringify(activeJobs),
+          JSON.stringify(keepUnexpired(activeJobs, records)),
         );
         setActiveJobs([]);
         loadLibrary().catch(() => {});
