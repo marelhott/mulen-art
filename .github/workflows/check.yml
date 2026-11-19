@@ -18,7 +18,6 @@ jobs:
           cache: npm
       - run: python -m venv .venv
       - run: .venv/bin/python -m pip install -r requirements-dev.txt
-      - run: .venv/bin/python scripts/prepare_modal.py
       - run: npm ci
       - run: npm run build:frontend
       - run: npm run lint

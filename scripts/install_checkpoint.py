@@ -8,7 +8,7 @@ import modal
 app = modal.App('mulen-install-checkpoint')
 results = modal.Volume.from_name('mulen-training-results')
 models = modal.Volume.from_name('img2img-models')
-image = modal.Image.debian_slim(python_version='3.11').pip_install('safetensors==0.4.5')
+image = modal.Image.debian_slim(python_version='3.11')
 
 
 @app.function(image=image, volumes={'/results': results, '/models': models}, cpu=2, memory=4096, timeout=3600)

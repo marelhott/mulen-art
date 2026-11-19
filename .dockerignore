@@ -11,7 +11,8 @@ tmp-demo-input.png
 *.pyc
 __pycache__
 *.log
-runpod
-worker
-proxy
-.runpod
+.env
+.env.*
+.modal-app-credentials.json
+models
+outputs

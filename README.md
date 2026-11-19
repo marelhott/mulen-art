@@ -217,7 +217,7 @@ npm run build:frontend
 ```
 
 Set `IMG2IMG_DEMO_MODE=true` for demo filters. Local preview is for development;
-production uses `app_runtime.cloud_server`; the Modal deployment explicitly disables app-level authentication.
+production uses `app_runtime.cloud_server`; the Modal deployment requires a login (Modal Secret `img2img-auth`).
 
 ## Návrat k předchozímu vzhledu
 

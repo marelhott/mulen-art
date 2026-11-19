@@ -25,29 +25,11 @@ class TextPipeline:
         return SimpleNamespace(images=picture if kwargs.get('output_type') == 'latent' else [picture])
 
 
-class AtelierTests(unittest.TestCase):
+class AtelierBase(unittest.TestCase):
     def setUp(self):
         self.payload = {'generation_type': 'atelier', 'model_id': 'tuymans_modal_2400',
             'atelier_mode': 'noise', 'seed': 231020, 'cfg': .5, 'steps': 28,
             'width': 512, 'height': 512, 'scale': 2}
-
-    def test_figure_subjects_and_opt_in_adult_nudes(self):
-        for seed in range(100):
-            self.assertIn("adult", subject_for(seed, "figure")[2])
-            self.assertIn("non-sexual", subject_for(seed, "nude")[2])
-            self.assertNotIn("nude", subject_for(seed, "all")[2])
-            self.assertIn("adult", subject_for(seed, "intimacy")[2])
-            self.assertIn("non-sexual", subject_for(seed, "intimacy")[2])
-
-    def test_atelier_requires_no_input_and_preserves_half_cfg(self):
-        parsed = core.parse_input(self.payload)
-        self.assertEqual(parsed.image_base64, '')
-        self.assertEqual(parsed.cfg, .5)
-        for invalid in ({'generation_type':'img2img'}, {'model_id':'sdxl_base'},
-                        {'atelier_mode':'unknown'}, {'atelier_theme':'unknown'},
-                        {'width':513}, {'width':2048}, {'height':True}, {'render_mode':'detail'}):
-            with self.assertRaises(ValueError):
-                core.parse_input({**self.payload, **invalid})
 
     def run_study(self, **overrides):
         text = TextPipeline(); painting = Pipeline(); base = Pipeline()
@@ -65,6 +47,26 @@ class AtelierTests(unittest.TestCase):
                 lambda image,meta: emitted.append(meta))
             sources = list(Path(tmp).glob('source_atelier_*.png'))
         return text, painting, ensure, result, updates, emitted, sources
+
+
+class AtelierTests(AtelierBase):
+    def test_figure_subjects_and_opt_in_adult_nudes(self):
+        for seed in range(100):
+            self.assertIn("adult", subject_for(seed, "figure")[2])
+            self.assertIn("non-sexual", subject_for(seed, "nude")[2])
+            self.assertNotIn("nude", subject_for(seed, "all")[2])
+            self.assertIn("adult", subject_for(seed, "intimacy")[2])
+            self.assertIn("non-sexual", subject_for(seed, "intimacy")[2])
+
+    def test_atelier_requires_no_input_and_preserves_half_cfg(self):
+        parsed = core.parse_input(self.payload)
+        self.assertEqual(parsed.image_base64, '')
+        self.assertEqual(parsed.cfg, .5)
+        for invalid in ({'generation_type':'img2img'}, {'model_id':'sdxl_base'},
+                        {'atelier_mode':'unknown'}, {'atelier_theme':'unknown'},
+                        {'width':513}, {'width':2048}, {'height':True}, {'render_mode':'detail'}):
+            with self.assertRaises(ValueError):
+                core.parse_input({**self.payload, **invalid})
 
     def test_hofmann_supports_autonomous_subjects_without_tuymans_trigger(self):
         text, painting, ensure, result, updates, emitted, sources = self.run_study(model_id="hofmann_sdxl", atelier_mode="subject", atelier_color_level=0)
@@ -115,7 +117,7 @@ class AtelierTests(unittest.TestCase):
         self.assertEqual(updates, sorted(updates))
 
 
-class ColourHintTests(AtelierTests):
+class ColourHintTests(AtelierBase):
     def test_colour_hint_runs_only_the_first_steps_then_the_artists_own_prompt_finishes(self):
         text, painting, _, _, _, emitted, _ = self.run_study(num_images=3, atelier_color_level=1)
         for call, meta in zip(text.calls, emitted):
