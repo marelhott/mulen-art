@@ -17,12 +17,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
-from app_runtime.core import get_options, get_config_item, parse_input, decode_image
+from app_runtime.core import get_options, get_config_item, parse_input, decode_image, check_job_size
 from app_runtime.server import (OUTPUTS_DIR, THUMBS_DIR, api_library_save, load_deleted_ids,
                                 load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
-                                ensure_thumbnail)
+                                ensure_thumbnail, is_safe_filename)
 
 VOLUME_REFRESH_INTERVAL = float(os.getenv("VOLUME_REFRESH_SECONDS", "2.0"))
 
@@ -58,6 +59,8 @@ DEFAULT_MAX_JOBS_PER_REQUEST = 64
 
 MAX_EXPORT_PIXELS = 36_000_000
 INTERACTIVE_REQUEST_JOBS = 4
+RUNNING_JOB_TIMEOUT_SECONDS = 1800
+QUEUED_JOB_TIMEOUT_SECONDS = 3 * 3600  # large batches legitimately queue for a long while; this only catches lost jobs
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW_SECONDS = 600
 LOGIN_LOCKOUT_SECONDS = 300
@@ -92,6 +95,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
     lock = threading.Lock()
+    thumbnail_lock = threading.Lock()
+    status_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="job-status")
     reload_lock = threading.Lock()  # one Volume reload at a time; asset reads never wait on `lock`
     refresh_state = {"at": 0.0}
 
@@ -101,6 +106,9 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if not force and now - refresh_state["at"] < VOLUME_REFRESH_INTERVAL:
             return
         with reload_lock:
+            # Re-check: a burst of requests all passed the cheap check above while one of them reloaded.
+            if not force and time.monotonic() - refresh_state["at"] < VOLUME_REFRESH_INTERVAL:
+                return
             try:
                 refresh()
             except RuntimeError as exc:
@@ -285,12 +293,12 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(404, "Atelier photo not found") from exc
 
-    def validate_payload(payload):
+    def validate_payload(payload, verify_image=True):
         from dataclasses import asdict
         if not isinstance(payload, dict):
             raise ValueError("Expected a JSON object")
         parsed = parse_input(payload)
-        if parsed.generation_type == "img2img":
+        if parsed.generation_type == "img2img" and verify_image:
             image_data = base64.b64decode(parsed.image_base64.split(",")[-1], validate=True)
             with Image.open(io.BytesIO(image_data)) as image:
                 image.verify()
@@ -316,12 +324,22 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if max_jobs_per_request is not None and len(payloads) > max_jobs_per_request:
             raise HTTPException(413, f"Too many jobs in one request ({len(payloads)} > {max_jobs_per_request}); send smaller batches.")
         submitted, errors = [], []
+        # The lock covers only the usage ledger. Writing sources, committing the Volume and the (up to hundreds
+        # of) spawn calls used to run under it and stalled every other write request.
         with lock:
             used = usage.get(month, 0)
             if monthly_limit is not None and used + requested > monthly_limit:
                 raise HTTPException(429, f"Monthly safety limit reached ({monthly_limit} images).")
             if monthly_budget_usd is not None and spend is not None and spend(month) >= monthly_budget_usd:
                 raise HTTPException(429, f"Monthly GPU budget reached (${monthly_budget_usd:.2f}).")
+            usage[month] = used + requested
+
+        def refund(images):
+            if images > 0:
+                with lock:
+                    usage[month] = max(0, usage.get(month, 0) - images)
+
+        try:
             # Zdroj uchováme pro porovnání i po obnovení stránky; žádná galerie složených vstupů.
             refresh_cached()
             has_sources = False
@@ -339,39 +357,42 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
                     decode_image(payload["image_base64"]).save(path, format="PNG")
                 payload["source_url"] = f"/library/{filename}"
+                payload["image_base64"] = ""  # the worker loads the stored file by name (smaller spawn arguments)
             # Also confirm reused files: a previous failed commit may have left
             # a source present locally without making it durable.
             if has_sources:
                 commit()
-            usage[month] = used + requested
-            # Small, interactive requests start before the tail of a large batch waiting in the queue.
-            priority = 0 if len(payloads) <= INTERACTIVE_REQUEST_JOBS else 1
-            for index, payload in enumerate(payloads):
-                payload["queue_priority"] = priority
-                job_id = uuid.uuid4().hex
-                jobs[job_id] = {
-                    "id": job_id, "status": "queued", "progress": 0,
-                    "message": "Waiting for cloud GPU (first start can take longer)",
-                    "source_name": payload["source_name"], "source_url": payload["source_url"], "expected_images": payload["num_images"],
-                    "generation_type": payload["generation_type"], "model_id": payload["model_id"],
-                    "logs": [], "result": None, "error": None,
-                    "created_at": now_iso(), "updated_at": now_iso(),
-                }
-                try:
-                    call_id = submit(job_id, payload)
-                    if call_id:
-                        jobs[f"call:{job_id}"] = call_id
-                    submitted.append({"job_id": job_id, "source_name": payload["source_name"],
-                                      "source_index": payload.get("source_index", index), "variant_index": payload.get("variant_index", 0),
-                                      "expected_images": payload["num_images"]})
-                    submitted[-1].update(generation_type=payload["generation_type"], model_id=payload["model_id"])
-                except Exception:
-                    logging.getLogger("studio").exception("Could not submit job %s", job_id)
-                    requested -= payload["num_images"]
-                    jobs.pop(job_id, None)
-                    errors.append(f"Could not submit {payload['source_name']}")
-            if errors:
-                usage[month] = used + requested
+        except BaseException:
+            refund(requested)  # nothing was submitted: give the reservation back
+            raise
+        # Small, interactive requests start before the tail of a large batch waiting in the queue.
+        priority = 0 if len(payloads) <= INTERACTIVE_REQUEST_JOBS else 1
+        failed_images = 0
+        for index, payload in enumerate(payloads):
+            payload["queue_priority"] = priority
+            job_id = uuid.uuid4().hex
+            jobs[job_id] = {
+                "id": job_id, "status": "queued", "progress": 0,
+                "message": "Waiting for cloud GPU (first start can take longer)",
+                "source_name": payload["source_name"], "source_url": payload["source_url"], "expected_images": payload["num_images"],
+                "generation_type": payload["generation_type"], "model_id": payload["model_id"],
+                "logs": [], "result": None, "error": None,
+                "created_at": now_iso(), "updated_at": now_iso(),
+            }
+            try:
+                call_id = submit(job_id, payload)
+                if call_id:
+                    jobs[f"call:{job_id}"] = call_id
+                submitted.append({"job_id": job_id, "source_name": payload["source_name"],
+                                  "source_index": payload.get("source_index", index), "variant_index": payload.get("variant_index", 0),
+                                  "expected_images": payload["num_images"]})
+                submitted[-1].update(generation_type=payload["generation_type"], model_id=payload["model_id"])
+            except Exception:
+                logging.getLogger("studio").exception("Could not submit job %s", job_id)
+                failed_images += payload["num_images"]
+                jobs.pop(job_id, None)
+                errors.append(f"Could not submit {payload['source_name']}")
+        refund(failed_images)
         if not submitted:
             raise HTTPException(503, "Cloud GPU submission failed; please try again.")
         return {"jobs": submitted, "errors": errors}
@@ -380,67 +401,73 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     async def generate(request: Request):
         payload = await read_payload(request, 24 * 1024 * 1024)
         try:
-            payload = validate_payload(payload)
+            payload = await run_in_threadpool(validate_payload, payload)  # decodes and verifies the image
+            check_job_size(payload["num_images"])
         except Exception as exc:
             raise HTTPException(422, f"Invalid generation input: {exc}") from exc
         result = await run_in_threadpool(enqueue, [payload])
         return {"job_id": result["jobs"][0]["job_id"], "status": "queued"}
 
-    @app.post("/api/atelier-batch")
-    async def atelier_batch(request: Request):
+    def plan_atelier(data):
+        """Validate an Atelier request and plan its studies. Runs in a worker thread: it touches manifests and files."""
         import secrets
         from .atelier import subject_for
+        if not isinstance(data, dict) or not isinstance(data.get("settings", {}), dict):
+            raise ValueError("Invalid atelier request")
+        settings = data.get("settings", {})
+        ratio_mode = settings.get("atelier_ratio", "fixed")
+        if ratio_mode not in {"fixed", "random"}:
+            raise ValueError("Unknown aspect ratio mode")
+        models = data.get("model_ids")
+        if not isinstance(models, list) or not models or any(not isinstance(item, str) for item in models):
+            raise ValueError("Select artist checkpoints")
+        models = list(dict.fromkeys(models))
+        count = data.get("count", 1)
+        # Transport chunks only; the frontend can enqueue an unlimited number of chunks.
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 8:
+            raise ValueError("At most eight studies per transport request")
+        # Validate the seed before resolving its random sentinel.
+        first = parse_input({**settings, "generation_type": "atelier", "model_id": models[0], "lora_id": "none", "num_images": 1})
+        if first.atelier_mode == "archive":
+            from .archives import pick_reference, reference_for
+            reference_for(first.atelier_archive, 0)  # full integrity check once per request
+        if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
+            from .user_photos import photo_for
+            photo_for(first.atelier_photo_collection, 0, first.atelier_photo_id)
+        seed = secrets.randbits(32) if first.seed == -1 else first.seed
+        payloads = []
+        for index in range(count):
+            for model_id in models:
+                # Stable per-model streams survive transport chunking and model reordering.
+                model_offset = int.from_bytes(hashlib.sha256(model_id.encode()).digest()[:4], "big")
+                variant_seed = (seed + index + model_offset) % 2**32
+                title = "Volná studie bez námětu" if first.atelier_mode == "noise" else subject_for(variant_seed, first.atelier_theme)[1]
+                if first.atelier_mode == "archive":
+                    archive, reference = pick_reference(first.atelier_archive, variant_seed)
+                    title = archive["name"] + " · " + reference["filename"]
+                if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
+                    from .user_photos import pick_photo
+                    collection, photo_item = pick_photo(first.atelier_photo_collection, variant_seed, first.atelier_photo_id)
+                    title = photo_item["filename"]
+                dimensions = {}
+                if ratio_mode == "random":
+                    import random
+                    width, height = random.Random(f"atelier-ratio:{variant_seed}").choice([(1024,1024), (832,1216), (1216,832), (896,1152), (1152,896)])
+                    dimensions = {"width": width, "height": height}
+                payload = validate_payload({**settings, **dimensions, "generation_type": "atelier", "model_id": model_id,
+                    "lora_id": "none", "num_images": 1, "seed": variant_seed, "source_name": title})
+                if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
+                    payload.update(atelier_photo_collection=first.atelier_photo_collection,
+                                   atelier_photo_id=first.atelier_photo_id)
+                payload.update(source_index=index, variant_index=index)
+                payloads.append(payload)
+        return payloads
+
+    @app.post("/api/atelier-batch")
+    async def atelier_batch(request: Request):
         data = await read_payload(request, 64 * 1024)
         try:
-            if not isinstance(data, dict) or not isinstance(data.get("settings", {}), dict):
-                raise ValueError("Invalid atelier request")
-            settings = data.get("settings", {})
-            ratio_mode = settings.get("atelier_ratio", "fixed")
-            if ratio_mode not in {"fixed", "random"}:
-                raise ValueError("Unknown aspect ratio mode")
-            models = data.get("model_ids")
-            if not isinstance(models, list) or not models or any(not isinstance(item, str) for item in models):
-                raise ValueError("Select artist checkpoints")
-            models = list(dict.fromkeys(models))
-            count = data.get("count", 1)
-            # Transport chunks only; the frontend can enqueue an unlimited number of chunks.
-            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 8:
-                raise ValueError("At most eight studies per transport request")
-            # Validate the seed before resolving its random sentinel.
-            first = parse_input({**settings, "generation_type": "atelier", "model_id": models[0], "lora_id": "none", "num_images": 1})
-            if first.atelier_mode == "archive":
-                from .archives import reference_for
-                reference_for(first.atelier_archive, 0)
-            if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
-                from .user_photos import photo_for
-                photo_for(first.atelier_photo_collection, 0, first.atelier_photo_id)
-            seed = secrets.randbits(32) if first.seed == -1 else first.seed
-            payloads = []
-            for index in range(count):
-                for model_id in models:
-                    # Stable per-model streams survive transport chunking and model reordering.
-                    model_offset = int.from_bytes(hashlib.sha256(model_id.encode()).digest()[:4], "big")
-                    variant_seed = (seed + index + model_offset) % 2**32
-                    title = "Volná studie bez námětu" if first.atelier_mode == "noise" else subject_for(variant_seed, first.atelier_theme)[1]
-                    if first.atelier_mode == "archive":
-                        archive, reference, _ = reference_for(first.atelier_archive, variant_seed)
-                        title = archive["name"] + " · " + reference["filename"]
-                    if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
-                        from .user_photos import photo_for
-                        collection, photo_item, _, _ = photo_for(first.atelier_photo_collection, variant_seed, first.atelier_photo_id)
-                        title = photo_item["filename"]
-                    dimensions = {}
-                    if ratio_mode == "random":
-                        import random
-                        width, height = random.Random(f"atelier-ratio:{variant_seed}").choice([(1024,1024), (832,1216), (1216,832), (896,1152), (1152,896)])
-                        dimensions = {"width": width, "height": height}
-                    payload = validate_payload({**settings, **dimensions, "generation_type": "atelier", "model_id": model_id,
-                        "lora_id": "none", "num_images": 1, "seed": variant_seed, "source_name": title})
-                    if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
-                        payload.update(atelier_photo_collection=first.atelier_photo_collection,
-                                       atelier_photo_id=first.atelier_photo_id)
-                    payload.update(source_index=index, variant_index=index)
-                    payloads.append(payload)
+            payloads = await run_in_threadpool(plan_atelier, data)
         except Exception as exc:
             raise HTTPException(422, f"Invalid atelier request: {exc}") from exc
         return await run_in_threadpool(enqueue, payloads)
@@ -467,7 +494,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             raise HTTPException(422, f"Invalid source image: {exc}") from exc
         return {"source_id": digest}
 
-    def load_source(source_id):
+    def find_source(source_id):
         if not isinstance(source_id, str) or not re.fullmatch(r"[0-9a-f]{64}", source_id):
             raise ValueError("Invalid source id")
         filename = f"source_{source_id}.png"
@@ -476,7 +503,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             refresh_cached(force=True)
         if not path.is_file():
             raise ValueError("Uploaded source not found; upload it again")
-        return base64.b64encode(path.read_bytes()).decode(), filename
+        return filename
 
     @app.post("/api/generate-batch")
     async def generate_batch(request: Request):
@@ -494,19 +521,30 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         # Reject oversized batches before decoding every image.
         if max_jobs_per_request is not None and len(inputs) > max_jobs_per_request:
             raise HTTPException(413, f"Too many inputs in one request ({len(inputs)} > {max_jobs_per_request}); send smaller batches.")
-        try:
-            payloads = []
+        def build_payloads():
+            built = []
             for index, item in enumerate(inputs):
                 image_base64, source_file = item.get("image_base64"), None
                 if image_base64 is None:
-                    image_base64, source_file = load_source(item.get("source_id"))
-                payload = validate_payload({**settings, "image_base64": image_base64,
-                                           "source_name": item.get("name", f"Input {index + 1}")})
+                    # Our own stored PNG: it was decoded and verified when it was uploaded, and the worker reads
+                    # it from the Volume by name, so it is not re-encoded to base64 and re-decoded here.
+                    source_file = find_source(item.get("source_id"))
+                payload = validate_payload({**settings, "image_base64": image_base64 or "stored",
+                                           "source_name": item.get("name", f"Input {index + 1}")},
+                                           verify_image=source_file is None)
                 if source_file:
                     payload["source_file"] = source_file
-                payloads.append(payload)
+                    payload["image_base64"] = ""
+                built.append(payload)
+            return built
+        try:
+            # Volume reads, base64 and PIL verification must not run on the event loop.
+            payloads = await run_in_threadpool(build_payloads)
         except Exception as exc:
             raise HTTPException(422, f"Invalid batch input: {exc}") from exc
+        # Refuse an absurd count before it is expanded into a list of jobs (the cap in enqueue comes too late).
+        if max_jobs_per_request is not None and sum(item["num_images"] for item in payloads) > max_jobs_per_request:
+            raise HTTPException(413, f"Too many images in one request ({sum(item['num_images'] for item in payloads)} > {max_jobs_per_request}); send smaller batches.")
         # Každá varianta má vlastní úlohu, takže velká dávka nepřekročí čas jednoho GPU workeru.
         expanded = []
         for source_index, payload in enumerate(payloads):
@@ -514,12 +552,23 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 expanded.append({**payload, "seed": -1 if payload["seed"] == -1 else (payload["seed"] + variant_index) % 2**32, "num_images": 1, "source_index": source_index, "variant_index": variant_index})
         return await run_in_threadpool(enqueue, expanded)
 
-    def with_timeout(job):
-        if job["status"] == "running":
-            age = (datetime.now(UTC) - datetime.fromisoformat(job["updated_at"])).total_seconds()
-            if age > 1800:
-                return {**job, "status": "failed", "error": {"detail": "Cloud job timed out. Try again."}}
-        return job
+    def with_timeout(job_id, job):
+        """Report a job that stopped making progress as failed - and store that, so it stays failed."""
+        limit = {"running": RUNNING_JOB_TIMEOUT_SECONDS, "queued": QUEUED_JOB_TIMEOUT_SECONDS}.get(job["status"])
+        if limit is None:
+            return job
+        if not job.get("updated_at"):
+            return job
+        age = (datetime.now(UTC) - datetime.fromisoformat(job["updated_at"])).total_seconds()
+        if age <= limit:
+            return job
+        detail = "Cloud job timed out. Try again." if job["status"] == "running" else "The job never started. Try again."
+        expired = {**job, "status": "failed", "message": "Failed", "error": {"detail": detail}}
+        try:
+            jobs[job_id] = expired
+        except Exception:
+            logging.getLogger("studio").warning("Could not store the timeout of job %s", job_id, exc_info=True)
+        return expired
 
     @app.get("/api/jobs")
     def bulk_status(ids: str = ""):
@@ -527,18 +576,16 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         wanted = [item for item in dict.fromkeys(ids.split(",")) if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item)]
         if not wanted or len(wanted) > 200:
             raise HTTPException(422, "Pass between 1 and 200 job ids.")
-        found = {}
-        for job_id in wanted:
-            job = jobs.get(job_id)
-            found[job_id] = None if job is None else with_timeout(job)
-        return {"jobs": found}
+        # Each lookup is a network round trip to the shared Dict: do them concurrently, not 200 in a row.
+        records = list(status_pool.map(jobs.get, wanted))
+        return {"jobs": {job_id: None if job is None else with_timeout(job_id, job) for job_id, job in zip(wanted, records)}}
 
     @app.get("/api/jobs/{job_id}")
     def status(job_id: str):
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "Job not found or expired.")
-        return with_timeout(job)
+        return with_timeout(job_id, job)
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str):
@@ -555,6 +602,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 cancel(call_id)
             except Exception as exc:
                 raise HTTPException(502, "Could not cancel the cloud job.") from exc
+        # Flag first, record second: a worker that re-checks the flag after each write restores this state.
+        jobs[f"cancelled:{job_id}"] = True
         # Images already saved by the worker stay in the library.
         job = {**job, "status": "cancelled", "message": "Cancelled", "updated_at": now_iso()}
         jobs[job_id] = job
@@ -619,15 +668,19 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         target = THUMBS_DIR / filename
         if target.is_file():
             return asset_response(target, "image/webp", request)
-        if not target.is_file():
-            stem = Path(filename).stem
-            source = wait_for_file(lambda: next(
-                (p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None))
-            if source is None:
-                raise HTTPException(404, "Thumbnail not found.")
+        stem = Path(filename).stem
+        source = wait_for_file(lambda: next(
+            (p for p in OUTPUTS_DIR.glob(f"{stem}.*") if p.suffix.lower() in {".png", ".webp"}), None))
+        if source is None:
+            raise HTTPException(404, "Thumbnail not found.")
+        with thumbnail_lock:  # concurrent requests for the same image decode it only once
             target = ensure_thumbnail(source.name)
-            if target is None:
-                raise HTTPException(404, "Thumbnail not found.")
+        if target is None:
+            raise HTTPException(404, "Thumbnail not found.")
+        try:
+            commit()  # without this the thumbnail vanished with the container and was rebuilt on every cold start
+        except Exception:
+            logging.getLogger("studio").warning("Could not persist thumbnail %s", target.name, exc_info=True)
         return asset_response(target, "image/webp", request)
 
     @app.get("/api/library/{item_id}/export")
@@ -637,9 +690,14 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if not re.fullmatch(r"[A-Za-z0-9_-]+", item_id) or scale not in (2, 3, 4):
             raise HTTPException(404, "Image not found.")
         record_path = OUTPUTS_DIR / f"{item_id}.json"
+        # A freshly generated image may exist only in another container's view of the Volume until we reload.
+        wait_for_file(lambda: record_path if record_path.is_file() else None)
         try:
             record = json.loads(record_path.read_text(encoding="utf-8"))
+            if not is_safe_filename(record.get("filename")):
+                raise ValueError("unsafe filename")
             path = OUTPUTS_DIR / record["filename"]
+            wait_for_file(lambda: path if path.is_file() else None)
             source = Image.open(path)
         except (OSError, ValueError, KeyError):
             raise HTTPException(404, "Image not found.")

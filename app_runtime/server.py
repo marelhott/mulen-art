@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 from datetime import datetime, UTC
 import json
 import os
@@ -41,9 +42,12 @@ THUMBS_DIR = OUTPUTS_DIR / "thumbs"
 THUMB_WIDTH = int(os.getenv("THUMB_WIDTH", "800"))
 THUMB_QUALITY = int(os.getenv("THUMB_QUALITY", "78"))
 
+# Only the local dev frontend (vite) may call this API from a browser; with credentials allowed, a wildcard
+# would let any web page the user happens to open drive the GPU and read or delete the library.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
+    allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -108,7 +112,7 @@ def set_library_membership(item_id: str, saved: bool):
     if not metadata_path.exists():
         raise HTTPException(status_code=404, detail="Image not found.")
     data = json.loads(metadata_path.read_text(encoding="utf-8"))
-    if not data.get("filename") or not (OUTPUTS_DIR / data["filename"]).is_file():
+    if not is_safe_filename(data.get("filename")) or not (OUTPUTS_DIR / data["filename"]).is_file():
         raise HTTPException(status_code=404, detail="Image not found.")
     data["saved_to_library"] = saved
     data["deleted"] = not saved
@@ -119,18 +123,25 @@ def set_library_membership(item_id: str, saved: bool):
     temporary = metadata_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
     temporary.replace(metadata_path)
-    _RECORD_CACHE.pop(str(metadata_path), None)
-    _LISTING_CACHE.clear()
+    invalidate_records(metadata_path)
     return {"ok": True, "id": item_id, "item": data}
 
 
+@app.put("/api/library/order")
+def api_library_order_route(payload: dict):
+    return api_library_order(payload.get("ids", []))
+
+
 def api_library_order(ids: list[str]):
-    if any(not isinstance(item, str) for item in ids):
+    if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
         raise HTTPException(status_code=400, detail="Invalid library order.")
     existing = {item["id"] for item in load_library_items()}
     if len(ids) != len(set(ids)) or not set(ids).issubset(existing):
         raise HTTPException(status_code=400, detail="Library order contains invalid IDs.")
-    (OUTPUTS_DIR / "library-order.json").write_text(json.dumps(ids), encoding="utf-8")
+    target = OUTPUTS_DIR / "library-order.json"
+    temporary = target.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
+    temporary.write_text(json.dumps(ids), encoding="utf-8")
+    os.replace(temporary, target)  # a crash mid-write must not leave a truncated order file
     return {"ids": ids}
 
 
@@ -154,6 +165,7 @@ def api_generate(payload: dict):
         },
     }
     with JOBS_LOCK:
+        prune_jobs()
         JOBS[job_id] = job
 
     thread = threading.Thread(target=run_job, args=(job_id, payload), daemon=True)
@@ -167,7 +179,7 @@ def api_job_status(job_id: str):
         job = JOBS.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found.")
-        return job
+        return copy.deepcopy(job)  # a snapshot: the worker thread keeps mutating the live record
 
 
 @app.get("/thumb/{filename}")
@@ -189,11 +201,37 @@ def api_thumbnail(filename: str, request: Request):
                         media_type="image/webp", headers=headers)
 
 
-app.mount(OUTPUTS_URL_PREFIX, StaticFiles(directory=OUTPUTS_DIR), name="library")
+@app.get(OUTPUTS_URL_PREFIX + "/{filename}")
+@app.head(OUTPUTS_URL_PREFIX + "/{filename}")
+def api_library_file(filename: str):
+    # Only generated images: the output folder also holds metadata JSON, reference archives and user photos.
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.(png|webp)", filename):
+        raise HTTPException(404, "Image not found.")
+    path = OUTPUTS_DIR / filename
+    if not path.is_file():
+        raise HTTPException(404, "Image not found.")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
 
 dist_dir = Path(__file__).parent.parent / "frontend" / "dist"
 if dist_dir.exists():
     app.mount("/", StaticFiles(directory=dist_dir, html=True), name="frontend")
+
+
+MAX_FINISHED_JOBS = 100
+FINISHED_JOB_TTL_SECONDS = 3600
+
+
+def prune_jobs() -> None:
+    """Forget old finished jobs; call with JOBS_LOCK held. Running jobs are never dropped."""
+    now = time.time()
+    finished = [(job_id, job) for job_id, job in JOBS.items() if job["status"] in {"completed", "failed"}]
+    finished.sort(key=lambda entry: entry[1]["updated_at"])
+    stale = [job_id for job_id, job in finished
+             if now - datetime.fromisoformat(job["updated_at"]).timestamp() > FINISHED_JOB_TTL_SECONDS]
+    excess = [job_id for job_id, _ in finished[:max(0, len(finished) - MAX_FINISHED_JOBS)]]
+    for job_id in {*stale, *excess}:
+        del JOBS[job_id]
 
 
 def run_job(job_id: str, payload: dict[str, Any]) -> None:
@@ -203,7 +241,9 @@ def run_job(job_id: str, payload: dict[str, Any]) -> None:
         with GENERATION_LOCK:
             update_job(job_id, status="running", progress=0.03, message="GPU slot acquired")
             result = generate(payload, progress_callback=lambda progress, message: on_progress(job_id, progress, message))
-            result["library_items"] = persist_generated_images(result)
+            items = persist_generated_images(result)
+            # The images now live on disk; keeping their multi-MB base64 in JOBS would leak memory for ever.
+            result["images"] = result["library_items"] = items
             update_job(
                 job_id,
                 status="completed",
@@ -278,7 +318,9 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
         stem = f"{timestamp}_{index:02d}_{model_part}"
         image_name = f"{stem}.{extension}"
         image_path = OUTPUTS_DIR / image_name
-        image_path.write_bytes(raw)
+        temporary_image = image_path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
+        temporary_image.write_bytes(raw)
+        os.replace(temporary_image, image_path)  # never expose a half-written image
         try:
             ensure_thumbnail(image_name)  # the gallery never has to decode the full image on the gateway
         except Exception:
@@ -299,13 +341,18 @@ def persist_generated_images(result: dict[str, Any]) -> list[dict[str, Any]]:
             "saved_to_library": False,
         }
         metadata_path = OUTPUTS_DIR / f"{stem}.json"
-        metadata_path.write_text(json.dumps(record, ensure_ascii=True, indent=2), encoding="utf-8")
+        temporary_record = metadata_path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
+        temporary_record.write_text(json.dumps(record, ensure_ascii=True, indent=2), encoding="utf-8")
+        os.replace(temporary_record, metadata_path)  # a crash must not leave a truncated record that hides the image
+        invalidate_records(metadata_path)
         saved_items.append(record)
 
     return saved_items
 
 
 _RECORD_CACHE: dict[str, tuple[int, int, int, Any]] = {}
+# Both caches are touched by request threads and by the 32-thread cold warm-up; every access goes through this lock.
+_CACHE_LOCK = threading.RLock()
 
 
 def read_record(path: Path) -> Any:
@@ -313,19 +360,30 @@ def read_record(path: Path) -> Any:
     stat = path.stat()
     # Writers replace the file atomically, so the inode changes even when mtime and size do not.
     key = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
-    cached = _RECORD_CACHE.get(str(path))
+    with _CACHE_LOCK:
+        cached = _RECORD_CACHE.get(str(path))
     if cached and cached[:3] == key:
         data = cached[3]
     else:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        _RECORD_CACHE[str(path)] = (*key, data)
+        data = json.loads(path.read_text(encoding="utf-8"))  # parsed outside the lock: it may be a network read
+        with _CACHE_LOCK:
+            _RECORD_CACHE[str(path)] = (*key, data)
     return dict(data) if isinstance(data, dict) else data
+
+
+def invalidate_records(path: Path | None = None) -> None:
+    """Drop a changed record (or just the cached listing) so the next read sees the new state."""
+    with _CACHE_LOCK:
+        if path is not None:
+            _RECORD_CACHE.pop(str(path), None)
+        _LISTING_CACHE.clear()
 
 
 def warm_records(paths: list[Path]) -> None:
     """Read not-yet-cached records concurrently. On a cold container every file is a network round trip, and
     reading hundreds one after another took ~50 s; 32 at a time takes a couple of seconds."""
-    cold = [path for path in paths if str(path) not in _RECORD_CACHE]
+    with _CACHE_LOCK:
+        cold = [path for path in paths if str(path) not in _RECORD_CACHE]
     if len(cold) < 8:
         return
     from concurrent.futures import ThreadPoolExecutor
@@ -341,10 +399,11 @@ def warm_records(paths: list[Path]) -> None:
 
 def metadata_paths() -> list[Path]:
     paths = list(OUTPUTS_DIR.glob("*.json"))
-    if len(_RECORD_CACHE) > len(paths) + 256:  # forget records of files that vanished
-        live = {str(path) for path in paths}
-        for key in [key for key in _RECORD_CACHE if key not in live]:
-            del _RECORD_CACHE[key]
+    with _CACHE_LOCK:
+        if len(_RECORD_CACHE) > len(paths) + 256:  # forget records of files that vanished
+            live = {str(path) for path in paths}
+            for key in [key for key in _RECORD_CACHE if key not in live]:
+                _RECORD_CACHE.pop(key, None)
     return paths
 
 
@@ -359,20 +418,27 @@ def scan_records() -> tuple[list[dict[str, Any]], list[str]]:
     except OSError:
         return [], []
     # The 5 s ceiling is a safety net for filesystems that do not bump directory mtimes promptly.
-    if _LISTING_CACHE.get("key") == (str(OUTPUTS_DIR), stamp) and time.monotonic() - _LISTING_CACHE["at"] < 5:
-        return _LISTING_CACHE["value"]
+    with _CACHE_LOCK:
+        cached = dict(_LISTING_CACHE)  # one consistent snapshot of key/value/at
+    if cached.get("key") == (str(OUTPUTS_DIR), stamp) and time.monotonic() - cached["at"] < 5:
+        return cached["value"]
     items, deleted = [], []
     paths = metadata_paths()
     warm_records(paths)
+    # One directory listing answers "does the image file exist?" for every record (it was one stat per record).
+    try:
+        present = {entry.name for entry in os.scandir(OUTPUTS_DIR)}
+    except OSError:
+        return [], []
     for metadata_path in sorted(paths, reverse=True):
         try:
             data = read_record(metadata_path)
-            if not isinstance(data, dict) or "filename" not in data:
+            if not isinstance(data, dict) or not is_safe_filename(data.get("filename")):
                 continue
             if data.get("deleted", False):
                 deleted.append(data["id"])
                 continue
-            if not (OUTPUTS_DIR / data["filename"]).exists():
+            if data["filename"] not in present:
                 continue
             if "url" not in data:
                 data["url"] = f"{OUTPUTS_URL_PREFIX}/{data['filename']}"
@@ -380,7 +446,8 @@ def scan_records() -> tuple[list[dict[str, Any]], list[str]]:
             items.append(data)
         except Exception:
             continue
-    _LISTING_CACHE.update(key=(str(OUTPUTS_DIR), stamp), value=(items, deleted), at=time.monotonic())
+    with _CACHE_LOCK:
+        _LISTING_CACHE.update(key=(str(OUTPUTS_DIR), stamp), value=(items, deleted), at=time.monotonic())
     return items, deleted
 
 
@@ -406,13 +473,62 @@ def purge_deleted(days: int = 30, now: float | None = None) -> int:
                 (OUTPUTS_DIR / filename).unlink(missing_ok=True)
                 thumb_path(filename).unlink(missing_ok=True)
             path.unlink(missing_ok=True)
-            _RECORD_CACHE.pop(str(path), None)
+            with _CACHE_LOCK:
+                _RECORD_CACHE.pop(str(path), None)
             removed += 1
         except (OSError, ValueError, KeyError):
             continue
     if removed:
-        _LISTING_CACHE.clear()
+        invalidate_records()
     return removed
+
+
+_SAFE_FILENAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def is_safe_filename(name: Any) -> bool:
+    """A record's `filename` must be a bare file name; never a path, '..' or a hidden file."""
+    return isinstance(name, str) and _SAFE_FILENAME.fullmatch(name) is not None and ".." not in name
+
+
+def purge_orphan_sources(days: int = 14, now: float | None = None) -> int:
+    """Remove uploaded/derived source images that no output refers to any more (they only ever accumulate)."""
+    now = time.time() if now is None else now
+    referenced: set[str] = set()
+    for path in metadata_paths():
+        try:
+            data = read_record(path)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+        for url in (data.get("source_url"), settings.get("source_url")):
+            if isinstance(url, str):
+                referenced.add(Path(url).name)
+    removed = 0
+    for source in OUTPUTS_DIR.glob("source_*.png"):
+        try:
+            # A source also backs queued jobs; the age floor keeps the files of anything still in flight.
+            if source.name not in referenced and now - source.stat().st_mtime >= days * 86400:
+                source.unlink(missing_ok=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+_SOURCE_FILE = re.compile(r"source_[0-9a-f]{64}\.png")
+
+
+def materialize_source(payload: dict[str, Any]) -> dict[str, Any]:
+    """Worker side of slim payloads: the gateway sends the name of a stored source, not megabytes of base64."""
+    if payload.get("image_base64") or not payload.get("source_file"):
+        return payload
+    name = payload["source_file"]
+    if not _SOURCE_FILE.fullmatch(str(name)):
+        raise ValueError("Invalid source file")
+    return {**payload, "image_base64": base64.b64encode((OUTPUTS_DIR / name).read_bytes()).decode()}
 
 
 def thumb_filename(filename: str) -> str:
@@ -435,7 +551,9 @@ def ensure_thumbnail(filename: str) -> Path | None:
             with Image.open(target) as cached:
                 width, cached_height = cached.size
             with Image.open(source) as raw:
-                source_width, _ = raw.size
+                source_width, source_height = raw.size
+                if raw.getexif().get(0x0112) in (5, 6, 7, 8):  # the thumbnail is made after exif_transpose
+                    source_width = source_height
             if width == min(THUMB_WIDTH, source_width) and cached_height > 0:
                 return target
     except OSError:

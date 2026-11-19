@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app_runtime.cloud_server import create_app
-from app_runtime import cloud_server, server
+from app_runtime import cloud_server, core, server
 
 
 class CloudFlowTests(unittest.TestCase):
@@ -19,6 +19,9 @@ class CloudFlowTests(unittest.TestCase):
         self.spend = {}
         self.patches = [patch.object(cloud_server, "OUTPUTS_DIR", self.output),
                         patch.object(server, "OUTPUTS_DIR", self.output),
+                        # Thumbnails of test images must never land in the real outputs/thumbs folder.
+                        patch.object(cloud_server, "THUMBS_DIR", self.output / "thumbs"),
+                        patch.object(server, "THUMBS_DIR", self.output / "thumbs"),
                         patch.object(modal_app, "spend", self.spend)]
         for p in self.patches:
             p.start()
@@ -205,8 +208,10 @@ class CloudFlowTests(unittest.TestCase):
         with patch("app_runtime.archives.reference_for", side_effect=ValueError("Missing reference")):
             self.assertEqual(client.post("/api/atelier-batch", json=request).status_code, 422)
         self.assertEqual(self.submissions, [])
-        with patch("app_runtime.archives.reference_for", return_value=({"name":"Julius Hofmann"}, {"filename":"painting.png"}, Path("painting.png"))):
+        with patch("app_runtime.archives.reference_for", return_value=({"name":"Julius Hofmann"}, {"filename":"painting.png"}, Path("painting.png"))), \
+             patch("app_runtime.archives.pick_reference", return_value=({"name":"Julius Hofmann"}, {"filename":"painting.png"})) as picked:
             response = client.post("/api/atelier-batch", json=request)
+        self.assertEqual(picked.call_count, 2)  # one title per planned study, without reading or hashing the files
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(self.submissions), 2)
         pair = [payload for _, payload in self.submissions]
@@ -365,7 +370,7 @@ class CloudFlowTests(unittest.TestCase):
         failed = TestClient(app, raise_server_exceptions=False).post("/api/generate", json=self.payload)
         self.assertEqual(failed.status_code, 500)
         self.assertEqual(self.jobs, {})
-        self.assertEqual(self.usage, {})
+        self.assertEqual(sum(self.usage.values()), 0)  # the reservation was handed back
         self.assertEqual(self.submissions, [])
         commit.side_effect = commit_sources
         self.assertEqual(client.post("/api/generate", json=self.payload).status_code, 200)
@@ -446,7 +451,10 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(len(response.json()["jobs"]), 20)
         self.assertEqual(len(self.submissions), 20)
         for index, (_, payload) in enumerate(self.submissions):
-            self.assertEqual(payload["image_base64"], inputs[index // 2]["image_base64"])
+            # Slim payload: the worker gets the stored source's name, not the bytes.
+            self.assertEqual(payload["image_base64"], "")
+            stored = server.materialize_source(payload)["image_base64"]
+            self.assertEqual(core.decode_image(stored).size, core.decode_image(inputs[index // 2]["image_base64"]).size)
             self.assertEqual(payload["source_name"], inputs[index // 2]["name"])
             self.assertEqual(payload["num_images"], 1)
         self.assertEqual(sum(self.usage.values()), 20)
@@ -958,6 +966,67 @@ class CloudFlowTests(unittest.TestCase):
         header = self.client.get("/library/asset.png").headers["cache-control"]
         self.assertIn("private", header)
         self.assertNotIn("public", header)
+
+    def test_non_finite_numbers_are_rejected_instead_of_poisoning_the_pipeline(self):
+        base = {"image_base64": self.payload["image_base64"], "model_id": "tuymans_sdxl", "lora_id": "none"}
+        for key in ("denoise", "cfg", "scale", "lora_strength", "input_scale"):
+            for bad in (float("nan"), float("inf"), "nan", "-Infinity"):
+                with self.assertRaises(ValueError, msg=f"{key}={bad}"):
+                    core.parse_input({**base, key: bad})
+
+    def test_single_job_size_is_capped_but_batches_still_split_unbounded_counts(self):
+        client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
+        client.auth = self.client.auth
+        self.assertEqual(client.post("/api/generate", json={**self.payload, "num_images": core.MAX_IMAGES_PER_JOB + 1}).status_code, 422)
+        self.assertEqual(client.post("/api/generate", json={**self.payload, "num_images": core.MAX_IMAGES_PER_JOB}).status_code, 200)
+
+    def test_absurd_batch_count_is_refused_before_it_is_expanded(self):
+        response = self.client.post("/api/generate-batch", json={"inputs": [{"image_base64": self.payload["image_base64"]}],
+                                                                  "settings": {"num_images": 10_000_000}})
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(self.submissions, [])
+
+    def test_cancel_flag_wins_even_when_the_record_still_says_running(self):
+        import modal_app
+        from unittest.mock import Mock
+        self.jobs["test-job"] = {"id": "test-job", "status": "running", "logs": []}
+        self.jobs["cancelled:test-job"] = True  # the gateway sets this before it rewrites the record
+        with patch.object(modal_app, "jobs", self.jobs), patch.object(modal_app, "models", Mock()), patch.object(modal_app, "outputs", Mock()), patch.dict("os.environ", {"IMG2IMG_DEMO_MODE": "true"}):
+            modal_app.generate_job("test-job", self.payload)
+        self.assertEqual(self.jobs["test-job"]["status"], "running")  # untouched: the worker never wrote over it
+
+    def test_on_demand_thumbnail_is_made_durable_and_gateway_cancel_sets_the_flag(self):
+        Image.new("RGB", (64, 64), "green").save(self.output / "t.png")
+        before = len(self.commits)
+        with patch.object(cloud_server, "THUMBS_DIR", self.output / "thumbs"), patch.object(server, "THUMBS_DIR", self.output / "thumbs"):
+            self.assertEqual(self.client.get("/thumb/t.webp").status_code, 200)
+        self.assertGreater(len(self.commits), before)
+        app = self.make_app(lambda key, payload: f"fc-{key}", monthly_limit=None, cancel=lambda call_id: None)
+        client = TestClient(app); client.auth = self.client.auth
+        job_id = client.post("/api/generate", json=self.payload).json()["job_id"]
+        client.post(f"/api/jobs/{job_id}/cancel")
+        self.assertTrue(self.jobs[f"cancelled:{job_id}"])
+
+    def test_usage_is_reserved_before_the_slow_work_and_refunded_when_nothing_is_submitted(self):
+        seen = []
+        def failing_submit(key, payload):
+            seen.append(sum(self.usage.values()))  # the reservation is already in the ledger while we submit
+            raise RuntimeError("offline")
+        client = TestClient(self.make_app(failing_submit, monthly_limit=None)); client.auth = self.client.auth
+        self.assertEqual(client.post("/api/generate", json=self.payload).status_code, 503)
+        self.assertEqual(seen, [1])
+        self.assertEqual(sum(self.usage.values()), 0)
+
+    def test_lost_queued_job_and_stalled_running_job_are_failed_and_the_failure_is_stored(self):
+        from datetime import datetime, timedelta, UTC
+        long_ago = (datetime.now(UTC) - timedelta(hours=5)).isoformat()
+        self.jobs["q"] = {"id": "q", "status": "queued", "updated_at": long_ago}
+        self.jobs["r"] = {"id": "r", "status": "running", "updated_at": long_ago}
+        self.jobs["fresh"] = {"id": "fresh", "status": "queued", "updated_at": datetime.now(UTC).isoformat()}
+        found = self.client.get("/api/jobs", params={"ids": "q,r,fresh"}).json()["jobs"]
+        self.assertEqual((found["q"]["status"], found["r"]["status"], found["fresh"]["status"]), ("failed", "failed", "queued"))
+        self.assertEqual(self.jobs["q"]["status"], "failed")  # persisted, not just reported
+        self.assertEqual(self.jobs["fresh"]["status"], "queued")
 
 
 if __name__ == "__main__":

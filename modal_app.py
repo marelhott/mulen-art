@@ -177,15 +177,23 @@ def gpu_rate():
 def generate_job(job_id: str, payload: dict):
     import time
     from app_runtime.core import generate
-    from app_runtime.server import persist_generated_images, now_iso
+    from app_runtime.server import persist_generated_images, now_iso, materialize_source
     record = jobs[job_id]
 
-    def put(value):
-        # The user may have cancelled meanwhile; never overwrite that state with a progress tick.
+    def cancelled():
+        # The gateway sets a dedicated flag BEFORE it rewrites the job as cancelled, so a worker write can
+        # never win the race between "check status" and "write status".
+        if jobs.get(f"cancelled:{job_id}"):
+            return True
         current = jobs.get(job_id)
-        if current and current.get("status") == "cancelled":
+        return bool(current and current.get("status") == "cancelled")
+
+    def put(value):
+        if cancelled():
             return
         jobs[job_id] = value
+        if cancelled():  # cancelled between the check and the write: put the cancelled state back
+            jobs[job_id] = {**value, "status": "cancelled", "message": "Cancelled"}
     started = time.monotonic()
     last_update = 0.0
     library_items = []
@@ -222,6 +230,7 @@ def generate_job(job_id: str, payload: dict):
     try:
         models.reload()
         outputs.reload()
+        payload = materialize_source(payload)  # slim payloads carry a stored-source name instead of base64
         progress(0.01, "Loading model on cloud GPU")
         result = generate(payload, progress_callback=progress, image_callback=image_ready)
         result["meta"]["source_name"] = result["meta"].get("source_name") or payload.get("source_name", "Input image")
@@ -349,16 +358,17 @@ def backfill_thumbnails():
 )
 def purge_deleted_images():
     """Daily: really remove images deleted more than RETENTION_DAYS ago, so the Volume stops growing."""
-    from app_runtime.server import purge_deleted
+    from app_runtime.server import purge_deleted, purge_orphan_sources
     outputs.reload()
     import time
     current = time.strftime("%Y-%m", time.gmtime())
     for key in [key for key in spend.keys() if not key.startswith(current)]:  # keep only this month's totals
         release_slot(spend, key)
     removed = purge_deleted(int(os.environ.get("DELETED_RETENTION_DAYS", "30")))
-    if removed:
+    orphans = purge_orphan_sources(int(os.environ.get("ORPHAN_SOURCE_DAYS", "14")))
+    if removed or orphans:
         outputs.commit()
-    print(f"purged {removed} deleted images")
+    print(f"purged {removed} deleted images and {orphans} unreferenced sources")
 
 
 @app.function(

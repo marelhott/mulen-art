@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import random
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -11,18 +12,26 @@ def archive_root():
 
 
 def load_manifest():
+    # Parsed once per (mtime, size): one atelier request used to re-parse it for every study it planned.
     path = archive_root() / 'manifest.json'
     try:
-        return json.loads(path.read_text())
+        stat = path.stat()
     except FileNotFoundError:
         return {'archives': []}
+    return _load_manifest(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+@lru_cache(maxsize=4)
+def _load_manifest(path, _mtime_ns, _size):
+    return json.loads(Path(path).read_text())
 
 
 def archive_options():
     return [{k: a[k] for k in ('id', 'name', 'count')} for a in load_manifest()['archives']]
 
 
-def reference_for(archive_id, seed):
+def pick_reference(archive_id, seed):
+    """Choose the reference for a seed from the manifest alone (no file access) - enough to title a study."""
     archive = next((a for a in load_manifest()['archives'] if a['id'] == archive_id), None)
     if not archive or not archive.get('items'):
         raise ValueError('Reference archive is unavailable or empty')
@@ -30,7 +39,11 @@ def reference_for(archive_id, seed):
     items = list(archive['items'])
     cycle, index = divmod(seed, len(items))
     random.Random(f'{archive_id}:{cycle}').shuffle(items)
-    item = items[index]
+    return archive, items[index]
+
+
+def reference_for(archive_id, seed):
+    archive, item = pick_reference(archive_id, seed)
     root = archive_root().resolve()
     path = (root / item['path']).resolve()
     if not path.is_relative_to(root) or not path.is_file():
@@ -52,7 +65,7 @@ def generate_reference(spec, progress, image_callback):
         with Image.open(path) as raw:
             source = ImageOps.exif_transpose(raw).convert('RGB')
         source = core.prepare_source(source, spec.input_scale, max(spec.width, spec.height, 1008))
-        source_data = core.encode_image(source, {})
+        source_data = core.encode_image(source, {}, 'PNG')  # the file below is named .png whatever OUTPUT_FORMAT says
         source_name = 'source_archive_' + hashlib.sha256(base64.b64decode(source_data['image_base64'])).hexdigest() + '.png'
         OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
         (OUTPUTS_DIR / source_name).write_bytes(base64.b64decode(source_data['image_base64']))

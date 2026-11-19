@@ -239,6 +239,7 @@ def generate_study(spec, progress, image_callback):
         repaint_meta = {}
         photo_prompt = None
         photo_source_meta = {}
+        recipe_pipe = None  # the pipeline whose attention backend belongs in the stored recipe
         # The optional photographic study uses SDXL Base, then releases its pipeline before painting.
         if spec.atelier_mode == "photo":
             if spec.atelier_photo_source == "library":
@@ -285,8 +286,10 @@ def generate_study(spec, progress, image_callback):
         else:
             pipe = core.ensure_pipeline(spec.model_id)
             core.ensure_lora(pipe, "none", 0)
+            core.set_vae_tiling(pipe, spec.vae_tiling)  # honoured here too, not only in the repaint modes
             pipe.scheduler = core.make_scheduler(pipe.scheduler.config, spec.sampler, spec.schedule)
             text_pipe = modules["text_pipeline"].from_pipe(pipe)
+            recipe_pipe = pipe
             notify(.15, "Ateliér: nový obraz z šumu")
             until = spec.atelier_color_until if color_text else 1.0
             if until < 1.0:
@@ -322,7 +325,7 @@ def generate_study(spec, progress, image_callback):
             "scale": spec.scale, "upscaler": actual_upscaler, "restormer_mode": spec.restormer_mode, "render_mode": "quick",
             "prompt": prompt, "negative_prompt": "", "denoise": spec.denoise if spec.atelier_mode == "photo" else None,
             "source_url": source_url, "source_name": title, "demo_mode": False,
-            "subjects_hash": subjects_hash(), "recipe": core.runtime_recipe(),
+            "subjects_hash": subjects_hash(), "recipe": core.runtime_recipe(recipe_pipe), "vae_tiling": spec.vae_tiling,
             "photo_prompt": photo_prompt if spec.atelier_mode == "photo" else None,
             "photo_model_id": "sdxl_base" if spec.atelier_mode == "photo" and spec.atelier_photo_source == "generated" else None,
             "photo_cfg": max(5.0, spec.cfg) if spec.atelier_mode == "photo" and spec.atelier_photo_source == "generated" else None,

@@ -22,6 +22,10 @@ QUALITY_TO_STEPS = {
     "maximum": 50,
 }
 
+# One GPU job renders at most this many images. The studio sends at most 8 per job and the batch endpoint
+# splits any larger count into one job per image, so this only stops a hand-made single-job request
+# (or a direct worker call) from asking one GPU for an unbounded amount of work.
+MAX_IMAGES_PER_JOB = 16
 MIN_SCALE = 0.5
 MAX_SCALE = 4.0
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config" / "models.json"
@@ -83,10 +87,16 @@ class GenerationInput:
     height: int = 1024
 
 
+def check_job_size(num_images: int) -> None:
+    if num_images > MAX_IMAGES_PER_JOB:
+        raise ValueError(f"A single job renders at most {MAX_IMAGES_PER_JOB} images; send several jobs instead")
+
+
 def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None = None,
              image_callback: Callable | None = None, extra_meta: dict[str, Any] | None = None) -> dict[str, Any]:
     started = time.monotonic()
     generation_input = parse_input(payload)
+    check_job_size(generation_input.num_images)
     report_progress(progress_callback, 0.02, "Input validated")
 
     if generation_input.generation_type == "atelier":
@@ -180,6 +190,9 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
                       "output_width": result.width, "output_height": result.height,
                       "upscaler": actual_upscaler if not detail else ("sdxl_second_pass+" + actual_upscaler if actual_upscaler != 'lanczos' else 'sdxl_second_pass'),
                       "restormer_mode": generation_input.restormer_mode,
+                      # Known per image, so the stored record has them too (they used to be added only after the save).
+                      "setup_seconds": round(setup_seconds, 2),
+                      "generation_and_save_seconds": round(time.monotonic() - inference_started, 2),
                       **(extra_meta or {})}
         output_images.append({**encode_image(result, image_meta), "generation_meta": image_meta})
         if image_callback is not None:
@@ -584,8 +597,8 @@ def apply_output_upscaler(image: Image.Image, scale: float, use_realsrgan: bool 
     return upscale_if_needed(image, scale), "lanczos"
 
 
-def encode_image(image: Image.Image, metadata: dict | None = None) -> dict[str, Any]:
-    output_format = os.getenv("OUTPUT_FORMAT", "PNG").upper()
+def encode_image(image: Image.Image, metadata: dict | None = None, output_format: str | None = None) -> dict[str, Any]:
+    output_format = (output_format or os.getenv("OUTPUT_FORMAT", "PNG")).upper()
     if output_format not in {"PNG", "WEBP"}:
         output_format = "PNG"
 
@@ -716,16 +729,21 @@ def get_config_item(section: str, item_id: str) -> dict[str, Any]:
 def load_config() -> dict[str, Any]:
     global MODEL_CONFIG, MODEL_CONFIG_MTIME_NS
 
-    configured_path = Path(os.getenv("MODEL_CONFIG_PATH", ""))
-    config_path = configured_path if configured_path.is_file() else DEFAULT_CONFIG_PATH
-    mtime_ns = config_path.stat().st_mtime_ns
+    configured = os.getenv("MODEL_CONFIG_PATH", "").strip()
+    if configured and not Path(configured).is_file():
+        # An explicitly configured path that does not exist is a deployment mistake: never fall back to
+        # another file and quietly serve a different model list.
+        raise FileNotFoundError(f"MODEL_CONFIG_PATH points to a missing file: {configured}")
+    config_path = Path(configured) if configured else DEFAULT_CONFIG_PATH
+    # The cache key includes the path, so pointing the variable at another file is noticed too.
+    key = (str(config_path), config_path.stat().st_mtime_ns)
 
-    if MODEL_CONFIG is not None and MODEL_CONFIG_MTIME_NS == mtime_ns:
+    if MODEL_CONFIG is not None and MODEL_CONFIG_MTIME_NS == key:
         return MODEL_CONFIG
 
     with config_path.open("r", encoding="utf-8") as config_file:
         MODEL_CONFIG = json.load(config_file)
-    MODEL_CONFIG_MTIME_NS = mtime_ns
+    MODEL_CONFIG_MTIME_NS = key
     return MODEL_CONFIG
 
 
@@ -738,6 +756,9 @@ def clear_cuda() -> None:
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
+    # min/max silently pass NaN through and +-inf clamp to a bound the caller never asked for.
+    if not math.isfinite(value):
+        raise ValueError("Numeric settings must be finite numbers")
     return min(max(value, minimum), maximum)
 
 

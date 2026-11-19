@@ -55,15 +55,25 @@ def public_item(item):
         "thumbnail_url": f"/atelier-photo/{item['id']}?thumb=true", "image_url": f"/atelier-photo/{item['id']}"}
 
 
+_index_state = (None, {})  # (manifest object the index was built from, id -> (collection, item)); replaced atomically
+
+
 def _item_for_id(photo_id):
-    for collection in load_manifest()["collections"]:
-        for item in collection.get("items", []):
-            if item.get("id") == photo_id:
-                return collection, item
-    return None, None
+    """O(1) lookup instead of scanning every photo of every collection per request."""
+    global _index_state
+    manifest = load_manifest()
+    built_from, index = _index_state
+    if built_from is not manifest:  # load_manifest() returns the same object until the file changes
+        index = {}
+        for collection in manifest["collections"]:
+            for item in collection.get("items", []):
+                index.setdefault(item.get("id"), (collection, item))
+        _index_state = (manifest, index)
+    return index.get(photo_id, (None, None))
 
 
-def photo_for(collection_id, seed, photo_id=""):
+def pick_photo(collection_id, seed, photo_id=""):
+    """Choose the photo from the manifest alone (no file access) - enough to title a study."""
     if collection_id not in COLLECTIONS:
         raise ValueError("Unknown photo collection")
     collection = next((row for row in load_manifest()["collections"] if row.get("id") == collection_id), None)
@@ -77,6 +87,11 @@ def photo_for(collection_id, seed, photo_id=""):
         item = None
     if not item:
         raise ValueError(f"No photos are available in {collection_id}; import the Photos albums first")
+    return collection, item
+
+
+def photo_for(collection_id, seed, photo_id=""):
+    collection, item = pick_photo(collection_id, seed, photo_id)
     root = photos_root().resolve()
     source = (root.parent / item["path"]).resolve()
     thumb = (root.parent / item["thumb_path"]).resolve()
