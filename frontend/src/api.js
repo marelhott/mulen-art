@@ -1,5 +1,7 @@
 // Single place that knows how media URLs are built for the studio.
 // import.meta.env exists under Vite; the optional chain keeps this module importable in plain Node tests.
+import { clearAllCached } from "./galleryCache.js";
+
 export const API_URL = import.meta.env?.VITE_API_URL || "";
 
 export function reconcileOptionIds(current, options, fallbackId) {
@@ -50,4 +52,57 @@ export function formatDuration(seconds) {
   return value < 60
     ? `${Math.floor(value)} s`
     : `${Math.floor(value / 60)} min ${Math.floor(value % 60)} s`;
+}
+
+/** Thrown when the server says the session is gone; local private data has already been purged. */
+export class AuthError extends Error {}
+
+/** Forget every private image this browser may still hold (Cache Storage and the IndexedDB gallery). */
+export async function purgePrivateData() {
+  try {
+    if (typeof caches !== "undefined") {
+      for (const key of await caches.keys()) if (key.startsWith("img2img-")) await caches.delete(key);
+    }
+  } catch { /* storage unavailable */ }
+  await clearAllCached();
+}
+
+let signingOut = false;
+async function leaveToLogin() {
+  if (signingOut) return;
+  signingOut = true;
+  await purgePrivateData();
+  window.location.assign("/login");
+}
+
+/** Explicit sign-out: ends the server session, then wipes local caches. */
+export async function signOut() {
+  let ended = false;
+  try { ended = (await fetch(`${API_URL}/logout`, { method: "POST" })).ok; } catch { /* offline: still wipe locally */ }
+  if (ended) return leaveToLogin();
+  // A server without sessions (local dev) has nothing to log out of: just forget the cached images.
+  await purgePrivateData();
+  window.location.reload();
+}
+
+/** fetch() for the studio API: a 401 wipes private local data and goes to the login page. */
+export async function apiFetch(path, options) {
+  const response = await fetch(`${API_URL}${path}`, options);
+  if (response.status === 401) {
+    await leaveToLogin();
+    throw new AuthError("Přihlášení vypršelo.");
+  }
+  return response;
+}
+
+/** Parse a JSON body defensively: proxy error pages (502/503/504) are HTML, not JSON. */
+export async function readJson(response, fallback = "Požadavek se nezdařil.") {
+  let data = null;
+  try { data = await response.json(); } catch { /* not JSON */ }
+  if (!response.ok) {
+    const detail = data && typeof data.detail === "string" ? data.detail : "";
+    throw new Error(detail || `${fallback} (HTTP ${response.status})`);
+  }
+  if (data === null) throw new Error(`${fallback} (neplatná odpověď serveru)`);
+  return data;
 }

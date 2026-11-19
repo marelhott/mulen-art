@@ -58,6 +58,9 @@ DEFAULT_MAX_JOBS_PER_REQUEST = 64
 
 MAX_EXPORT_PIXELS = 36_000_000
 INTERACTIVE_REQUEST_JOBS = 4
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW_SECONDS = 600
+LOGIN_LOCKOUT_SECONDS = 300
 
 
 def optional_float_env(name, default=None):
@@ -119,14 +122,56 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 time.sleep(0.4)
         return found
 
+    # Dedicated, domain-separated signing key: the login password itself never signs anything.
+    session_key = hmac.new((password or "").encode(), b"mulen-art/session/v1", hashlib.sha256).digest()
+
+    def sign_session(timestamp):
+        # The username is part of the signed message, so a cookie is bound to the account it was issued for.
+        return hmac.new(session_key, f"{username}\n{timestamp}".encode(), hashlib.sha256).hexdigest()
+
     def session_valid(token):
         try:
             timestamp, signature = token.split(".", 1)
             age = time.time() - int(timestamp)
-            expected = hmac.new(password.encode(), timestamp.encode(), hashlib.sha256).hexdigest()
-            return 0 <= age < 30 * 86400 and hmac.compare_digest(signature, expected)
+            return 0 <= age < 30 * 86400 and hmac.compare_digest(signature, sign_session(timestamp))
         except (ValueError, AttributeError):
             return False
+
+    # Best-effort brute-force guard (the gateway is a single container, so memory is enough).
+    failures = {}
+    failures_lock = threading.Lock()
+
+    def client_ip(request):
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        return forwarded or (request.client.host if request.client else "unknown")
+
+    def lockout_remaining(ip):
+        with failures_lock:
+            entry = failures.get(ip)
+            return max(0, int(entry["blocked_until"] - time.monotonic())) if entry else 0
+
+    def record_failure(ip):
+        now = time.monotonic()
+        with failures_lock:
+            if len(failures) > 2000:  # bound memory under a scan
+                for key in [k for k, v in failures.items() if now - v["since"] > LOGIN_WINDOW_SECONDS and v["blocked_until"] < now]:
+                    del failures[key]
+            entry = failures.get(ip)
+            if not entry or now - entry["since"] > LOGIN_WINDOW_SECONDS:
+                entry = failures[ip] = {"count": 0, "since": now, "blocked_until": 0.0}
+            entry["count"] += 1
+            if entry["count"] >= LOGIN_MAX_FAILURES:
+                entry["blocked_until"] = now + LOGIN_LOCKOUT_SECONDS
+                entry["count"] = 0
+                entry["since"] = now
+
+    def record_success(ip):
+        with failures_lock:
+            failures.pop(ip, None)
+
+    def locked_out_response(remaining):
+        return Response("Too many failed sign-in attempts. Try again later.", status_code=429,
+                        headers={"Retry-After": str(remaining), "Cache-Control": "no-store"})
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page():
@@ -138,32 +183,54 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         raw = await request.body()
         if len(raw) > 4096:
             raise HTTPException(413, "Login request too large")
+        ip = client_ip(request)
+        remaining = lockout_remaining(ip)
+        if remaining:
+            return locked_out_response(remaining)
         fields = parse_qs(raw.decode(errors="replace"))
         user = fields.get("username", [""])[0]
         secret = fields.get("password", [""])[0]
         if not (hmac.compare_digest(user.encode(), username.encode()) and
                 hmac.compare_digest(secret.encode(), password.encode())):
+            record_failure(ip)
             return HTMLResponse(LOGIN_HTML.replace("Sign in to your studio", "Incorrect username or password"), status_code=401)
+        record_success(ip)
         timestamp = str(int(time.time()))
-        signature = hmac.new(password.encode(), timestamp.encode(), hashlib.sha256).hexdigest()
         response = RedirectResponse("/", status_code=303)
-        response.set_cookie("studio_session", f"{timestamp}.{signature}", secure=True,
+        response.set_cookie("studio_session", f"{timestamp}.{sign_session(timestamp)}", secure=True,
                             httponly=True, samesite="strict", max_age=30 * 86400)
+        return response
+
+    @app.post("/logout")
+    def logout():
+        """End the session and tell the browser to drop everything cached for this origin."""
+        response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+        response.delete_cookie("studio_session", secure=True, httponly=True, samesite="strict")
+        # "storage" covers IndexedDB and Cache Storage (the gallery snapshot and the media service worker).
+        response.headers["Clear-Site-Data"] = '"cache", "storage"'
         return response
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
-        if not auth_enabled or request.url.path in {"/login", "/health"}:
+        if not auth_enabled or request.url.path in {"/login", "/logout", "/health"}:
             return await call_next(request)
+        ip = client_ip(request)
+        remaining = lockout_remaining(ip)
+        if remaining:
+            return locked_out_response(remaining)
         authorized = session_valid(request.cookies.get("studio_session", ""))
+        presented_basic = False
         try:
             scheme, value = request.headers.get("authorization", "").split(" ", 1)
             user, secret = base64.b64decode(value, validate=True).decode().split(":", 1)
-            authorized = authorized or (scheme.lower() == "basic" and
+            presented_basic = scheme.lower() == "basic"
+            authorized = authorized or (presented_basic and
                           hmac.compare_digest(user.encode(), username.encode()) and
                           hmac.compare_digest(secret.encode(), password.encode()))
         except (ValueError, UnicodeError, binascii.Error):
             pass
+        if not authorized and presented_basic:
+            record_failure(ip)  # only wrong credentials count, not a browser that has none yet
         if not authorized:
             if "text/html" in request.headers.get("accept", ""):
                 return RedirectResponse("/login", status_code=303)
@@ -526,7 +593,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def asset_response(path, media_type, request: Request):
         stat = path.stat()
         etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-        headers = {"Cache-Control": "public, max-age=31536000, immutable", "ETag": etag}
+        headers = {"Cache-Control": "private, max-age=31536000, immutable", "ETag": etag}
         # Browsers revalidate on reload; a 304 saves re-sending megabytes through the gateway.
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)

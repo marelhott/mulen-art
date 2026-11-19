@@ -908,6 +908,57 @@ class CloudFlowTests(unittest.TestCase):
             for w in workers: w.join(5)
         self.assertEqual(done, {"history": 200, "library": 200, "usage": 200})
 
+    def test_session_cookie_is_bound_to_username_and_not_signed_with_the_password(self):
+        import hashlib, hmac, time
+        client = TestClient(self.app, base_url="https://studio.test")
+        client.post("/login", data={"username": "studio", "password": "test-password"})
+        stamp, signature = client.cookies["studio_session"].split(".", 1)
+        # The old scheme (HMAC keyed by the password over the timestamp alone) must no longer verify.
+        legacy = hmac.new(b"test-password", stamp.encode(), hashlib.sha256).hexdigest()
+        client.cookies.set("studio_session", f"{stamp}.{legacy}")
+        self.assertEqual(client.get("/api/options").status_code, 401)
+        # A cookie issued for a different username is rejected by an app configured with another username.
+        other = create_app(jobs={}, usage={}, submit=lambda *_: None, refresh=lambda: None, commit=lambda: None,
+                           username="someone-else", password="test-password")
+        stolen = TestClient(other, base_url="https://studio.test")
+        stolen.cookies.set("studio_session", f"{stamp}.{signature}")
+        self.assertEqual(stolen.get("/api/options").status_code, 401)
+
+    def test_repeated_wrong_credentials_are_throttled_and_a_good_login_resets_the_counter(self):
+        client = TestClient(self.app, base_url="https://studio.test")
+        for _ in range(cloud_server.LOGIN_MAX_FAILURES - 1):
+            self.assertEqual(client.post("/login", data={"username": "studio", "password": "x"}).status_code, 401)
+        self.assertEqual(client.post("/login", data={"username": "studio", "password": "test-password"}, follow_redirects=False).status_code, 303)
+        for _ in range(cloud_server.LOGIN_MAX_FAILURES):
+            client.post("/login", data={"username": "studio", "password": "x"})
+        blocked = client.post("/login", data={"username": "studio", "password": "test-password"})
+        self.assertEqual(blocked.status_code, 429)
+        self.assertIn("retry-after", blocked.headers)
+        # Basic-auth guessing hits the same wall, and the lockout also blocks valid credentials briefly.
+        self.assertEqual(client.get("/api/options", auth=("studio", "test-password")).status_code, 429)
+
+    def test_missing_credentials_do_not_count_as_failures(self):
+        client = TestClient(self.app, base_url="https://studio.test")
+        for _ in range(cloud_server.LOGIN_MAX_FAILURES + 3):
+            self.assertEqual(client.get("/api/options").status_code, 401)
+        self.assertEqual(client.get("/api/options", auth=("studio", "test-password")).status_code, 200)
+
+    def test_logout_clears_cookie_and_site_data_and_is_reachable_without_a_session(self):
+        client = TestClient(self.app, base_url="https://studio.test")
+        client.post("/login", data={"username": "studio", "password": "test-password"})
+        response = client.post("/logout")
+        self.assertEqual(response.status_code, 204)
+        self.assertIn("storage", response.headers["clear-site-data"])
+        self.assertIn("studio_session", response.headers["set-cookie"])
+        self.assertEqual(TestClient(self.app).post("/logout").status_code, 204)
+        self.assertEqual(client.get("/api/options").status_code, 401)
+
+    def test_private_media_is_never_marked_public_for_shared_caches(self):
+        Image.new("RGB", (32, 32), (1, 2, 3)).save(self.output / "asset.png")
+        header = self.client.get("/library/asset.png").headers["cache-control"]
+        self.assertIn("private", header)
+        self.assertNotIn("public", header)
+
 
 if __name__ == "__main__":
     unittest.main()

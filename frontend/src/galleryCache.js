@@ -4,18 +4,44 @@ const DB_NAME = "img2img-cache";
 const STORE = "kv";
 export const GALLERY_CACHE_KEY = "gallery-v1";
 
+// One connection is opened lazily and reused; opening a new one per read/write leaked handles.
+let databasePromise = null;
+
 function openDatabase() {
-  return new Promise((resolve) => {
-    try {
-      const request = indexedDB.open(DB_NAME, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
-      request.onblocked = () => resolve(null);
-    } catch {
-      resolve(null); // private mode / blocked storage: the app works without the cache
-    }
-  });
+  if (!databasePromise) {
+    databasePromise = new Promise((resolve) => {
+      try {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore(STORE);
+        request.onsuccess = () => {
+          const db = request.result;
+          db.onversionchange = () => { db.close(); databasePromise = null; };
+          resolve(db);
+        };
+        request.onerror = () => resolve(null);
+        request.onblocked = () => resolve(null);
+      } catch {
+        resolve(null); // private mode / blocked storage: the app works without the cache
+      }
+    }).then((db) => {
+      if (!db) databasePromise = null; // allow a later retry
+      return db;
+    });
+  }
+  return databasePromise;
+}
+
+/** Remove everything this app keeps in IndexedDB (sign-out, expired session). */
+export async function clearAllCached() {
+  try {
+    const db = await openDatabase();
+    if (db) db.close();
+    databasePromise = null;
+    await new Promise((resolve) => {
+      const request = indexedDB.deleteDatabase(DB_NAME);
+      request.onsuccess = request.onerror = request.onblocked = () => resolve();
+    });
+  } catch { /* nothing cached or storage unavailable */ }
 }
 
 export async function readCached(key) {

@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Grid2X2,
   ImagePlus,
+  LogOut,
   Images,
   Layers3,
   Maximize2,
@@ -22,7 +23,8 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { urlFor } from "./shared";
+import { signOut } from "./api";
+import { safeStorage, urlFor } from "./shared";
 import { buildImageUrl } from "./api";
 import { filterItems, idsForSource } from "./studioTools";
 import { TEXT } from "./texts";
@@ -37,7 +39,7 @@ import { IconButton, Label, Range, Select } from "./components/controls";
 
 export default function StudioView(p) {
   const [theme, setTheme] = useState(
-    () => localStorage.getItem("img2img-theme") || "dark",
+    () => safeStorage.get("img2img-theme") || "dark",
   );
   // On phones the settings panel overlays the canvas, so it starts closed there.
   const [rightOpen, setRightOpen] = useState(() => window.innerWidth >= 900);
@@ -57,7 +59,7 @@ export default function StudioView(p) {
   const isAtelier = tab === "atelier";
   const updateAtelier = patch => p.setAtelier(current => ({...current, ...patch}));
   const [thumbSize, setThumbSize] = useState(
-    () => Number(localStorage.getItem("img2img-thumb-size")) || 0,
+    () => Number(safeStorage.get("img2img-thumb-size")) || 0,
   );
   const [selection, setSelection] = useState(new Set());
   const [selecting, setSelecting] = useState(false);
@@ -153,10 +155,10 @@ export default function StudioView(p) {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("img2img-theme", theme);
+    safeStorage.set("img2img-theme", theme);
   }, [theme]);
   useEffect(() => {
-    localStorage.setItem("img2img-thumb-size", String(thumbSize));
+    safeStorage.set("img2img-thumb-size", String(thumbSize));
   }, [thumbSize]);
   useEffect(() => {
     setVisible(80);
@@ -342,6 +344,9 @@ export default function StudioView(p) {
             {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
             {theme === "dark" ? "LIGHT" : "DARK"}
           </button>
+          <IconButton label="Odhlásit se" onClick={signOut}>
+            <LogOut />
+          </IconButton>
         </div>
       </header>
       <aside className="left-panel control-panel">

@@ -3,7 +3,8 @@ import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
 import { GALLERY_CACHE_KEY, cacheableItems, readCached, writeCached } from "./galleryCache";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
-import { API_URL, buildImageUrl, reconcileOptionIds } from "./api";
+import { randomId, safeStorage } from "./shared";
+import { apiFetch, buildImageUrl, readJson, reconcileOptionIds } from "./api";
 
 const PRESET_STORAGE_KEY = "img2img-presets-v1";
 const DEFAULT_ENGINE = { mode: "quick", conditioningMode: "style", sampler: "dpmpp_2m_sde", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
@@ -19,7 +20,7 @@ function fileToBase64(file) {
 
 function loadStoredPresets() {
   try {
-    const raw = window.localStorage.getItem(PRESET_STORAGE_KEY);
+    const raw = safeStorage.get(PRESET_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -28,7 +29,7 @@ function loadStoredPresets() {
 }
 
 function saveStoredPresets(presets) {
-  window.localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+  safeStorage.set(PRESET_STORAGE_KEY, JSON.stringify(presets));
 }
 
 function App() {
@@ -38,16 +39,16 @@ function App() {
   const [optionsRevision, setOptionsRevision] = useState(0);
   const [archiveStatus, setArchiveStatus] = useState("loading");
   const [variants, setVariants] = useState(() => {
-    try { return {...DEFAULT_VARIANTS, ...JSON.parse(window.localStorage.getItem(VARIANTS_STORAGE_KEY) || "{}"), enabled: false}; }
+    try { return {...DEFAULT_VARIANTS, ...JSON.parse(safeStorage.get(VARIANTS_STORAGE_KEY) || "{}"), enabled: false}; }
     catch { return DEFAULT_VARIANTS; }
   });
   useEffect(() => {
-    try { window.localStorage.setItem(VARIANTS_STORAGE_KEY, JSON.stringify(variants)); } catch { /* optional convenience */ }
+    safeStorage.set(VARIANTS_STORAGE_KEY, JSON.stringify(variants));
   }, [variants]);
   const [serverModels, setServerModels] = useState([]);
   // Checkpoint mixes live in the browser; each one is fully described by its id, so there is nothing to sync.
   const [mixIds, setMixIds] = useState(() => {
-    try { const saved = JSON.parse(window.localStorage.getItem(MIX_STORAGE_KEY) || "[]"); return Array.isArray(saved) ? saved.filter(isMixId) : []; }
+    try { const saved = JSON.parse(safeStorage.get(MIX_STORAGE_KEY) || "[]"); return Array.isArray(saved) ? saved.filter(isMixId) : []; }
     catch { return []; }
   });
   const models = useMemo(
@@ -135,11 +136,10 @@ function App() {
     let cancelled = false;
     let retry;
     setArchiveStatus("loading");
-    fetch(`${API_URL}/api/options`, {cache: "no-store"})
-      .then((response) => (response.ok ? response.json() : null))
+    apiFetch("/api/options", {cache: "no-store"})
+      .then((response) => readJson(response, "Možnosti nelze načíst."))
       .then((data) => {
         if (cancelled) return;
-        if (!data) throw new Error("Options unavailable");
         setArchives(data.archives || []);
         setGpuHourlyUsd(data.gpu_hourly_usd ?? null);
         setArchiveStatus(data.archives?.length ? "ready" : "error");
@@ -182,7 +182,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    try { window.localStorage.setItem(MIX_STORAGE_KEY, JSON.stringify(mixIds)); } catch { /* optional convenience */ }
+    safeStorage.set(MIX_STORAGE_KEY, JSON.stringify(mixIds));
   }, [mixIds]);
 
   // `target` is where the new mix is selected right away: the canvas checkpoint list or the Atelier one.
@@ -209,8 +209,7 @@ function App() {
 
   async function refreshUsage() {
     try {
-      const response = await fetch(`${API_URL}/api/usage`);
-      if (response.ok) setUsage(await response.json());
+      setUsage(await readJson(await apiFetch("/api/usage")));
     } catch {
       /* the budget label is informational; keep the last value */
     }
@@ -359,7 +358,7 @@ function App() {
       (item) => item.name.toLowerCase() === name.toLowerCase(),
     );
     const nextPreset = {
-      id: existing?.id || crypto.randomUUID(),
+      id: existing?.id || randomId(),
       name,
       ...buildPresetPayload(),
     };
@@ -396,7 +395,7 @@ function App() {
     }
     restoreRecentAllowed.current = false;
     const items = files.map((file) => ({
-      id: crypto.randomUUID(),
+      id: randomId(),
       file,
       url: URL.createObjectURL(file),
     }));
@@ -453,7 +452,7 @@ function App() {
       setSubmissionErrors([]);
       setBatchResults([]);
       setJob({...EMPTY_JOB, status: "preparing", message: "Odesílání do fronty"});
-      window.localStorage.removeItem("img2img-last-batch");
+      safeStorage.remove("img2img-last-batch");
     }
     restoreRecentAllowed.current = false;
     setError("");
@@ -472,19 +471,12 @@ function App() {
       // Upload the input once; every model/chunk below references it by id.
       let sourceId;
       try {
-        const upload = await fetch(`${API_URL}/api/sources`, {
+        const upload = await apiFetch("/api/sources", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ image_base64: image }),
         });
-        if (upload.status === 401) {
-          window.location.assign("/login");
-          throw new Error("Přihlášení vypršelo.");
-        }
-        const uploaded = await upload.json();
-        if (!upload.ok)
-          throw new Error(typeof uploaded.detail === "string" ? uploaded.detail : "Nahrání se nezdařilo.");
-        sourceId = uploaded.source_id;
+        sourceId = (await readJson(upload, "Nahrání se nezdařilo.")).source_id;
       } catch (error) {
         issues.push(`${item.file.name}: ${error.message}`);
         continue;
@@ -507,7 +499,7 @@ function App() {
             }));
         for (const request of requests) {
           try {
-            const response = await fetch(`${API_URL}/api/generate-batch`, {
+            const response = await apiFetch("/api/generate-batch", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -515,17 +507,7 @@ function App() {
                 settings: { ...settings, ...request },
               }),
             });
-            if (response.status === 401) {
-              window.location.assign("/login");
-              throw new Error("Přihlášení vypršelo.");
-            }
-            const data = await response.json();
-            if (!response.ok)
-              throw new Error(
-                typeof data.detail === "string"
-                  ? data.detail
-                  : "Odeslání se nezdařilo.",
-              );
+            const data = await readJson(response, "Odeslání se nezdařilo.");
             const jobs = data.jobs.map((job) => ({
               ...job,
               source_id: item.id,
@@ -572,18 +554,16 @@ function App() {
     if (!continuing) {
       setSubmittedOutputs(0); setStartedAt(Date.now()); recordsCache.current.clear();
       setSubmissionErrors([]); setBatchResults([]); setJob({...EMPTY_JOB, status: "preparing", message: "Ateliér: odesílání do fronty"});
-      window.localStorage.removeItem("img2img-last-batch");
+      safeStorage.remove("img2img-last-batch");
     }
     restoreRecentAllowed.current = false; setError("");
     let sent = 0;
     const issues = [];
     for (let offset = 0; offset < count; offset += 8) {
       try {
-        const response = await fetch(`${API_URL}/api/atelier-batch`, {method: "POST", headers: {"Content-Type": "application/json"},
+        const response = await apiFetch("/api/atelier-batch", {method: "POST", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({model_ids: modelIds, count: Math.min(8, count - offset), settings: {...settings, seed: (seed + offset) % 4294967296}})});
-        if (response.status === 401) { window.location.assign("/login"); throw new Error("Přihlášení vypršelo."); }
-        const data = await response.json();
-        if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Ateliér: odeslání se nezdařilo.");
+        const data = await readJson(response, "Ateliér: odeslání se nezdařilo.");
         const jobs = data.jobs.map(job => ({...job, source_id: `atelier-${seed}-${job.model_id}-${offset + job.source_index}`, generation_type: "atelier"}));
         const accepted = jobs.reduce((sum, job) => sum + job.expected_images, 0); sent += accepted;
         setActiveJobs(current => [...current, ...jobs]); setSubmittedOutputs(current => current + accepted);
@@ -601,7 +581,7 @@ function App() {
     // The next poll tick sees "cancelled"; images that were already saved stay in the library.
     await Promise.allSettled(
       activeJobs.map((item) =>
-        fetch(`${API_URL}/api/jobs/${item.job_id}/cancel`, { method: "POST" }),
+        apiFetch(`/api/jobs/${item.job_id}/cancel`, { method: "POST" }),
       ),
     );
   }
@@ -618,20 +598,16 @@ function App() {
 
   async function loadLibrary() {
     // Both lists in parallel (they used to run one after the other, doubling the wait).
-    const [libraryResponse, historyResponse] = await Promise.all([fetch(`${API_URL}/api/library`), fetch(`${API_URL}/api/history`)]);
-    const library = await libraryResponse.json();
-    if (!libraryResponse.ok) throw new Error(library.detail || "Library load failed.");
-    if (!historyResponse.ok) throw new Error("Historii se nepodařilo načíst.");
-    const history = await historyResponse.json();
+    const [libraryResponse, historyResponse] = await Promise.all([apiFetch("/api/library"), apiFetch("/api/history")]);
+    const library = await readJson(libraryResponse, "Knihovnu se nepodařilo načíst.");
+    const history = await readJson(historyResponse, "Historii se nepodařilo načíst.");
     galleryFresh.current = true;
     applyGallery(library, history);
     writeCached(GALLERY_CACHE_KEY, { library: { items: cacheableItems(library.items) }, history: { items: cacheableItems(history.items), deleted_ids: history.deleted_ids || [] }, savedAt: Date.now() });
   }
 
   async function saveLibraryItem(itemId) {
-    const response = await fetch(`${API_URL}/api/library/${itemId}`, {method: "POST"});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Uložení se nezdařilo.");
+    const data = await readJson(await apiFetch(`/api/library/${itemId}`, {method: "POST"}), "Uložení se nezdařilo.");
     setLibraryItems((current) => current.some((item) => item.id === itemId) ? current : [data.item, ...current]);
     setResults((current) => current.map((item) => item?.id === itemId ? {...item, saved_to_library: true} : item));
   }
@@ -647,11 +623,7 @@ function App() {
     setResults((current) => current.filter((item) => item?.id !== itemId));
     if (selectedImage?.libraryId === itemId || selectedImage?.id === itemId) setSelectedImage(null);
     try {
-      const response = await fetch(`${API_URL}/api/library/${itemId}`, {method: "DELETE"});
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || "Smazání se nezdařilo.");
-      }
+      await readJson(await apiFetch(`/api/library/${itemId}`, {method: "DELETE"}), "Smazání se nezdařilo.");
     } catch (error) {
       deletedIds.current.delete(itemId);
       const restore = (item, index) => (current) => {
@@ -667,13 +639,12 @@ function App() {
   }
 
   async function reorderLibraryItems(ids) {
-    const response = await fetch(`${API_URL}/api/library/order`, {
+    const response = await apiFetch("/api/library/order", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Library reorder failed.");
+    const data = await readJson(response, "Pořadí knihovny se nepodařilo uložit.");
     const positions = new Map(data.ids.map((id, index) => [id, index]));
     setLibraryItems((current) =>
       [...current].sort(

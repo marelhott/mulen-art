@@ -3,22 +3,23 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-function loadWorker({ stored = new Map(), fetchImpl, failStorage = false } = {}) {
+function loadWorker({ stored = new Map(), fetchImpl, failStorage = false, names = [] } = {}) {
+  const deleted = [];
   const listeners = {};
   const cache = {
-    match: async (request) => stored.get(request.url),
-    put: async (request, response) => { stored.set(request.url, response); },
+    match: async (request) => stored.get(typeof request === "string" ? request : request.url),
+    put: async (request, response) => { stored.set(typeof request === "string" ? request : request.url, response); },
     keys: async () => [...stored.keys()].map((url) => ({ url })),
     delete: async (key) => stored.delete(key.url),
   };
   const context = {
     self: { location: { origin: "https://app.test" }, addEventListener: (type, fn) => { listeners[type] = fn; }, skipWaiting() {}, clients: { claim: async () => {} } },
-    caches: { open: async () => { if (failStorage) throw new Error("denied"); return cache; } },
+    caches: { open: async () => { if (failStorage) throw new Error("denied"); return cache; }, keys: async () => [...(names || [])], delete: async (name) => { deleted.push(name); return true; } },
     fetch: fetchImpl,
     URL,
   };
   vm.runInNewContext(readFileSync(new URL("../public/sw.js", import.meta.url), "utf8"), context);
-  return { listeners, stored };
+  return { listeners, stored, deleted };
 }
 
 async function dispatch(worker, url, method = "GET") {
@@ -59,4 +60,26 @@ test("service worker stores only real image responses and ignores everything els
 test("service worker falls back to the network when Cache Storage is unavailable", async () => {
   const worker = loadWorker({ failStorage: true, fetchImpl: async () => "from-network" });
   assert.equal((await dispatch(worker, "https://app.test/thumb/f.webp")).result, "from-network");
+});
+
+test("service worker ignores the retry query so a retried image is not cached twice", async () => {
+  const worker = loadWorker({ fetchImpl: async () => imageResponse() });
+  await dispatch(worker, "https://app.test/thumb/g.webp?retry=1");
+  await dispatch(worker, "https://app.test/thumb/g.webp?retry=2");
+  assert.deepEqual([...worker.stored.keys()], ["https://app.test/thumb/g.webp"]);
+});
+
+test("service worker drops its caches when the server answers 401", async () => {
+  const worker = loadWorker({ fetchImpl: async () => imageResponse(401, "text/plain") });
+  await dispatch(worker, "https://app.test/library/h.png");
+  assert.equal(worker.stored.size, 0);
+  assert.deepEqual(worker.deleted.sort(), ["img2img-full-v2", "img2img-thumbs-v2"]);
+});
+
+test("service worker removes caches from older versions on activate", async () => {
+  const worker = loadWorker({ names: ["img2img-media-v1", "img2img-thumbs-v2", "other-app"], fetchImpl: async () => imageResponse() });
+  const pending = [];
+  worker.listeners.activate({ waitUntil: (promise) => pending.push(promise) });
+  await Promise.all(pending);
+  assert.deepEqual(worker.deleted, ["img2img-media-v1"]);
 });

@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from "react";
+import React, {useEffect, useRef, useState} from "react";
 import {
   Check,
   Sparkles,
@@ -6,7 +6,7 @@ import {
 import { Label, Range, Select } from "./controls";
 import { CheckpointPicker } from "./CheckpointPicker";
 import { idsForSource } from "../studioTools";
-import { API_URL } from "../api";
+import { API_URL, apiFetch, readJson } from "../api";
 
 function AtelierPhotoPicker({atelier, update}) {
   const collection = atelier.photoCollection || "malba";
@@ -21,23 +21,27 @@ function AtelierPhotoPicker({atelier, update}) {
     image.src = `${API_URL}/atelier-photo/${atelier.photoId}`;
     return () => { image.onload = null; };
   }, [atelier.photoId]);
+  // Bumped whenever the collection changes so a slow "load more" of the old collection is ignored.
+  const collectionVersion = useRef(0);
   useEffect(() => {
     let cancelled = false;
+    collectionVersion.current += 1;
     setStatus("loading");
-    fetch(`${API_URL}/api/atelier/photos?collection=${collection}&offset=0&limit=48`, {cache: "no-store"})
-      .then(response => response.ok ? response.json() : response.json().then(data => Promise.reject(new Error(data.detail || "Fotky se nepodařilo načíst."))))
+    apiFetch(`/api/atelier/photos?collection=${collection}&offset=0&limit=48`, {cache: "no-store"})
+      .then(response => readJson(response, "Fotky se nepodařilo načíst."))
       .then(data => {if (!cancelled) {setPage(data); setStatus("ready");}})
       .catch(error => {if (!cancelled) {setStatus(error.message || "Fotky se nepodařilo načíst."); setPage({items: [], count: 0, has_more: false});}});
     return () => {cancelled = true;};
   }, [collection]);
   async function loadMore() {
+    const version = collectionVersion.current;
     setStatus("loading-more");
     try {
-      const response = await fetch(`${API_URL}/api/atelier/photos?collection=${collection}&offset=${page.items.length}&limit=48`, {cache: "no-store"});
-      if (!response.ok) throw new Error("Další fotky se nepodařilo načíst.");
-      const next = await response.json();
+      const response = await apiFetch(`/api/atelier/photos?collection=${collection}&offset=${page.items.length}&limit=48`, {cache: "no-store"});
+      const next = await readJson(response, "Další fotky se nepodařilo načíst.");
+      if (version !== collectionVersion.current) return; // the collection changed while this page was loading
       setPage(current => ({...next, items: [...current.items, ...next.items]})); setStatus("ready");
-    } catch (error) {setStatus(error.message);}
+    } catch (error) {if (version === collectionVersion.current) setStatus(error.message);}
   }
   const selected = atelier.photoId || "";
   return <div className="atelier-photo-picker">

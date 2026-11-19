@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { API_URL } from "./api";
+import { apiFetch, readJson } from "./api";
 import { etaLabel, EXPIRED_NOTICE, keepUnexpired } from "./studioTools";
 
 export const POLL_INTERVAL = 1500;
@@ -13,21 +13,22 @@ export const EMPTY_JOB = {
   error: null,
 };
 
+// localStorage throws in private mode or when blocked; it is only a convenience, never required.
+function storage(action) {
+  try { return action(window.localStorage); } catch { return null; }
+}
+
 // Jobs still running when the page closed (or the last finished batch) come back from localStorage.
 export function loadStoredJobs() {
   try {
-    const saved = JSON.parse(
-      window.localStorage.getItem("img2img-active-jobs") || "[]",
-    );
+    const saved = JSON.parse(storage((store) => store.getItem("img2img-active-jobs")) || "[]");
     if (Array.isArray(saved) && saved.length) return saved;
-    const legacy = window.localStorage.getItem("img2img-active-job");
+    const legacy = storage((store) => store.getItem("img2img-active-job"));
     if (legacy)
       return [
         { job_id: legacy, source_name: "Input image", expected_images: 1 },
       ];
-    const lastBatch = JSON.parse(
-      window.localStorage.getItem("img2img-last-batch") || "[]",
-    );
+    const lastBatch = JSON.parse(storage((store) => store.getItem("img2img-last-batch")) || "[]");
     return Array.isArray(lastBatch) ? lastBatch : [];
   } catch {
     return [];
@@ -43,6 +44,8 @@ export function useJobs({
     if (!activeJobs.length) return undefined;
     let cancelled = false;
     let timer;
+    // A new batch chunk restarts this effect; the previous in-flight poll must not keep running beside it.
+    const controller = new AbortController();
     const known = recordsCache.current;
     const poll = async () => {
       // One bulk request per tick instead of one poll per job.
@@ -55,14 +58,8 @@ export function useJobs({
       for (let offset = 0; offset < pending.length && !failure; offset += 200) {
         const ids = pending.slice(offset, offset + 200).map((item) => item.job_id).join(",");
         try {
-          const response = await fetch(`${API_URL}/api/jobs?ids=${ids}`);
-          if (response.status === 401) {
-            window.location.assign("/login");
-            throw new Error("Sign in required");
-          }
-          const data = await response.json();
-          if (!response.ok)
-            throw new Error(data.detail || "Connection interrupted");
+          const response = await apiFetch(`/api/jobs?ids=${ids}`, { signal: controller.signal });
+          const data = await readJson(response, "Spojení přerušeno.");
           Object.assign(fetched, data.jobs);
         } catch (error) {
           failure = error;
@@ -114,7 +111,7 @@ export function useJobs({
       const failed = records.filter((record) => record.status === "failed" && !record.expired);
       const logs = records
         .flatMap((record) => record.logs || [])
-        .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+        .sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")))
         .slice(-10);
       const ready = slots.filter(Boolean);
       // New outputs stay on the canvas until explicitly saved; the library is refetched after the batch.
@@ -124,12 +121,18 @@ export function useJobs({
         const ids = new Set(ready.map((item) => item.id));
         return [...slots, ...current.filter((item) => item && !ids.has(item.id))].filter((item) => !item || !deletedIds.current.has(item.id));
       });
-      const progress =
-        records.reduce(
-          (sum, record) =>
-            sum + (record.status === "completed" ? 1 : record.progress || 0),
-          0,
-        ) / Math.max(records.length, plannedCount.current);
+      // Progress is weighed in images (a job carries up to 8), jobs are counted as jobs.
+      const weights = records.map((_, index) => activeJobs[index].expected_images || 1);
+      const submittedImages = weights.reduce((sum, weight) => sum + weight, 0);
+      const totalImages = Math.max(submittedImages, plannedCount.current, 1);
+      const progress = records.reduce(
+        (sum, record, index) =>
+          sum + weights[index] * (["completed", "failed", "cancelled"].includes(record.status) ? 1 : record.progress || 0),
+        0,
+      ) / totalImages;
+      const averageImagesPerJob = records.length ? submittedImages / records.length : 1;
+      const notSubmittedJobs = Math.ceil(Math.max(0, plannedCount.current - submittedImages) / Math.max(1, averageImagesPerJob));
+      const totalJobs = records.length + notSubmittedJobs;
       setJob({
         ...EMPTY_JOB,
         status:
@@ -165,8 +168,8 @@ export function useJobs({
                 .sort()
                 .at(-1)
             : null,
-        message: [`${ready.length}/${Math.max(slots.length, plannedCount.current)} obrázků · ${finished}/${Math.max(records.length, plannedCount.current)} úloh hotovo`,
-          etaLabel({remainingJobs: Math.max(records.length, plannedCount.current) - finished, averageSeconds: averageSeconds?.current}), latest].filter(Boolean).join(" · "),
+        message: [`${ready.length}/${Math.max(slots.length, plannedCount.current)} obrázků · ${finished}/${totalJobs} úloh hotovo`,
+          etaLabel({remainingJobs: totalJobs - finished, averageSeconds: averageSeconds?.current}), latest].filter(Boolean).join(" · "),
       });
       const issues = [
         ...submissionErrors,
@@ -177,10 +180,7 @@ export function useJobs({
         issues.push("Spojení přerušeno, kontrolu opakuji.");
       setError(issues.join(" · "));
       if (finished === records.length && !submitting.current) {
-        window.localStorage.setItem(
-          "img2img-last-batch",
-          JSON.stringify(keepUnexpired(activeJobs, records)),
-        );
+        storage((store) => store.setItem("img2img-last-batch", JSON.stringify(keepUnexpired(activeJobs, records))));
         setActiveJobs([]);
         loadLibrary().catch(() => {});
         onBatchFinished?.();
@@ -189,17 +189,16 @@ export function useJobs({
     poll();
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [activeJobs, submissionErrors]);
 
   useEffect(() => {
-    if (activeJobs.length)
-      window.localStorage.setItem(
-        "img2img-active-jobs",
-        JSON.stringify(activeJobs),
-      );
-    else window.localStorage.removeItem("img2img-active-jobs");
-    window.localStorage.removeItem("img2img-active-job");
+    storage((store) => {
+      if (activeJobs.length) store.setItem("img2img-active-jobs", JSON.stringify(activeJobs));
+      else store.removeItem("img2img-active-jobs");
+      store.removeItem("img2img-active-job");
+    });
   }, [activeJobs]);
 }
