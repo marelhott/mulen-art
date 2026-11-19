@@ -80,6 +80,37 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(sync_images.migrate(old)["x.json"]["status"], "downloaded")
         self.assertEqual(sync_images.migrate(old)["y.json"]["status"], "skip")
 
+    def test_corrupt_state_is_set_aside_and_state_is_written_atomically(self):
+        self.volume.put("a.png", b"x", 1); self.volume.put("a.json", record("a.png"), 1)
+        self.dest.mkdir(parents=True)
+        (self.dest / ".sync-state.json").write_text('{"a.json": {"stat')
+        self.assertEqual(self.run_sync()["downloaded"], 1)
+        self.assertTrue((self.dest / ".sync-state.corrupt").exists())
+        self.assertIsInstance(json.loads((self.dest / ".sync-state.json").read_text()), dict)
+        self.assertEqual(list(self.dest.glob("*.tmp")), [])
+
+    def test_network_errors_are_retried_not_remembered_as_skipped(self):
+        self.volume.put("a.png", b"x", 1); self.volume.put("a.json", record("a.png"), 1)
+        real = self.volume.read_file
+        def flaky(path):
+            raise OSError("network down")
+        self.volume.read_file = flaky
+        self.assertEqual(self.run_sync()["downloaded"], 0)
+        self.volume.read_file = real
+        self.assertEqual(self.run_sync()["downloaded"], 1)  # the record was looked at again
+
+    def test_path_traversal_in_a_record_is_ignored_and_a_failing_trash_never_deletes(self):
+        self.volume.put("evil.json", record("../../escape.png"), 1); self.volume.put("../../escape.png", b"x", 1)
+        self.assertEqual(self.run_sync()["downloaded"], 0)
+        self.assertFalse((self.dest.parent / "escape.png").exists())
+        self.volume.put("a.png", b"x", 2); self.volume.put("a.json", record("a.png"), 2)
+        self.run_sync()
+        self.volume.put("a.json", record("a.png", deleted=True), 3)
+        def broken_trash(path):
+            raise OSError("no trash")
+        sync_images.sync(self.dest, self.volume, trash=broken_trash)
+        self.assertTrue((self.dest / "Plátno" / "a.png").exists())  # kept, not unlinked
+
 
 if __name__ == "__main__":
     unittest.main()

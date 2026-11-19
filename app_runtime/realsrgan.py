@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -11,7 +13,42 @@ MODEL_URL = (
     "003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth"
 )
 MODEL_SHA256 = "b9afb61e65e04eb7f8aba5095d070bbe9af28df76acd0c9405aeb33b814bcfc6"
-MODEL_PATH = Path("/tmp/swinir-realsr-gan-x4.pth")
+DOWNLOAD_TIMEOUT_SECONDS = 60
+
+
+def cache_dir() -> Path:
+    """Checkpoints live on the persistent models Volume when there is one, so a cold start does not download them."""
+    configured = os.getenv("UPSCALER_CACHE_DIR")
+    if configured:
+        return Path(configured)
+    return Path("/models/upscalers") if Path("/models").is_dir() else Path(tempfile.gettempdir())
+
+
+def download_checked(url: str, path: Path, sha256: str, label: str) -> Path:
+    """Fetch `url` to `path` unless a file with the right checksum is already there. The request has a timeout."""
+    if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == sha256:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".download")
+    digest = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response, temporary.open("wb") as handle:
+            for chunk in iter(lambda: response.read(1 << 20), b""):
+                digest.update(chunk)
+                handle.write(chunk)
+        if digest.hexdigest() != sha256:
+            raise RuntimeError(f"{label} checkpoint checksum mismatch")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
+
+
+def release() -> None:
+    """Drop the GPU copies (called when an SDXL pipeline is evicted so VRAM is really free for the next one)."""
+    global _MODEL, _REAL_MODEL
+    _MODEL = _REAL_MODEL = None
+
 TILE = 256
 HALO = 32
 _MODEL = None
@@ -26,17 +63,8 @@ def _load_model():
     import torch
     from spandrel import ModelLoader
 
-    if not MODEL_PATH.exists() or hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest() != MODEL_SHA256:
-        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        temporary = MODEL_PATH.with_suffix(".download")
-        urllib.request.urlretrieve(MODEL_URL, temporary)
-        digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
-        if digest != MODEL_SHA256:
-            temporary.unlink(missing_ok=True)
-            raise RuntimeError("SwinIR Real-SR GAN checkpoint checksum mismatch")
-        temporary.replace(MODEL_PATH)
-
-    checkpoint = torch.load(MODEL_PATH, map_location="cpu", weights_only=True)
+    model_path = download_checked(MODEL_URL, cache_dir() / "swinir-realsr-gan-x4.pth", MODEL_SHA256, "SwinIR Real-SR GAN")
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
     model = ModelLoader().load_from_state_dict(checkpoint)
     if getattr(model, "scale", None) != 4:
         raise RuntimeError("Unexpected SwinIR Real-SR GAN scale")
@@ -53,14 +81,7 @@ def _load_real_model():
     from spandrel import ModelLoader
     url = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth'
     sha256 = '4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1'
-    path = Path('/tmp/RealESRGAN_x4plus.pth')
-    if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != sha256:
-        temp = path.with_suffix('.download')
-        urllib.request.urlretrieve(url, temp)
-        if hashlib.sha256(temp.read_bytes()).hexdigest() != sha256:
-            temp.unlink(missing_ok=True)
-            raise RuntimeError('Real-ESRGAN checkpoint checksum mismatch')
-        temp.replace(path)
+    path = download_checked(url, cache_dir() / 'RealESRGAN_x4plus.pth', sha256, 'Real-ESRGAN')
     checkpoint = torch.load(path, map_location='cpu', weights_only=True)
     model = ModelLoader().load_from_state_dict(checkpoint)
     if getattr(model, 'scale', None) != 4:

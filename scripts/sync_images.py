@@ -9,40 +9,71 @@ New images are downloaded within seconds; an image you delete in the app is move
   .venv/bin/python scripts/sync_images.py            one pass
   .venv/bin/python scripts/sync_images.py --watch    keep running (what the LaunchAgent does)
 """
-import argparse, json, os, shutil, sys, tempfile, time
-from concurrent.futures import ThreadPoolExecutor
+import argparse, json, os, re, shutil, sys, tempfile, time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime
 from pathlib import Path
 
 DEFAULT_DEST = Path.home() / "Pictures" / "Mulen art"
 FOLDERS = {"canvas": "Plátno", "atelier": "Atelier"}
 VOLUME = "img2img-outputs"
+READ_TIMEOUT_SECONDS = 120
+SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+_READER = ThreadPoolExecutor(max_workers=16, thread_name_prefix="volume-read")
+
+
+class TransientError(Exception):
+    """A network/Volume failure: nothing was learned about the record, so it must be looked at again."""
 
 
 def classify(record):
     return "atelier" if (record.get("settings") or {}).get("generation_type") == "atelier" else "canvas"
 
 
-def read_bytes(volume, path):
-    return b"".join(volume.read_file(path))
+def read_bytes(volume, path, timeout=READ_TIMEOUT_SECONDS):
+    """Read a Volume file; the Modal call has no timeout of its own, so bound it here."""
+    future = _READER.submit(lambda: b"".join(volume.read_file(path)))
+    try:
+        return future.result(timeout=timeout)
+    except FutureTimeout as exc:
+        raise TransientError(f"timed out reading {path}") from exc
 
 
 def to_trash(path, trash=Path.home() / ".Trash"):
-    """Move to the macOS Trash (recoverable); fall back to deleting only if the Trash is unavailable."""
-    try:
-        trash.mkdir(exist_ok=True)
-        target = trash / path.name
-        if target.exists():
-            target = trash / f"{path.stem}-{int(time.time())}{path.suffix}"
-        shutil.move(str(path), str(target))
-    except OSError:
-        path.unlink(missing_ok=True)
+    """Move to the macOS Trash (recoverable). Never deletes for good: if the Trash is unavailable this raises
+    and the file stays where it is (the next pass tries again)."""
+    trash.mkdir(exist_ok=True)
+    target = trash / path.name
+    if target.exists():
+        target = trash / f"{path.stem}-{int(time.time())}{path.suffix}"
+    shutil.move(str(path), str(target))
 
 
 def migrate(state):
     """Older state files stored just the relative path per record."""
     return {name: (value if isinstance(value, dict) else {"status": "downloaded" if value.endswith((".png", ".webp")) else "skip", "path": value, "mtime": None})
             for name, value in state.items()}
+
+
+TRANSIENT = object()
+
+
+def load_state(path):
+    """A truncated or corrupt state file must not stop every later run: set it aside and start over
+    (files already on disk are recognised, so nothing is downloaded twice)."""
+    if not path.exists():
+        return {}
+    try:
+        return migrate(json.loads(path.read_text()))
+    except (ValueError, AttributeError):
+        path.replace(path.with_suffix(".corrupt"))
+        return {}
+
+
+def save_state(path, state):
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False))
+    os.replace(temporary, path)  # atomic: a crash mid-write cannot leave half a JSON document
 
 
 def sync(dest, volume=None, trash=to_trash, now=None):
@@ -54,16 +85,21 @@ def sync(dest, volume=None, trash=to_trash, now=None):
     for folder in FOLDERS.values():
         (dest / folder).mkdir(parents=True, exist_ok=True)
     state_path = dest / ".sync-state.json"
-    state = migrate(json.loads(state_path.read_text())) if state_path.exists() else {}
+    state = load_state(state_path)
     # A record needs a look when it is new or was rewritten (saved, deleted, restored) since we last saw it.
     changed = [name for name, entry in entries.items() if name.endswith(".json") and (name not in state or state[name].get("mtime") != entry.mtime)]
 
     def load(name):
         try:
-            record = json.loads(read_bytes(volume, name))
-            return name, record if isinstance(record, dict) and record.get("filename") else None
+            raw = read_bytes(volume, name)
         except Exception:
-            return name, None
+            return name, TRANSIENT  # network trouble says nothing about the record: look again next pass
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            return name, None  # genuinely not a usable record
+        valid = isinstance(record, dict) and isinstance(record.get("filename"), str) and SAFE_NAME.fullmatch(record["filename"]) and ".." not in record["filename"]
+        return name, record if valid else None
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         loaded = list(pool.map(load, changed))
@@ -71,12 +107,18 @@ def sync(dest, volume=None, trash=to_trash, now=None):
     for name, record in loaded:
         mtime = entries[name].mtime
         previous = state.get(name, {})
+        if record is TRANSIENT:
+            continue
         if record is None:
             state[name] = {"status": "skip", "path": None, "mtime": mtime}
         elif record.get("deleted"):
             local = previous.get("path") and dest / previous["path"]
             if previous.get("status") == "downloaded" and local and local.exists():
-                trash(local)
+                try:
+                    trash(local)
+                except OSError as exc:  # keep the file and the old state: retried on the next pass
+                    print("could not move to the Trash:", local, exc, file=sys.stderr, flush=True)
+                    continue
                 report["removed"] += 1
             state[name] = {"status": "deleted", "path": previous.get("path"), "mtime": mtime}
         elif record["filename"] in entries:  # the image can land a moment after its record
@@ -87,11 +129,17 @@ def sync(dest, volume=None, trash=to_trash, now=None):
         target = dest / FOLDERS[classify(record)] / record["filename"]
         fresh = False
         if not target.exists() and state.get(name, {}).get("status") != "downloaded":
-            data = read_bytes(volume, record["filename"])
+            try:
+                data = read_bytes(volume, record["filename"])
+            except Exception:
+                return name, None, False  # try again next pass
             fd, temporary = tempfile.mkstemp(dir=target.parent, suffix=".part")
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-            os.replace(temporary, target)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                os.replace(temporary, target)
+            finally:
+                Path(temporary).unlink(missing_ok=True)  # no stray .part files after a failed write
             fresh = True
             try:
                 stamp = datetime.fromisoformat(record["created_at"]).timestamp()
@@ -102,9 +150,11 @@ def sync(dest, volume=None, trash=to_trash, now=None):
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         for name, entry, fresh in pool.map(fetch, downloads):
+            if entry is None:
+                continue
             state[name] = entry
             report["downloaded"] += int(fresh)
-    state_path.write_text(json.dumps(state, ensure_ascii=False))
+    save_state(state_path, state)
     return report
 
 

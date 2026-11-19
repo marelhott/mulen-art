@@ -1,8 +1,5 @@
 """Optional Restormer deblurring, processed in overlapping-context tiles."""
-import hashlib
 import math
-import urllib.request
-from pathlib import Path
 
 MODELS = {
     'motion': ('motion_deblurring.pt', 'e17e1875586051988d70ba4dbcf5dc6ae55f7e541c3db10e5c1c021385d220b1'),
@@ -16,16 +13,15 @@ def _model(mode):
     if mode in _MODELS:
         return _MODELS[mode]
     filename, expected = MODELS[mode]
-    path = Path('/tmp') / filename
-    if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-        temp = path.with_suffix('.download')
-        urllib.request.urlretrieve('https://huggingface.co/spaces/swzamir/Restormer/resolve/main/' + filename, temp)
-        if hashlib.sha256(temp.read_bytes()).hexdigest() != expected:
-            temp.unlink(missing_ok=True)
-            raise RuntimeError('Restormer checkpoint checksum mismatch')
-        temp.replace(path)
+    from .realsrgan import cache_dir, download_checked
+    path = download_checked('https://huggingface.co/spaces/swzamir/Restormer/resolve/main/' + filename, cache_dir() / filename, expected, 'Restormer')
     _MODELS[mode] = torch.jit.load(str(path), map_location='cpu').eval().cuda()
     return _MODELS[mode]
+
+
+def release():
+    """Drop the GPU copies (called when an SDXL pipeline is evicted)."""
+    _MODELS.clear()
 
 
 def deblur(image, mode):

@@ -14,8 +14,10 @@ if path.exists():
     current = json.loads(path.read_text())
     if "APP_PASSWORD" in current and "STUDIO_PASSWORD" not in current:
         # The old default monthly cap was never applied in production; leaving it out keeps "no limit".
+        # Other keys (budgets and so on) are kept; only the legacy cap that was never applied is dropped.
+        extras = {key: value for key, value in current.items() if key not in {"APP_USERNAME", "APP_PASSWORD", "MONTHLY_IMAGE_LIMIT"}}
         migrated = {"STUDIO_USERNAME": current.get("APP_USERNAME", "studio"),
-                    "STUDIO_PASSWORD": current["APP_PASSWORD"]}
+                    "STUDIO_PASSWORD": current["APP_PASSWORD"], **extras}
         path.write_text(json.dumps(migrated, indent=2))
         os.chmod(path, 0o600)
 else:

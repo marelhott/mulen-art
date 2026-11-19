@@ -382,6 +382,17 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     )
 
 
+def release_upscalers() -> None:
+    """The optional restoration models stay on the GPU between jobs; free them whenever a pipeline is evicted
+    so a large SDXL checkpoint never has to share a 24 GB card with them."""
+    try:
+        from . import realsrgan, restormer
+        realsrgan.release()
+        restormer.release()
+    except Exception:
+        pass
+
+
 def ensure_pipeline(model_id: str, resident: int = 1):
     resident = max(1, resident)
     cached = PIPELINES.pop(model_id, None)
@@ -390,6 +401,7 @@ def ensure_pipeline(model_id: str, resident: int = 1):
         set_vae_tiling(cached, True)  # a request that switched tiling off must not leak into the next one
         while len(PIPELINES) > resident:
             PIPELINES.pop(next(iter(PIPELINES)))
+            release_upscalers()
             clear_cuda()
         return cached
 
@@ -397,6 +409,7 @@ def ensure_pipeline(model_id: str, resident: int = 1):
 
     while PIPELINES and len(PIPELINES) >= resident:
         PIPELINES.pop(next(iter(PIPELINES)))
+        release_upscalers()
         clear_cuda()
 
     torch = get_torch()

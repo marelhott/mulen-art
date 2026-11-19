@@ -21,7 +21,7 @@ def main():
     args = parser.parse_args()
     credentials = json.loads((ROOT / ".modal-app-credentials.json").read_text())
     started = time.monotonic()
-    with httpx.Client(base_url=args.url.rstrip("/"), auth=(credentials["APP_USERNAME"], credentials["APP_PASSWORD"]), timeout=90) as client:
+    with httpx.Client(base_url=args.url.rstrip("/"), auth=(credentials.get("STUDIO_USERNAME") or credentials["APP_USERNAME"], credentials.get("STUDIO_PASSWORD") or credentials["APP_PASSWORD"]), timeout=90) as client:
         response = client.post("/api/generate", json={
             "image_base64": base64.b64encode(args.image.read_bytes()).decode(),
             "model_id": args.model, "lora_id": args.lora, "lora_strength": 0.8,
