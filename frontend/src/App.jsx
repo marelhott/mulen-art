@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
-import { GALLERY_CACHE_KEY, cacheableItems, readCached, writeCached } from "./galleryCache";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { randomId, safeStorage } from "./shared";
+import { usePresets } from "./usePresets";
+import { useGallery } from "./useGallery";
+import { useServerOptions } from "./useServerOptions";
 import { apiFetch, buildImageUrl, readJson, reconcileOptionIds } from "./api";
 
-const PRESET_STORAGE_KEY = "img2img-presets-v1";
 const DEFAULT_ENGINE = { mode: "quick", conditioningMode: "style", sampler: "dpmpp_2m_sde", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
 
 function fileToBase64(file) {
@@ -18,26 +19,8 @@ function fileToBase64(file) {
   });
 }
 
-function loadStoredPresets() {
-  try {
-    const raw = safeStorage.get(PRESET_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredPresets(presets) {
-  safeStorage.set(PRESET_STORAGE_KEY, JSON.stringify(presets));
-}
-
 function App() {
-  const [archives, setArchives] = useState([]);
-  const [gpuHourlyUsd, setGpuHourlyUsd] = useState(null);
   const [usage, setUsage] = useState(null);
-  const [optionsRevision, setOptionsRevision] = useState(0);
-  const [archiveStatus, setArchiveStatus] = useState("loading");
   const [variants, setVariants] = useState(() => {
     try { return {...DEFAULT_VARIANTS, ...JSON.parse(safeStorage.get(VARIANTS_STORAGE_KEY) || "{}"), enabled: false}; }
     catch { return DEFAULT_VARIANTS; }
@@ -45,17 +28,11 @@ function App() {
   useEffect(() => {
     safeStorage.set(VARIANTS_STORAGE_KEY, JSON.stringify(variants));
   }, [variants]);
-  const [serverModels, setServerModels] = useState([]);
   // Checkpoint mixes live in the browser; each one is fully described by its id, so there is nothing to sync.
   const [mixIds, setMixIds] = useState(() => {
     try { const saved = JSON.parse(safeStorage.get(MIX_STORAGE_KEY) || "[]"); return Array.isArray(saved) ? saved.filter(isMixId) : []; }
     catch { return []; }
   });
-  const models = useMemo(
-    () => [...serverModels, ...mixIds.map((id) => mixEntry(id, serverModels)).filter(Boolean)],
-    [serverModels, mixIds],
-  );
-  const [loras, setLoras] = useState([]);
   const [inputItems, setInputItems] = useState([]);
   const restoreRecentAllowed = useRef(true);
   const inputUrls = useRef(new Set());
@@ -67,7 +44,6 @@ function App() {
   const [submittedOutputs, setSubmittedOutputs] = useState(0);
   const [startedAt, setStartedAt] = useState(null);
   const recordsCache = useRef(new Map());
-  const deletedIds = useRef(new Set());
   const previewUrl = inputItems[0]?.url || "";
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
   const [resizeScale, setResizeScale] = useState(2);
@@ -86,22 +62,30 @@ function App() {
     sampler: "dpmpp_2m", schedule: "karras"});
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
+  const { archives, gpuHourlyUsd, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
+    onModels: (data) => setSelectedModelIds(current => reconcileOptionIds(current,
+      [...data, ...current.filter(id => mixEntry(id, data)).map(id => ({id}))],
+      data.find(item => item.kind !== "base")?.id)),
+    onLoras: (data) => setLoraId(current => reconcileOptionIds([current], data)[0]),
+  });
+  const models = useMemo(
+    () => [...serverModels, ...mixIds.map((id) => mixEntry(id, serverModels)).filter(Boolean)],
+    [serverModels, mixIds],
+  );
   const [numImages, setNumImages] = useState(2);
   const [denoise, setDenoise] = useState(0.52);
   const [cfg, setCfg] = useState(5);
   const [steps, setSteps] = useState(28);
   const [engine, setEngine] = useState(DEFAULT_ENGINE);
-  const [results, setResults] = useState([]);
   const [batchResults, setBatchResults] = useState([]);
-  const [libraryItems, setLibraryItems] = useState([]);
+  const { results, setResults, libraryItems, setLibraryItems, deletedIds, loadLibrary } = useGallery();
   const [selectedImage, setSelectedImage] = useState(null);
-  const [presets, setPresets] = useState([]);
-  const [presetName, setPresetName] = useState("");
-  const [selectedPresetId, setSelectedPresetId] = useState("");
   const [error, setError] = useState("");
   const [submissionErrors, setSubmissionErrors] = useState([]);
   const [job, setJob] = useState(EMPTY_JOB);
   const [activeJobs, setActiveJobs] = useState(loadStoredJobs);
+  const { presets, presetName, setPresetName, selectedPresetId, handlePresetSelect, handleSavePreset, handleDeletePreset } =
+    usePresets({ buildPayload: buildPresetPayload, applyPreset, setError });
 
   useEffect(() => {
     const next = new Set(inputItems.map((item) => item.url));
@@ -118,10 +102,6 @@ function App() {
   );
 
   useEffect(() => {
-    setPresets(loadStoredPresets());
-  }, []);
-
-  useEffect(() => {
     if (!previewUrl) return;
     const probe = new window.Image();
     probe.onload = () =>
@@ -132,54 +112,6 @@ function App() {
     };
   }, [previewUrl]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let retry;
-    setArchiveStatus("loading");
-    apiFetch("/api/options", {cache: "no-store"})
-      .then((response) => readJson(response, "Možnosti nelze načíst."))
-      .then((data) => {
-        if (cancelled) return;
-        setArchives(data.archives || []);
-        setGpuHourlyUsd(data.gpu_hourly_usd ?? null);
-        setArchiveStatus(data.archives?.length ? "ready" : "error");
-        if (data.models?.length) {
-          setServerModels(data.models);
-          setSelectedModelIds(current => reconcileOptionIds(current,
-            [...data.models, ...current.filter(id => mixEntry(id, data.models)).map(id => ({id}))],
-            data.models.find(item => item.kind !== "base")?.id));
-        }
-        if (data.loras?.length) {
-          setLoras(data.loras);
-          setLoraId(current => reconcileOptionIds([current], data.loras)[0]);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {setArchiveStatus("error"); retry = setTimeout(() => setOptionsRevision(v => v + 1), 5000);}
-      });
-    return () => {cancelled = true; clearTimeout(retry);};
-  }, [optionsRevision]);
-
-  const galleryFresh = useRef(false);
-  // Keep the stored snapshot in step with what the user does (save, delete, new results), debounced.
-  useEffect(() => {
-    if (!galleryFresh.current) return undefined;
-    const timer = window.setTimeout(() => {
-      writeCached(GALLERY_CACHE_KEY, {
-        library: { items: cacheableItems(libraryItems) },
-        history: { items: cacheableItems(results), deleted_ids: [...deletedIds.current] },
-        savedAt: Date.now(),
-      });
-    }, 1500);
-    return () => window.clearTimeout(timer);
-  }, [libraryItems, results]);
-  useEffect(() => {
-    // Instant start: show the last known gallery from the browser while the server (possibly cold) answers.
-    readCached(GALLERY_CACHE_KEY).then((cached) => {
-      if (cached && !galleryFresh.current) applyGallery(cached.library, cached.history);
-    });
-    loadLibrary().catch(() => {});
-  }, []);
 
   useEffect(() => {
     safeStorage.set(MIX_STORAGE_KEY, JSON.stringify(mixIds));
@@ -352,48 +284,6 @@ function App() {
     setEngine({...DEFAULT_ENGINE, ...(preset.engine || {}), mode: "quick", maxSide: 1536});
     setInputScale(Number(preset.inputScale ?? 1));
     setResizeScale(Math.min(preset.engine?.mode === "detail" ? 2 : 4, Number(preset.resizeScale ?? 2)));
-  }
-
-  function handlePresetSelect(event) {
-    const nextId = event.target.value;
-    setSelectedPresetId(nextId);
-    const preset = presets.find((item) => item.id === nextId);
-    if (!preset) return;
-    setPresetName(preset.name);
-    applyPreset(preset);
-  }
-
-  function handleSavePreset() {
-    const name = presetName.trim();
-    if (!name) {
-      setError("Preset name required.");
-      return;
-    }
-
-    const existing = presets.find(
-      (item) => item.name.toLowerCase() === name.toLowerCase(),
-    );
-    const nextPreset = {
-      id: existing?.id || randomId(),
-      name,
-      ...buildPresetPayload(),
-    };
-    const nextPresets = existing
-      ? presets.map((item) => (item.id === existing.id ? nextPreset : item))
-      : [nextPreset, ...presets];
-    setPresets(nextPresets);
-    setSelectedPresetId(nextPreset.id);
-    saveStoredPresets(nextPresets);
-    setError("");
-  }
-
-  function handleDeletePreset() {
-    if (!selectedPresetId) return;
-    const nextPresets = presets.filter((item) => item.id !== selectedPresetId);
-    setPresets(nextPresets);
-    saveStoredPresets(nextPresets);
-    setSelectedPresetId("");
-    setPresetName("");
   }
 
   function handleFileChange(event) {
@@ -602,26 +492,6 @@ function App() {
     );
   }
 
-  // Shows a gallery snapshot (cached or fresh): library list, history list and deleted ids.
-  function applyGallery(library, history) {
-    for (const id of history?.deleted_ids || []) deletedIds.current.add(id);
-    setLibraryItems((library?.items || []).filter((item) => !deletedIds.current.has(item.id)));
-    setResults((current) => {
-      const ids = new Set(current.filter(Boolean).map((item) => item.id));
-      return [...current, ...(history?.items || []).filter((item) => !ids.has(item.id))].filter((item) => !item || !deletedIds.current.has(item.id));
-    });
-  }
-
-  async function loadLibrary() {
-    // Both lists in parallel (they used to run one after the other, doubling the wait).
-    const [libraryResponse, historyResponse] = await Promise.all([apiFetch("/api/library"), apiFetch("/api/history")]);
-    const library = await readJson(libraryResponse, "Knihovnu se nepodařilo načíst.");
-    const history = await readJson(historyResponse, "Historii se nepodařilo načíst.");
-    galleryFresh.current = true;
-    applyGallery(library, history);
-    writeCached(GALLERY_CACHE_KEY, { library: { items: cacheableItems(library.items) }, history: { items: cacheableItems(history.items), deleted_ids: history.deleted_ids || [] }, savedAt: Date.now() });
-  }
-
   async function saveLibraryItem(itemId) {
     const data = await readJson(await apiFetch(`/api/library/${itemId}`, {method: "POST"}), "Uložení se nezdařilo.");
     setLibraryItems((current) => current.some((item) => item.id === itemId) ? current : [data.item, ...current]);
@@ -740,7 +610,7 @@ function App() {
         setSelectedModelIds,
         generationMode,
         setGenerationMode,
-        handleCancel, atelier, setAtelier, handleGenerateAtelier, archives, archiveStatus, reloadArchives: () => setOptionsRevision(v => v + 1),
+        handleCancel, atelier, setAtelier, handleGenerateAtelier, archives, archiveStatus, reloadArchives,
         loraId,
         setLoraId,
         loraStrength,
