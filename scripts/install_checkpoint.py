@@ -15,8 +15,9 @@ image = modal.Image.debian_slim(python_version='3.11')
 def install(run: str, source: str, name: str):
     import hashlib, json, shutil, struct
     from pathlib import Path
-    if '/' in run or '..' in run or '/' in source or '/' in name:
-        raise ValueError('Invalid path component')
+    for part in (run, source, name):
+        if not part or '/' in part or '\\' in part or part in ('.', '..') or '..' in part:
+            raise ValueError('Invalid path component')
     results.reload()
     src = Path('/results') / run / source
     dst = Path('/models/checkpoints') / f'{name}.safetensors'
@@ -35,11 +36,19 @@ def install(run: str, source: str, name: str):
     with src.open('rb') as handle:  # safetensors header: 8-byte length + JSON listing every tensor
         header = json.loads(handle.read(struct.unpack('<Q', handle.read(8))[0]))
     tensors = {k: v for k, v in header.items() if k != '__metadata__'}
-    shutil.copyfile(src, dst)
+    # Copy to a temporary name, verify, and only then publish under the final name and commit, so a
+    # failed or partial copy never appears as a usable checkpoint.
+    part = dst.with_name(dst.name + '.part')
+    part.unlink(missing_ok=True)
+    try:
+        shutil.copyfile(src, part)
+        source_hash, dest_hash = sha(src), sha(part)
+        if source_hash != dest_hash:
+            raise RuntimeError('Checksum mismatch after copy')
+        part.rename(dst)
+    finally:
+        part.unlink(missing_ok=True)
     models.commit()
-    source_hash, dest_hash = sha(src), sha(dst)
-    if source_hash != dest_hash:
-        raise RuntimeError('Checksum mismatch after copy')
     dtypes = sorted({v['dtype'] for v in tensors.values()})
     return {'destination': str(dst), 'bytes': dst.stat().st_size, 'sha256': dest_hash, 'tensors': len(tensors), 'dtypes': dtypes}
 

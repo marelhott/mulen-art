@@ -39,8 +39,8 @@ def prepare(sources, destination):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
-    sources=[('hofmann','Julius Hofmann',[Path('/Users/mulenmara/Pictures/Julius Hofmann - Photos originals')]),
-        ('tuymans','Luc Tuymans',[Path('/Users/mulenmara/Pictures/TUY resized-images'),Path('/Users/mulenmara/Pictures/Tuymans hi-res')])]
+    sources=[('hofmann','Julius Hofmann',[Path.home()/'Pictures'/'Julius Hofmann - Photos originals']),
+        ('tuymans','Luc Tuymans',[Path.home()/'Pictures'/'TUY resized-images',Path.home()/'Pictures'/'Tuymans hi-res'])]
     audit=prepare(sources,args.output)
     (args.output.parent/'archive-import-audit.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2))
     from collections import Counter

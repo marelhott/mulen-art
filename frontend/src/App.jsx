@@ -196,7 +196,11 @@ function App() {
   function removeMix(id) {
     setMixIds(current => current.filter(item => item !== id));
     const fallback = serverModels.find(item => item.kind !== "base")?.id;
-    setSelectedModelIds(current => { const next = current.filter(item => item !== id); return next.length ? next : [fallback]; });
+    setSelectedModelIds(current => {
+      const next = current.filter(item => item !== id);
+      if (next.length) return next;
+      return fallback ? [fallback] : current;
+    });
     setAtelier(current => { const next = current.modelIds.filter(item => item !== id); return {...current, modelIds: next.length ? next : ["tuymans_modal_2400"]}; });
   }
 
@@ -218,21 +222,24 @@ function App() {
 
   // Seconds of GPU time a typical job took recently; drives the "time remaining" estimate.
   const averageSeconds = useRef(null);
-  averageSeconds.current = averageWorkerSeconds([...results, ...libraryItems].filter(Boolean));
+  const typicalSeconds = useMemo(() => averageWorkerSeconds([...results, ...libraryItems].filter(Boolean)), [results, libraryItems]);
+  averageSeconds.current = typicalSeconds;
 
   function applySettings(settings) {
     const next = controlsFromSettings(settings);
     if (next.modelId && isMixId(next.modelId) && mixEntry(next.modelId, serverModels))
       setMixIds(current => (current.includes(next.modelId) ? current : [...current, next.modelId]));
-    if (next.modelId && (models.some((model) => model.id === next.modelId) || mixEntry(next.modelId, serverModels))) {
+    // An image made with a LoRA was generated in LoRA mode (base checkpoint + LoRA): repeat it the same way.
+    const loraMode = Boolean(next.loraId && next.loraId !== "none" && loras.some((lora) => lora.id === next.loraId));
+    if (!loraMode && next.modelId && (models.some((model) => model.id === next.modelId && model.kind !== "base") || mixEntry(next.modelId, serverModels))) {
       setSelectedModelIds([next.modelId]); setCheckpointSource(sourceOf(next.modelId));
     }
-    if (next.loraId && loras.some((lora) => lora.id === next.loraId)) setLoraId(next.loraId);
+    if (loraMode) setLoraId(next.loraId);
     if (next.loraStrength !== undefined) setLoraStrength(next.loraStrength);
     if (next.denoise !== undefined) setDenoise(next.denoise);
     if (next.cfg !== undefined) setCfg(next.cfg);
     if (next.steps !== undefined) setSteps(next.steps);
-    setGenerationMode("checkpoint");
+    setGenerationMode(loraMode ? "lora" : "checkpoint");
     setEngine((current) => ({ ...current, ...next.engine }));
   }
 
@@ -291,6 +298,10 @@ function App() {
   function buildPresetPayload() {
     return {
       generationMode,
+      variants,
+      useRealsrgan,
+      useRealEsrgan,
+      restormerMode,
       atelier,
       modelId,
       selectedModelIds: idsForSource(selectedModelIds, checkpointSource),
@@ -312,6 +323,10 @@ function App() {
       (preset.loraId && preset.loraId !== "none" ? "lora" : "checkpoint");
     setGenerationMode(mode);
     if (preset.atelier) setAtelier(current => ({...current, ...preset.atelier}));
+    setUseRealsrgan(Boolean(preset.useRealsrgan));
+    setUseRealEsrgan(Boolean(preset.useRealEsrgan));
+    setRestormerMode(["off", "motion", "defocus"].includes(preset.restormerMode) ? preset.restormerMode : "off");
+    if (preset.variants && typeof preset.variants === "object") setVariants(current => ({...current, ...preset.variants}));
     setModelId(
       preset.modelId && preset.modelId !== "sdxl_base"
         ? preset.modelId
@@ -694,6 +709,9 @@ function App() {
   }
 
   function downloadLibraryImage(item) {
+    // A result still held in memory has no stored file yet: save it from its data instead.
+    if (!item.url && item.image_base64) return downloadDataImage(item, 0);
+    if (!item.url) return;
     const anchor = document.createElement("a");
     anchor.href = buildImageUrl(item.url);
     anchor.download = item.filename || `img2img-library-${item.id}.png`;

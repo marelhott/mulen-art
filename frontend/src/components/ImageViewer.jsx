@@ -36,7 +36,9 @@ export function ImageViewer({
   const stageRef = useRef(null),
     dialogRef = useRef(null),
     closeRef = useRef(null),
-    drag = useRef(null);
+    drag = useRef(null),
+    pointers = useRef(new Map()),
+    pinch = useRef(null);
   const clickStart = useRef(null), moved = useRef(false);
   const source = sourceFor(image),
     settings = image.settings || {},
@@ -90,9 +92,11 @@ export function ImageViewer({
     const wheel = (event) => {
       event.preventDefault();
       if (mode === "compare") return;
-      setZoom((current) =>
-        Math.max(1, Math.min(5, current - event.deltaY * 0.003)),
-      );
+      setZoom((current) => {
+        const next = Math.max(1, Math.min(5, current - event.deltaY * 0.003));
+        if (next <= 1) setPan({ x: 0, y: 0 });
+        return next;
+      });
     };
     stage.addEventListener("wheel", wheel, { passive: false });
     return () => stage.removeEventListener("wheel", wheel);
@@ -163,9 +167,18 @@ export function ImageViewer({
             transform: `translate(${zoom > 1 ? pan.x : 0}px, ${zoom > 1 ? pan.y : 0}px) scale(${mode === "compare" ? 1 : zoom})`,
             cursor:
               mode === "compare" ? "default" : zoom > 1 ? "grab" : "zoom-out",
+            touchAction: "none",
           }}
-          onClick={() => { if (mode !== "compare" && !moved.current) onClose(); }}
+          onClick={() => { if (mode !== "compare" && zoom <= 1 && !moved.current) onClose(); }}
           onPointerDown={(event) => {
+            pointers.current.set(event.pointerId, {x: event.clientX, y: event.clientY});
+            if (pointers.current.size === 2 && mode !== "compare") {
+              const [a, b] = [...pointers.current.values()];
+              pinch.current = {distance: Math.hypot(a.x - b.x, a.y - b.y), zoom};
+              drag.current = null;
+              moved.current = true;
+              return;
+            }
             clickStart.current = {x: event.clientX, y: event.clientY};
             moved.current = false;
             if (zoom <= 1 || mode === "compare") return;
@@ -176,6 +189,12 @@ export function ImageViewer({
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
           onPointerMove={(event) => {
+            if (pointers.current.has(event.pointerId)) pointers.current.set(event.pointerId, {x: event.clientX, y: event.clientY});
+            if (pinch.current && pointers.current.size === 2) {
+              const [a, b] = [...pointers.current.values()];
+              changeZoom(pinch.current.zoom * Math.hypot(a.x - b.x, a.y - b.y) / (pinch.current.distance || 1));
+              return;
+            }
             if (clickStart.current && Math.hypot(event.clientX - clickStart.current.x, event.clientY - clickStart.current.y) > 4) moved.current = true;
             if (drag.current)
               setPan({
@@ -183,11 +202,15 @@ export function ImageViewer({
                 y: event.clientY - drag.current.y,
               });
           }}
-          onPointerUp={() => {
+          onPointerUp={(event) => {
+            pointers.current.delete(event.pointerId);
+            if (pointers.current.size < 2) pinch.current = null;
             clickStart.current = null;
             drag.current = null;
           }}
-          onPointerCancel={() => {
+          onPointerCancel={(event) => {
+            pointers.current.delete(event.pointerId);
+            pinch.current = null;
             clickStart.current = null;
             moved.current = true;
             drag.current = null;
@@ -228,7 +251,7 @@ export function ImageViewer({
         <p className="viewer-help">
           {mode === "compare"
             ? "Posuvníkem porovnej původní vstup a výsledek"
-            : "Kliknutí: zavřít · kolečko: zoom · tažení: posun · ← → obrázky"}
+            : "Kliknutí: zavřít · kolečko / dva prsty: zoom · tažení: posun · ← → obrázky"}
         </p>
       </div>
       <aside className="viewer-details">

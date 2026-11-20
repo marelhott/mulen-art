@@ -28,18 +28,18 @@ def export_collection(collection_id, folder_name, destination):
                "--folder", folder_name, "--directory", "{folder_album}", "--convert-to-jpeg",
                "--skip-live", "--skip-raw", "--preview-if-missing", str(target)]
     print(f"Exportuji všechna alba ve složce Photos {folder_name} (u fotek mimo Mac použiji náhled z Photos)…", flush=True)
-    subprocess.run(command, cwd=ROOT, check=True)
+    subprocess.run(command, cwd=ROOT, check=True, timeout=3600)
 
 
 def convert(source, destination, thumb):
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".tmp.jpg")
     subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "88", "-Z", "1536", str(source), "--out", str(temporary)],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
     digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
     os.replace(temporary, destination)
     subprocess.run(["sips", "-Z", "320", str(destination), "--out", str(thumb)],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
     return digest
 
 
@@ -109,7 +109,7 @@ def main():
         command = ["uv", "run", "--python", "3.12", "--with", "modal", "modal", "volume", "put", "img2img-archives",
                    str(stage / "user-photos"), "atelier-archives/user-photos", "--force"]
         # Volume.put of this folder includes manifest.json and both photo collections.
-        subprocess.run(command, cwd=ROOT, check=True)
+        subprocess.run(command, cwd=ROOT, check=True, timeout=3600)
         print("Soukromé fotky a náhledy byly nahrány do Modal volume img2img-archives.", flush=True)
 
 

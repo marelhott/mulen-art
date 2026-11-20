@@ -72,7 +72,7 @@ def import_verified(manifest: list[dict]):
 @app.local_entrypoint()
 def main():
     root = Path(__file__).resolve().parents[1]
-    source = Path("/Users/mulenmara/CODE_DISK/models")
+    source = Path(os.environ.get("MULEN_MODELS_DIR", Path.home() / "CODE_DISK" / "models"))
     config = json.loads((root / "config/models.json").read_text())
     manifest = []
     for section in ("models", "loras"):

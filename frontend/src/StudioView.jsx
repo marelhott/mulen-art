@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -28,6 +28,7 @@ import { safeStorage, urlFor } from "./shared";
 import { buildImageUrl } from "./api";
 import { filterItems, idsForSource } from "./studioTools";
 import { TEXT } from "./texts";
+import { useModal } from "./useModal";
 import { Compare } from "./components/Compare";
 import { CheckpointPicker } from "./components/CheckpointPicker";
 import { VariantsPanel } from "./components/VariantsPanel";
@@ -106,16 +107,11 @@ export default function StudioView(p) {
   const [visible, setVisible] = useState(80);
   const inputRef = useRef(null),
     moreRef = useRef(null);
-  useEffect(() => {
-    if (!libraryOpen) return;
-    const key = (event) => {
-      if (event.key === "Escape") {
-        setLibraryOpen(false);
-      }
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [libraryOpen]);
+  const libraryRef = useRef(null);
+  const [libraryVisible, setLibraryVisible] = useState(120);
+  const closeLibrary = useCallback(() => setLibraryOpen(false), []);
+  useModal(libraryRef, libraryOpen, closeLibrary, Boolean(p.selectedImage) || compareOpen);
+  useEffect(() => { if (libraryOpen) setLibraryVisible(120); }, [libraryOpen]);
   // Two separate feeds: canvas (img2img) and Atelier; the library holds both. Pending placeholders
   // (null) belong to the kind of job currently running.
   const isAtelierItem = (item) => item?.settings?.generation_type === "atelier";
@@ -176,14 +172,37 @@ export default function StudioView(p) {
     observer.observe(moreRef.current);
     return () => observer.disconnect();
   }, [visible, count]);
+  const menuRef = useRef(null);
   useEffect(() => {
-    if (!context) return;
+    if (!context) return undefined;
     const dismiss = () => setContext(null);
+    const items = () => [...(menuRef.current?.querySelectorAll("button:not(:disabled)") || [])];
+    const key = (event) => {
+      if (event.key === "Escape") { event.preventDefault(); setContext(null); return; }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const nodes = items();
+      const at = nodes.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? nodes.length - 1
+        : (at + (event.key === "ArrowDown" ? 1 : -1) + nodes.length) % nodes.length;
+      nodes[next]?.focus();
+    };
+    // Keep the menu inside the viewport whatever its real size is, then focus the first entry.
+    const box = menuRef.current?.getBoundingClientRect();
+    if (box) {
+      const x = Math.max(8, Math.min(context.x, window.innerWidth - box.width - 8));
+      const y = Math.max(8, Math.min(context.y, window.innerHeight - box.height - 8));
+      menuRef.current.style.left = `${x}px`;
+      menuRef.current.style.top = `${y}px`;
+    }
+    items()[0]?.focus();
     window.addEventListener("click", dismiss);
     window.addEventListener("blur", dismiss);
+    window.addEventListener("keydown", key);
     return () => {
       window.removeEventListener("click", dismiss);
       window.removeEventListener("blur", dismiss);
+      window.removeEventListener("keydown", key);
     };
   }, [context]);
 
@@ -197,6 +216,8 @@ export default function StudioView(p) {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  // A proxy or odd server may label an image "application/octet-stream"; the upload check needs a real type.
+  const imageType = (blob) => (/^image\/(png|jpeg|webp)$/.test(blob.type) ? blob.type : "image/png");
   const addFiles = (files) =>
     p.handleFileChange({ target: { files, value: "" } });
   async function reuse(item) {
@@ -205,7 +226,7 @@ export default function StudioView(p) {
       if (!response.ok) throw new Error("Obrázek se nepodařilo načíst.");
       const blob = await response.blob();
       addFiles([
-        new File([blob], item.filename || "vysledek.png", { type: blob.type }),
+        new File([blob], item.filename || "vysledek.png", { type: imageType(blob) }),
       ]);
       p.setSelectedImage(null);
       setLibraryOpen(false);
@@ -223,7 +244,7 @@ export default function StudioView(p) {
       const response = await fetch(buildImageUrl(source));
       if (!response.ok) throw new Error("source unavailable");
       const blob = await response.blob();
-      addFiles([new File([blob], item.settings?.source_name || "vstup.png", { type: blob.type })]);
+      addFiles([new File([blob], item.settings?.source_name || "vstup.png", { type: imageType(blob) })]);
       p.setSelectedImage(null);
       setLibraryOpen(false);
       if (isAtelier) setTab("results");
@@ -367,7 +388,7 @@ export default function StudioView(p) {
             <Label>VARIANTY NA VSTUP</Label>
             <span>
               {p.inputItems.length
-                ? `${p.inputItems.length} × ${p.numImages || "—"} × ${p.generationMode === "lora" ? 1 : p.selectedModelIds.length} modelů`
+                ? `${p.inputItems.length} × ${p.numImages || "—"} × ${p.generationMode === "lora" ? 1 : idsForSource(p.selectedModelIds, p.checkpointSource).length} modelů`
                 : "na každý obrázek"}
             </span>
           </div>
@@ -425,7 +446,7 @@ export default function StudioView(p) {
               event.preventDefault();
               setDragging(true);
             }}
-            onDragLeave={() => setDragging(false)}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false); }}
             onDrop={drop}
           >
             <input
@@ -622,7 +643,7 @@ export default function StudioView(p) {
                 ? `${items.length} uložených obrázků`
                 : p.isGenerating
                   ? `Celá fronta: ${p.readyCount} / ${p.outputCount} hotovo`
-                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : `${p.results.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
+                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : `${canvasItems.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
             </p>
           </div>
           <button
@@ -672,7 +693,8 @@ export default function StudioView(p) {
         </div>
         {p.error && (
           <div className="error-banner" role="alert">
-            {p.error}
+            <span>{p.error}</span>
+            <button type="button" aria-label="Zavřít hlášení" onClick={() => p.setError("")}><X size={13} /></button>
           </div>
         )}
         <div className="canvas-actions">
@@ -814,7 +836,15 @@ export default function StudioView(p) {
           <SlidersHorizontal size={13} />
           <Label>NASTAVENÍ GENEROVÁNÍ</Label>
         </div>
-        <p className="engine-hint">{isAtelier ? "Ateliér tvoří nové obrazy. Zvětšení hotového výsledku je pouze Lanczos, bez AI dokreslování. Každý checkpoint tvoří nezávisle. Foto a archiv používají naučený token modelu a plný počet kroků přemalování." : "Původní generování v jednom průchodu. Hotový obraz se zvětšuje pouze interpolací Lanczos, bez AI dokreslování a přidávání detailů."}</p>
+        <p className="engine-hint">{(() => {
+          const a = isAtelier ? p.atelier : { useRealEsrgan: p.useRealEsrgan, useRealsrgan: p.useRealsrgan, restormerMode: p.restormerMode };
+          const method = a.useRealEsrgan ? "Real-ESRGAN" : a.useRealsrgan ? "SwinIR" : "";
+          const finish = method ? `Hotový výsledek se zvětšuje pomocí ${method} (AI)` : "Hotový výsledek se zvětšuje pouze interpolací Lanczos, bez AI dokreslování";
+          const restore = a.restormerMode && a.restormerMode !== "off" ? " a před zvětšením se opraví rozmazání (Restormer)" : "";
+          return isAtelier
+            ? `Ateliér tvoří nové obrazy. ${finish}${restore}. Každý checkpoint tvoří nezávisle. Foto a archiv používají naučený token modelu a plný počet kroků přemalování.`
+            : `Původní generování v jednom průchodu. ${finish}${restore}.`;
+        })()}</p>
         {(!isAtelier || ["photo", "archive"].includes(p.atelier.mode)) && <Range
           label={isAtelier ? "SÍLA PŘEMALOVÁNÍ" : "DENOISE"}
           min={0.05}
@@ -915,6 +945,7 @@ export default function StudioView(p) {
         <div className="modal-backdrop" onClick={() => setLibraryOpen(false)}>
           <section
             className="library-dialog"
+            ref={libraryRef}
             role="dialog"
             aria-modal="true"
             aria-label="Knihovna obrázků"
@@ -936,7 +967,7 @@ export default function StudioView(p) {
               </IconButton>
             </header>
             <div className="library-dialog-grid">
-              {p.libraryItems.map((item, index) => (
+              {p.libraryItems.slice(0, libraryVisible).map((item, index) => (
                 <ImageCard
                   key={item.id}
                   item={item}
@@ -950,6 +981,11 @@ export default function StudioView(p) {
                 />
               ))}
             </div>
+            {p.libraryItems.length > libraryVisible && (
+              <button className="toolbar-button library-more" onClick={() => setLibraryVisible((n) => n + 120)}>
+                Zobrazit další ({p.libraryItems.length - libraryVisible})
+              </button>
+            )}
           </section>
         </div>
       )}
@@ -976,6 +1012,7 @@ export default function StudioView(p) {
       {context && (
         <div
           className="context-menu"
+          ref={menuRef}
           role="menu"
           style={{ left: context.x, top: context.y }}
         >

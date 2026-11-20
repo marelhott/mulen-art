@@ -1,8 +1,10 @@
 """Deploy with: .venv/bin/modal deploy modal_app.py (after building frontend)."""
+import logging
 import os
 import modal
 
 APP_NAME = "img2img-studio"
+log = logging.getLogger("mulen")
 app = modal.App(APP_NAME)
 models = modal.Volume.from_name("img2img-models", create_if_missing=True)
 archives = modal.Volume.from_name("img2img-archives")
@@ -258,7 +260,7 @@ def generate_job(job_id: str, payload: dict):
         try:
             record_spend(job_id, time.monotonic() - started, gpu_hourly)
         except Exception as exc:  # accounting must never fail a finished job
-            print(f"spend accounting failed: {exc}")
+            log.warning(f"spend accounting failed: {exc}")
 
 
 @app.cls(
@@ -282,7 +284,7 @@ class ImageWorker:
             if not use_demo_mode():
                 ensure_pipeline(self.model_id)
         except Exception as exc:  # run() retries lazily and reports the real error on the job
-            print(f"preload of {self.model_id} failed: {exc}")
+            log.warning(f"preload of {self.model_id} failed: {exc}")
 
     @modal.method()
     def run(self, job_id: str, payload: dict):
@@ -293,7 +295,7 @@ class ImageWorker:
             try:
                 dispatch.spawn()  # a slot is free: start the next waiting job
             except Exception as exc:
-                print(f"dispatch wake-up failed (the periodic sweep will catch up): {exc}")
+                log.warning(f"dispatch wake-up failed (the periodic sweep will catch up): {exc}")
 
 
 @app.function(
@@ -346,7 +348,7 @@ def backfill_thumbnails():
             if ensure_thumbnail(path.name):
                 created += 1
         except Exception as exc:
-            print(f"thumbnail failed for {path.name}: {exc}")
+            log.warning(f"thumbnail failed for {path.name}: {exc}")
     if created:
         outputs.commit()
     print(f"created {created} thumbnails")

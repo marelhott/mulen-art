@@ -3,7 +3,8 @@
 Dry run by default:  .venv/bin/python -m modal run scripts/purge_test_outputs.py
 Delete:              .venv/bin/python -m modal run scripts/purge_test_outputs.py --apply
 A record is a test sample only if (a) its source_name is one of the markers the experiments used, or
-(b) it is an Atelier image with a hand-picked seed below 2000 (the app draws random 32-bit seeds), or
+(b) only with --low-seeds: it is an Atelier image with a hand-picked seed below 2000 (the app draws random
+32-bit seeds, but a user may also type a small seed, so this rule is opt-in), or
 (c) it is an img2img benchmark with seed 4242. Saved library images are never matched.
 """
 import modal
@@ -15,7 +16,7 @@ MARKERS = {'palette-test', 'color-test', 'mixtest', 'smoke', 'mp', 'mt', 'style-
 
 
 @app.function(image=image, volumes={'/outputs': outputs}, cpu=1, memory=1024, timeout=1800)
-def purge(apply: bool = False, extra_markers: str = ''):
+def purge(apply: bool = False, extra_markers: str = '', low_seeds: bool = False):
     import collections, json
     from pathlib import Path
     markers = MARKERS | {m for m in extra_markers.split(',') if m}
@@ -36,7 +37,7 @@ def purge(apply: bool = False, extra_markers: str = ''):
         rule = None
         if name in markers:
             rule = name
-        elif settings.get('generation_type') == 'atelier' and isinstance(seed, int) and 0 <= seed < 2000:
+        elif low_seeds and settings.get('generation_type') == 'atelier' and isinstance(seed, int) and 0 <= seed < 2000:
             rule = 'atelier-low-seed'
         elif name.startswith('source_') and seed == 4242:
             rule = 'img2img-benchmark'
@@ -56,6 +57,6 @@ def purge(apply: bool = False, extra_markers: str = ''):
 
 
 @app.local_entrypoint()
-def main(apply: bool = False, extra: str = ''):
+def main(apply: bool = False, extra: str = '', low_seeds: bool = False):
     import json
-    print(json.dumps(purge.remote(apply, extra), indent=2))
+    print(json.dumps(purge.remote(apply, extra, low_seeds), indent=2))

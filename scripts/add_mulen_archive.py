@@ -14,7 +14,7 @@ PY = [sys.executable, '-m', 'modal']
 
 
 def modal(*args):
-    return subprocess.run([*PY, *args], capture_output=True, text=True, check=True, cwd=ROOT).stdout
+    return subprocess.run([*PY, *args], capture_output=True, text=True, check=True, cwd=ROOT, timeout=3600).stdout
 
 
 def main():

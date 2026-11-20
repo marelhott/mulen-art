@@ -15,11 +15,13 @@
     "test:python": ".venv/bin/python -m unittest discover -s tests -v",
     "test:frontend": "node --test frontend/src/*.test.js",
     "test": "npm run lint && npm run test:python && npm run test:frontend",
-    "lint": "eslint frontend/src"
+    "lint": "eslint frontend/src frontend/public/sw.js"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^15.15.0"
   }
 }

@@ -5,13 +5,12 @@ FastAPI CPU gateway, and an on-demand NVIDIA L4 worker. No RunPod or local GPU.
 
 ## Included models
 
-Configured from `/Users/mulenmara/CODE_DISK/models`:
+The model list lives in `config/models.json` (the single source of truth for ids, names and paths on the
+Modal Volume). Local weights are read from `~/CODE_DISK/models` (override with `MULEN_MODELS_DIR`):
 
-- `checkpoints/Tuymans_SDXL.safetensors`
-- `checkpoints/tuy_small.safetensors`
-- `checkpoints/hofmann_SDXL.safetensors`
-- `lora/lora_tuymans_SDXL.safetensors`
-- `lora/lora_hofmann_SDXL.safetensors`
+- Checkpoints: Tuymans SDXL, Tuymans Modal (2400 steps), Tuy Small, Hofmann SDXL, Mulen Mara
+- Base: SDXL Base 1.0 (for LoRA mode)
+- LoRAs: Tuymans SDXL, Hofmann SDXL
 
 The upload script maps local `lora/` to cloud `loras/`. It excludes `.bak` files.
 Only SDXL-compatible weights are supported. Models are not retrained.
