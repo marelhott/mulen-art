@@ -6,6 +6,7 @@ import { randomId, safeStorage } from "./shared";
 import { usePresets } from "./usePresets";
 import { useGallery } from "./useGallery";
 import { useServerOptions } from "./useServerOptions";
+import { useInputImages } from "./useInputImages";
 import { apiFetch, buildImageUrl, readJson, reconcileOptionIds } from "./api";
 
 const DEFAULT_ENGINE = { mode: "quick", conditioningMode: "style", sampler: "dpmpp_2m_sde", schedule: "karras", seed: "-1", prompt: "", negativePrompt: "", maxSide: 1536, detailStrength: 0.25, detailSteps: 15 };
@@ -33,9 +34,7 @@ function App() {
     try { const saved = JSON.parse(safeStorage.get(MIX_STORAGE_KEY) || "[]"); return Array.isArray(saved) ? saved.filter(isMixId) : []; }
     catch { return []; }
   });
-  const [inputItems, setInputItems] = useState([]);
-  const restoreRecentAllowed = useRef(true);
-  const inputUrls = useRef(new Set());
+  const { inputItems, setInputItems, imageSize } = useInputImages();
   const submitting = useRef(false);
   const pendingSubmissions = useRef(0);
   const plannedCount = useRef(0);
@@ -44,8 +43,6 @@ function App() {
   const [submittedOutputs, setSubmittedOutputs] = useState(0);
   const [startedAt, setStartedAt] = useState(null);
   const recordsCache = useRef(new Map());
-  const previewUrl = inputItems[0]?.url || "";
-  const [imageSize, setImageSize] = useState({ width: 1024, height: 1024 });
   const [resizeScale, setResizeScale] = useState(2);
   const [useRealsrgan, setUseRealsrgan] = useState(false);
   const [useRealEsrgan, setUseRealEsrgan] = useState(false);
@@ -87,30 +84,6 @@ function App() {
   const { presets, presetName, setPresetName, selectedPresetId, handlePresetSelect, handleSavePreset, handleDeletePreset } =
     usePresets({ buildPayload: buildPresetPayload, applyPreset, setError });
 
-  useEffect(() => {
-    const next = new Set(inputItems.map((item) => item.url));
-    inputUrls.current.forEach((url) => {
-      if (!next.has(url)) URL.revokeObjectURL(url);
-    });
-    inputUrls.current = next;
-  }, [inputItems]);
-  useEffect(
-    () => () => {
-      inputUrls.current.forEach((url) => URL.revokeObjectURL(url));
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!previewUrl) return;
-    const probe = new window.Image();
-    probe.onload = () =>
-      setImageSize({ width: probe.naturalWidth, height: probe.naturalHeight });
-    probe.src = previewUrl;
-    return () => {
-      probe.onload = null;
-    };
-  }, [previewUrl]);
 
 
   useEffect(() => {
@@ -299,7 +272,6 @@ function App() {
       setError("Podporovány jsou PNG, JPEG a WebP.");
       return;
     }
-    restoreRecentAllowed.current = false;
     const items = files.map((file) => ({
       id: randomId(),
       file,
@@ -360,7 +332,6 @@ function App() {
       setJob({...EMPTY_JOB, status: "preparing", message: "Odesílání do fronty"});
       safeStorage.remove("img2img-last-batch");
     }
-    restoreRecentAllowed.current = false;
     setError("");
     const accepted = [],
       issues = [];
@@ -462,7 +433,6 @@ function App() {
       setSubmissionErrors([]); setBatchResults([]); setJob({...EMPTY_JOB, status: "preparing", message: "Ateliér: odesílání do fronty"});
       safeStorage.remove("img2img-last-batch");
     }
-    restoreRecentAllowed.current = false; setError("");
     let sent = 0;
     const issues = [];
     for (let offset = 0; offset < count; offset += 8) {
