@@ -63,6 +63,7 @@ export default function StudioView(p) {
   const [selection, setSelection] = useState(new Set());
   const [selecting, setSelecting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState("");
   const [dragging, setDragging] = useState(false);
   const [context, setContext] = useState(null);
   const deletingIds = useRef(new Set());
@@ -243,8 +244,9 @@ export default function StudioView(p) {
           `${String(index + 1).padStart(3, "0")}-${item.filename || "obrazek.png"}`,
           await response.blob(),
         );
+        setExportProgress(`${index + 1} / ${chosen.length}`);
       }
-      const blob = await zip.generateAsync({ type: "blob" });
+      const blob = await zip.generateAsync({ type: "blob" }, (meta) => setExportProgress(`balím ${Math.round(meta.percent)} %`));
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -255,6 +257,7 @@ export default function StudioView(p) {
       p.setError(error.message);
     } finally {
       setExporting(false);
+      setExportProgress("");
     }
   }
   const download = (item) => p.downloadLibraryImage(item);
@@ -613,7 +616,7 @@ export default function StudioView(p) {
             onClick={() => exportImages()}
           >
             <ArrowDownToLine size={14} />
-            {exporting ? "BALÍM…" : "EXPORTOVAT VŠE"}
+            {exporting ? `BALÍM… ${exportProgress}` : "EXPORTOVAT VŠE"}
           </button>
         </div>
         {isAtelier && <AtelierQueue p={progressState} />}

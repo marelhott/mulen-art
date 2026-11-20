@@ -1,39 +1,10 @@
 import { useEffect } from "react";
 import { apiFetch, readJson } from "./api";
+import { EMPTY_JOB, loadStoredJobs, storage } from "./jobsStorage";
 import { etaLabel, EXPIRED_NOTICE, keepUnexpired } from "./studioTools";
 
 export const POLL_INTERVAL = 1500;
-export const EMPTY_JOB = {
-  id: "",
-  status: "idle",
-  progress: 0,
-  message: "Idle",
-  logs: [],
-  result: null,
-  error: null,
-};
-
-// localStorage throws in private mode or when blocked; it is only a convenience, never required.
-function storage(action) {
-  try { return action(window.localStorage); } catch { return null; }
-}
-
-// Jobs still running when the page closed (or the last finished batch) come back from localStorage.
-export function loadStoredJobs() {
-  try {
-    const saved = JSON.parse(storage((store) => store.getItem("img2img-active-jobs")) || "[]");
-    if (Array.isArray(saved) && saved.length) return saved;
-    const legacy = storage((store) => store.getItem("img2img-active-job"));
-    if (legacy)
-      return [
-        { job_id: legacy, source_name: "Input image", expected_images: 1 },
-      ];
-    const lastBatch = JSON.parse(storage((store) => store.getItem("img2img-last-batch")) || "[]");
-    return Array.isArray(lastBatch) ? lastBatch : [];
-  } catch {
-    return [];
-  }
-}
+export { EMPTY_JOB, loadStoredJobs };
 
 // Polls active jobs in bulk, mirrors their state into the canvas/job panel and persists the list.
 export function useJobs({
