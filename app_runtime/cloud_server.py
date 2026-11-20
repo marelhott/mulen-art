@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image, check_job_size
-from app_runtime.server import (OUTPUTS_DIR, THUMBS_DIR, api_library_save, load_deleted_ids,
+from app_runtime.server import (api_atelier_photo, api_atelier_photos, api_options, OUTPUTS_DIR, THUMBS_DIR, api_library_save, load_deleted_ids,
                                 load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
                                 ensure_thumbnail, is_safe_filename)
 
@@ -271,27 +271,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                     del response.headers[header]
         return response
 
-    @app.get("/api/options")
-    def options():
-        from .archives import archive_options
-        from .user_photos import collection_options
-        return {**get_options(), "archives": archive_options(), "atelier_photo_collections": collection_options()}
-
-    @app.get("/api/atelier/photos")
-    def atelier_photos(collection: str = "malba", offset: int = 0, limit: int = 48):
-        from .user_photos import list_photos
-        try:
-            return list_photos(collection, offset, limit)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-
-    @app.get("/atelier-photo/{photo_id}")
-    def atelier_photo(photo_id: str, thumb: bool = False):
-        from .user_photos import photo_path
-        try:
-            return FileResponse(photo_path(photo_id, thumb), headers={"Cache-Control": "private, max-age=86400"})
-        except (ValueError, FileNotFoundError) as exc:
-            raise HTTPException(404, "Atelier photo not found") from exc
+    # The read-only catalogue endpoints are identical to the local server's: one implementation, registered here.
+    app.get("/api/options")(api_options)
+    app.get("/api/atelier/photos")(api_atelier_photos)
+    app.get("/atelier-photo/{photo_id}")(api_atelier_photo)
 
     def validate_payload(payload, verify_image=True):
         from dataclasses import asdict
