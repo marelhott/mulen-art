@@ -7,7 +7,7 @@ import { IconButton } from "./controls";
 const PAGE = 120;
 
 // The saved-image library as a modal. Renders PAGE cards at a time so a large library stays light.
-export function LibraryDialog({ open, onClose, suspended, items, models, onOpen, onDownload, onReuse, onDelete }) {
+export function LibraryDialog({ open, onClose, suspended, items, models, actions }) {
   const ref = useRef(null);
   const [visible, setVisible] = useState(PAGE);
   useModal(ref, open, onClose, suspended);
@@ -30,10 +30,7 @@ export function LibraryDialog({ open, onClose, suspended, items, models, onOpen,
               item={item}
               modelName={models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name}
               index={index}
-              onOpen={() => onOpen(item)}
-              onDownload={() => onDownload(item)}
-              onReuse={() => onReuse(item)}
-              onDelete={() => onDelete(item)}
+              actions={actions}
               canDelete={true}
             />
           ))}

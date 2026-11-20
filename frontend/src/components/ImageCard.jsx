@@ -11,7 +11,7 @@ import { thumbFor, urlFor } from "../shared";
 import { RetryImage } from "./RetryImage";
 import { IconButton } from "./controls";
 
-export function ImageCard({
+function ImageCardView({
   item,
   modelName,
   index,
@@ -21,16 +21,20 @@ export function ImageCard({
   isLibrary,
   selectMode,
   isSaved,
-  onSave,
-  onOpen,
-  onSelect,
-  onLibraryDrop,
-  onDownload,
-  onReuse,
-  onDelete,
+  canSave,
+  reorderable,
   canDelete,
-  onContext,
+  actions,
 }) {
+  // `actions` is one stable object of (item, ...) handlers, so a card re-renders only when its own data changes.
+  const onOpen = () => item && actions.open(item, index);
+  const onSelect = actions.select ? () => item && actions.select(item) : undefined;
+  const onDownload = () => actions.download(item);
+  const onReuse = () => actions.reuse(item);
+  const onDelete = actions.remove ? () => actions.remove(item) : undefined;
+  const onSave = canSave ? () => actions.save(item) : undefined;
+  const onLibraryDrop = reorderable ? (sourceId) => item && actions.libraryDrop(sourceId, item) : undefined;
+  const onContext = actions.context ? (event) => actions.context(event, item) : undefined;
   const libraryMode = isLibrary || Boolean(onLibraryDrop);
   const checkpointName = modelName || item?.settings?.model_name || item?.model_id || "";
   const mode = creationMode(item);
@@ -153,3 +157,5 @@ export function ImageCard({
     </article>
   );
 }
+
+export const ImageCard = React.memo(ImageCardView);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -261,6 +261,33 @@ export default function StudioView(p) {
     }
   }
   const download = (item) => p.downloadLibraryImage(item);
+  // Cards get one stable `actions` object that always calls the latest handlers, so React.memo on the
+  // card can skip re-rendering the whole grid on every unrelated state change (progress ticks, typing).
+  const latest = useRef(null);
+  latest.current = { open, toggleSelection, moveLibraryItem, reuse, removeImage, download, saveLibraryItem: p.saveLibraryItem, setError: p.setError, openLibraryImage: p.openLibraryImage };
+  const cardActions = useMemo(() => ({
+    open: (item, index) => latest.current.open(item, index),
+    select: (item) => latest.current.toggleSelection(item.id),
+    download: (item) => latest.current.download(item),
+    reuse: (item) => latest.current.reuse(item),
+    remove: (item) => latest.current.removeImage(item),
+    save: async (item) => {
+      try { await latest.current.saveLibraryItem(item.id); } catch (error) { latest.current.setError(error.message); }
+    },
+    libraryDrop: (sourceId, item) => latest.current.moveLibraryItem(sourceId, item.id),
+    context: (event, item) => {
+      event.preventDefault();
+      if (item) setContext({ item, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 180) });
+    },
+  }), []);
+  const libraryActions = useMemo(() => ({
+    open: (item) => latest.current.openLibraryImage(item),
+    download: (item) => latest.current.download(item),
+    reuse: (item) => latest.current.reuse(item),
+    remove: (item) => latest.current.removeImage(item),
+  }), []);
+  const modelNames = useMemo(() => new Map(p.models.map((model) => [model.id, model.name])), [p.models]);
+  const savedIds = useMemo(() => new Set(p.libraryItems.map((saved) => saved.id)), [p.libraryItems]);
   const viewerPool =
     p.selectedImage?.context === "library"
       ? p.libraryItems
@@ -720,37 +747,18 @@ export default function StudioView(p) {
                 <ImageCard
                   key={item?.id || `pending-${index}`}
                   item={item}
-                  modelName={p.models.find(model => model.id === (item?.model_id || item?.settings?.model_id))?.name}
+                  modelName={modelNames.get(item?.model_id || item?.settings?.model_id)}
                   index={index}
-                  generating={p.isGenerating}
-                  progress={p.progressValue}
+                  generating={item ? false : p.isGenerating}
+                  progress={item ? 0 : p.progressValue}
                   selected={selection.has(item?.id)}
                   isLibrary={tab === "library"}
                   selectMode={selecting}
-                  isSaved={p.libraryItems.some((saved) => saved.id === item?.id)}
-                  onSave={tab !== "library" ? async () => {
-                    try { await p.saveLibraryItem(item.id); } catch (error) { p.setError(error.message); }
-                  } : undefined}
-                  onOpen={() => item && open(item, index)}
-                  onSelect={() => item && toggleSelection(item.id)}
-                  onLibraryDrop={
-                    tab === "library"
-                      ? (sourceId) => item && moveLibraryItem(sourceId, item.id)
-                      : undefined
-                  }
-                  onDownload={() => download(item)}
-                  onReuse={() => reuse(item)}
-                  onDelete={() => removeImage(item)}
+                  isSaved={savedIds.has(item?.id)}
+                  canSave={tab !== "library"}
+                  reorderable={tab === "library"}
                   canDelete={true}
-                  onContext={(event) => {
-                    event.preventDefault();
-                    if (item)
-                      setContext({
-                        item,
-                        x: Math.min(event.clientX, window.innerWidth - 210),
-                        y: Math.min(event.clientY, window.innerHeight - 180),
-                      });
-                  }}
+                  actions={cardActions}
                 />
               );
             })}
@@ -789,7 +797,7 @@ export default function StudioView(p) {
       </main>
       <SettingsPanel p={p} isAtelier={isAtelier} updateAtelier={updateAtelier} progressState={progressState} />
       <LibraryDialog open={libraryOpen} onClose={closeLibrary} suspended={Boolean(p.selectedImage) || compareOpen}
-        items={p.libraryItems} models={p.models} onOpen={p.openLibraryImage} onDownload={download} onReuse={reuse} onDelete={removeImage} />
+        items={p.libraryItems} models={p.models} actions={libraryActions} />
       {compareOpen && (
         <Compare
           items={unfiltered.filter((item) => item && selection.has(item.id))}
