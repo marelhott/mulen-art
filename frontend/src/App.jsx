@@ -78,7 +78,7 @@ function App() {
   const [steps, setSteps] = useState(28);
   const [engine, setEngine] = useState(DEFAULT_ENGINE);
   const [batchResults, setBatchResults] = useState([]);
-  const { results, setResults, libraryItems, setLibraryItems, deletedIds, loadLibrary } = useGallery();
+  const { results, setResults, libraryItems, setLibraryItems, deletedIds, loadLibrary, galleryLoading } = useGallery();
   const [selectedImage, setSelectedImage] = useState(null);
   const [error, setError] = useState("");
   const [submissionErrors, setSubmissionErrors] = useState([]);
@@ -631,6 +631,7 @@ function App() {
         imageSize,
         results,
         libraryItems,
+        galleryLoading,
         saveLibraryItem,
         isGenerating,
         isSubmitting,

@@ -5,18 +5,15 @@ import {
   Check,
   ChevronRight,
   Grid2X2,
-  ImagePlus,
   LogOut,
   Images,
   Layers3,
-  Maximize2,
   Moon,
   PanelRightClose,
   PanelRightOpen,
   Columns2,
   Plus,
   Search,
-  SlidersHorizontal,
   Sparkles,
   Sun,
   Trash2,
@@ -28,14 +25,15 @@ import { safeStorage, urlFor } from "./shared";
 import { buildImageUrl } from "./api";
 import { filterItems, idsForSource } from "./studioTools";
 import { TEXT } from "./texts";
-import { useModal } from "./useModal";
 import { Compare } from "./components/Compare";
 import { CheckpointPicker } from "./components/CheckpointPicker";
 import { VariantsPanel } from "./components/VariantsPanel";
 import { AtelierControls, AtelierQueue } from "./components/Atelier";
+import { ContextMenu } from "./components/ContextMenu";
+import { LibraryDialog } from "./components/LibraryDialog";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { ImageCard } from "./components/ImageCard";
 import { ImageViewer } from "./components/ImageViewer";
-import { Progress } from "./components/Progress";
 import { IconButton, Label, Range, Select } from "./components/controls";
 
 export default function StudioView(p) {
@@ -107,11 +105,7 @@ export default function StudioView(p) {
   const [visible, setVisible] = useState(80);
   const inputRef = useRef(null),
     moreRef = useRef(null);
-  const libraryRef = useRef(null);
-  const [libraryVisible, setLibraryVisible] = useState(120);
   const closeLibrary = useCallback(() => setLibraryOpen(false), []);
-  useModal(libraryRef, libraryOpen, closeLibrary, Boolean(p.selectedImage) || compareOpen);
-  useEffect(() => { if (libraryOpen) setLibraryVisible(120); }, [libraryOpen]);
   // Two separate feeds: canvas (img2img) and Atelier; the library holds both. Pending placeholders
   // (null) belong to the kind of job currently running.
   const isAtelierItem = (item) => item?.settings?.generation_type === "atelier";
@@ -172,39 +166,6 @@ export default function StudioView(p) {
     observer.observe(moreRef.current);
     return () => observer.disconnect();
   }, [visible, count]);
-  const menuRef = useRef(null);
-  useEffect(() => {
-    if (!context) return undefined;
-    const dismiss = () => setContext(null);
-    const items = () => [...(menuRef.current?.querySelectorAll("button:not(:disabled)") || [])];
-    const key = (event) => {
-      if (event.key === "Escape") { event.preventDefault(); setContext(null); return; }
-      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-      event.preventDefault();
-      const nodes = items();
-      const at = nodes.indexOf(document.activeElement);
-      const next = event.key === "Home" ? 0 : event.key === "End" ? nodes.length - 1
-        : (at + (event.key === "ArrowDown" ? 1 : -1) + nodes.length) % nodes.length;
-      nodes[next]?.focus();
-    };
-    // Keep the menu inside the viewport whatever its real size is, then focus the first entry.
-    const box = menuRef.current?.getBoundingClientRect();
-    if (box) {
-      const x = Math.max(8, Math.min(context.x, window.innerWidth - box.width - 8));
-      const y = Math.max(8, Math.min(context.y, window.innerHeight - box.height - 8));
-      menuRef.current.style.left = `${x}px`;
-      menuRef.current.style.top = `${y}px`;
-    }
-    items()[0]?.focus();
-    window.addEventListener("click", dismiss);
-    window.addEventListener("blur", dismiss);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("click", dismiss);
-      window.removeEventListener("blur", dismiss);
-      window.removeEventListener("keydown", key);
-    };
-  }, [context]);
 
   const open = (item, index) =>
     tab === "library"
@@ -791,6 +752,10 @@ export default function StudioView(p) {
               );
             })}
           </div>
+        ) : p.galleryLoading ? (
+          <div className="results-grid skeleton-grid" aria-busy="true" aria-label="Načítám galerii">
+            {Array.from({ length: 8 }, (_, index) => <div className="skeleton-card" key={index} />)}
+          </div>
         ) : (
           <div className="empty-workspace">
             <div className="empty-orbit">
@@ -819,176 +784,9 @@ export default function StudioView(p) {
           </div>
         )}
       </main>
-      <aside className="right-panel control-panel">
-        <Progress
-          progress={progressState.progressValue}
-          job={progressState.job}
-          generating={p.isGenerating}
-          startedAt={p.startedAt}
-          ready={progressState.readyCount}
-          total={progressState.outputCount}
-          submitting={p.isSubmitting}
-          submitted={progressState.submittedOutputs}
-          planned={progressState.plannedOutputs}
-          onCancel={p.handleCancel}
-        />
-        <div className="settings-heading">
-          <SlidersHorizontal size={13} />
-          <Label>NASTAVENÍ GENEROVÁNÍ</Label>
-        </div>
-        <p className="engine-hint">{(() => {
-          const a = isAtelier ? p.atelier : { useRealEsrgan: p.useRealEsrgan, useRealsrgan: p.useRealsrgan, restormerMode: p.restormerMode };
-          const method = a.useRealEsrgan ? "Real-ESRGAN" : a.useRealsrgan ? "SwinIR" : "";
-          const finish = method ? `Hotový výsledek se zvětšuje pomocí ${method} (AI)` : "Hotový výsledek se zvětšuje pouze interpolací Lanczos, bez AI dokreslování";
-          const restore = a.restormerMode && a.restormerMode !== "off" ? " a před zvětšením se opraví rozmazání (Restormer)" : "";
-          return isAtelier
-            ? `Ateliér tvoří nové obrazy. ${finish}${restore}. Každý checkpoint tvoří nezávisle. Foto a archiv používají naučený token modelu a plný počet kroků přemalování.`
-            : `Původní generování v jednom průchodu. ${finish}${restore}.`;
-        })()}</p>
-        {(!isAtelier || ["photo", "archive"].includes(p.atelier.mode)) && <Range
-          label={isAtelier ? "SÍLA PŘEMALOVÁNÍ" : "DENOISE"}
-          min={0.05}
-          max={isAtelier ? 0.99 : 1}
-          step={0.01}
-          value={isAtelier ? p.atelier.denoise : p.denoise}
-          onChange={value => isAtelier ? updateAtelier({denoise: value}) : p.setDenoise(value)}
-          hint={isAtelier ? "Výchozí 0,82: výrazné přemalování · nízké hodnoty zachovají fotografii či původní obraz · velmi vysoké mění i kompozici" : "Méně zachová předlohu · více ji promění"}
-        />}
-        <Range
-          label="CFG"
-          min={0.5}
-          max={20}
-          step={0.1}
-          value={isAtelier ? p.atelier.cfg : p.cfg}
-          onChange={value => isAtelier ? updateAtelier({cfg: value}) : p.setCfg(value)}
-        />
-        <Range
-          label="KROKY"
-          min={1}
-          max={80}
-          step={1}
-          value={isAtelier ? p.atelier.steps : p.steps}
-          onChange={value => isAtelier ? updateAtelier({steps: value}) : p.setSteps(value)}
-        />
-        <Select label="SAMPLER" value={isAtelier ? p.atelier.sampler : p.engine.sampler}
-          onChange={(sampler) => isAtelier ? updateAtelier({sampler, schedule: ["euler_a","ddim"].includes(sampler) ? "normal" : p.atelier.schedule}) : p.setEngine((e)=>({...e, sampler, schedule: ["euler_a","ddim"].includes(sampler) ? "normal" : e.schedule}))}
-          items={[{id:"dpmpp_2m",name:"DPM++ 2M"},{id:"dpmpp_2m_sde",name:"DPM++ 2M SDE"},{id:"euler_a",name:"Euler a"},{id:"ddim",name:"DDIM"}]} />
-        {["dpmpp_2m", "dpmpp_2m_sde"].includes(isAtelier ? p.atelier.sampler : p.engine.sampler) && <Select label="ROZVRH ŠUMU" value={isAtelier ? p.atelier.schedule : p.engine.schedule}
-          onChange={(schedule)=>isAtelier ? updateAtelier({schedule}) : p.setEngine((e)=>({...e,schedule}))}
-          items={[{id:"karras",name:"Karras"},{id:"normal",name:"Normal"}]} />}
-        <label className="control-block engine-field"><Label>SEED · −1 = NÁHODNÝ</Label>
-          <input aria-label="Seed" type="number" min="-1" max="4294967295" step="1" value={isAtelier ? p.atelier.seed : p.engine.seed}
-            onChange={(event)=>isAtelier ? updateAtelier({seed:event.target.value}) : p.setEngine((e)=>({...e,seed:event.target.value}))} />
-        </label>
-        <section className="control-block preset-block">
-          <Label>ULOŽENÁ NASTAVENÍ</Label>
-          <select
-            aria-label="Uložená nastavení"
-            value={p.selectedPresetId}
-            onChange={p.handlePresetSelect}
-          >
-            <option value="">Vybrat nastavení</option>
-            {p.presets.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <input
-            aria-label="Název nastavení"
-            value={p.presetName}
-            onChange={(event) => p.setPresetName(event.target.value)}
-            placeholder="Název nastavení"
-          />
-          <div className="preset-actions">
-            <button className="toolbar-button" onClick={p.handleSavePreset}>
-              ULOŽIT
-            </button>
-            <IconButton
-              label="Odstranit nastavení"
-              disabled={!p.selectedPresetId}
-              onClick={p.handleDeletePreset}
-            >
-              <Trash2 />
-            </IconButton>
-          </div>
-        </section>
-        <details className="activity-log">
-          <summary>
-            PRŮBĚH ÚLOH <span>{p.visibleLogs.length}</span>
-          </summary>
-          {p.visibleLogs.length ? (
-            p.visibleLogs.map((entry, index) => (
-              <div key={index}>
-                <time>
-                  {new Date(entry.timestamp).toLocaleTimeString("cs-CZ")}
-                </time>
-                <span>{entry.message}</span>
-              </div>
-            ))
-          ) : (
-            <p>Žádná aktivní úloha</p>
-          )}
-        </details>
-
-        <div className="cloud-note">
-          <span className="online-dot" />
-          <p>
-            Výpočty běží na Modalu.
-            <br />
-            GPU se po nečinnosti vypíná.
-            {p.usageText && (<><br /><span className="usage-text">{p.usageText}</span></>)}
-          </p>
-        </div>
-      </aside>
-      {libraryOpen && (
-        <div className="modal-backdrop" onClick={() => setLibraryOpen(false)}>
-          <section
-            className="library-dialog"
-            ref={libraryRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Knihovna obrázků"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header>
-              <div>
-                <h2>Knihovna</h2>
-                <p>
-                  {p.libraryItems.length} výsledků · přetáhni nebo přidej do
-                  vstupů
-                </p>
-              </div>
-              <IconButton
-                label="Zavřít knihovnu"
-                onClick={() => setLibraryOpen(false)}
-              >
-                <X />
-              </IconButton>
-            </header>
-            <div className="library-dialog-grid">
-              {p.libraryItems.slice(0, libraryVisible).map((item, index) => (
-                <ImageCard
-                  key={item.id}
-                  item={item}
-                  modelName={p.models.find(model => model.id === (item?.model_id || item?.settings?.model_id))?.name}
-                  index={index}
-                  onOpen={() => p.openLibraryImage(item)}
-                  onDownload={() => download(item)}
-                  onReuse={() => reuse(item)}
-                  onDelete={() => removeImage(item)}
-                  canDelete={true}
-                />
-              ))}
-            </div>
-            {p.libraryItems.length > libraryVisible && (
-              <button className="toolbar-button library-more" onClick={() => setLibraryVisible((n) => n + 120)}>
-                Zobrazit další ({p.libraryItems.length - libraryVisible})
-              </button>
-            )}
-          </section>
-        </div>
-      )}
+      <SettingsPanel p={p} isAtelier={isAtelier} updateAtelier={updateAtelier} progressState={progressState} />
+      <LibraryDialog open={libraryOpen} onClose={closeLibrary} suspended={Boolean(p.selectedImage) || compareOpen}
+        items={p.libraryItems} models={p.models} onOpen={p.openLibraryImage} onDownload={download} onReuse={reuse} onDelete={removeImage} />
       {compareOpen && (
         <Compare
           items={unfiltered.filter((item) => item && selection.has(item.id))}
@@ -1010,46 +808,14 @@ export default function StudioView(p) {
         />
       )}
       {context && (
-        <div
-          className="context-menu"
-          ref={menuRef}
-          role="menu"
-          style={{ left: context.x, top: context.y }}
-        >
-          <button
-            role="menuitem"
-            onClick={() => {
-              open(context.item, items.findIndex((item) => item?.id === context.item.id));
-              setContext(null);
-            }}
-          >
-            <Maximize2 />
-            Zvětšit
-          </button>
-          <button
-            role="menuitem"
-            disabled={false}
-            onClick={() => reuse(context.item)}
-          >
-            <ImagePlus />
-            Použít jako vstup
-          </button>
-          <button role="menuitem" onClick={() => download(context.item)}>
-            <ArrowDownToLine />
-            Stáhnout
-          </button>
-          <button
-            role="menuitem"
-            disabled={false}
-            onClick={() => {
-              removeImage(context.item);
-              setContext(null);
-            }}
-          >
-            <Trash2 />
-            Smazat obrázek
-          </button>
-        </div>
+        <ContextMenu
+          at={context}
+          onClose={() => setContext(null)}
+          onOpen={() => open(context.item, items.findIndex((item) => item?.id === context.item.id))}
+          onReuse={() => reuse(context.item)}
+          onDownload={() => download(context.item)}
+          onDelete={() => removeImage(context.item)}
+        />
       )}
     </div>
   );

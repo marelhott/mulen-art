@@ -10,6 +10,8 @@ export function useGallery() {
   const [libraryItems, setLibraryItems] = useState([]);
   const deletedIds = useRef(new Set());
   const galleryFresh = useRef(false);
+  // True until the first snapshot (cached or fresh) or a failure: lets the UI show skeletons instead of "empty".
+  const [loading, setLoading] = useState(true);
   // Ids that came from a server history listing: only those may be dropped when a later listing no
   // longer has them. Fresh results of this session are not in any listing yet and must stay.
   const fromHistory = useRef(new Set());
@@ -17,6 +19,7 @@ export function useGallery() {
   // Shows a gallery snapshot (cached or fresh): library list, history list and deleted ids.
   function applyGallery(library, history, fresh = false) {
     for (const id of history?.deleted_ids || []) deletedIds.current.add(id);
+    setLoading(false);
     setLibraryItems((library?.items || []).filter((item) => !deletedIds.current.has(item.id)));
     const incoming = history?.items || [];
     const incomingIds = new Set(incoming.map((item) => item.id));
@@ -58,8 +61,8 @@ export function useGallery() {
     readCached(GALLERY_CACHE_KEY).then((cached) => {
       if (cached && !galleryFresh.current) applyGallery(cached.library, cached.history);
     });
-    loadLibrary().catch(() => {});
+    loadLibrary().catch(() => setLoading(false));
   }, []);
 
-  return { results, setResults, libraryItems, setLibraryItems, deletedIds, loadLibrary };
+  return { results, setResults, libraryItems, setLibraryItems, deletedIds, loadLibrary, galleryLoading: loading };
 }

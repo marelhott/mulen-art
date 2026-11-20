@@ -2238,3 +2238,13 @@ input[type="range"]::-moz-range-progress {
 .variants-plan b { color: var(--accent); margin-right: 4px; }
 .variants-plan em { font-style: normal; color: var(--muted); }
 .variants-plan q { quotes: none; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.skeleton-card {
+  aspect-ratio: 1;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: linear-gradient(100deg, var(--surface, #ffffff08) 30%, #ffffff12 50%, var(--surface, #ffffff08) 70%) 0 0 / 220% 100%;
+  animation: skeleton-sweep 1.4s linear infinite;
+}
+@keyframes skeleton-sweep { to { background-position: -220% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton-card { animation: none; } }
