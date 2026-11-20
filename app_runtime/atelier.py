@@ -51,11 +51,20 @@ def subjects_hash():
     return hashlib.sha256(repr(SUBJECTS).encode()).hexdigest()[:12]
 
 
+def _model_meta(model_id):
+    """Per-model Atelier metadata from config/models.json ({} for ids the config does not describe)."""
+    from .core import load_config
+    return next((item for item in load_config().get("models", []) if item.get("id") == model_id), {})
+
+
 def is_atelier_model(model_id):
     if model_id.startswith("mix:"):
         from .core import parse_mix_id
         return all(is_atelier_model(part_id) for part_id, _ in parse_mix_id(model_id))
-    return model_id.startswith("tuymans_") or model_id in {"tuy_small", "hofmann_sdxl", "mulen_mara"}
+    meta = _model_meta(model_id)
+    if "atelier" in meta:
+        return bool(meta["atelier"])
+    return model_id.startswith("tuymans_") or model_id in {"tuy_small", "hofmann_sdxl", "mulen_mara"}  # legacy configs
 
 
 def subject_for(seed, theme="all"):
@@ -79,6 +88,9 @@ def painting_prompt(model_id, text):
                 triggers.append(prefix)
         return ", ".join(triggers + [text]) if text else ", ".join(triggers)
     # Keep the learned caption prefix for the approved checkpoints; no descriptive style embellishment.
+    meta = _model_meta(model_id)
+    if "trigger" in meta:
+        return f"{meta['trigger']}, {text}" if meta["trigger"] else text
     if model_id == "hofmann_sdxl":
         return text  # No verified caption trigger is available for this imported checkpoint.
     if model_id == "mulen_mara":
@@ -104,7 +116,10 @@ def color_archive_for(model_id):
     if model_id.startswith("mix:"):
         from .core import parse_mix_id
         return color_archive_for(parse_mix_id(model_id)[0][0])
-    if model_id in COLOR_ARCHIVES:
+    meta = _model_meta(model_id)
+    if "color_archive" in meta:
+        return meta["color_archive"]
+    if model_id in COLOR_ARCHIVES:  # legacy configs without the field
         return COLOR_ARCHIVES[model_id]
     return "tuymans" if model_id.startswith("tuymans_") or model_id == "tuy_small" else None
 

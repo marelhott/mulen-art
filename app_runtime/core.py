@@ -212,7 +212,8 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
 def get_options() -> dict[str, Any]:
     config = load_config()
     return {
-        "models": [{"id": item["id"], "name": item["name"], "kind": item.get("kind", "checkpoint")} for item in config.get("models", [])],
+        "models": [{"id": item["id"], "name": item["name"], "kind": item.get("kind", "checkpoint"),
+                    **({"atelier": bool(item["atelier"])} if "atelier" in item else {})} for item in config.get("models", [])],
         "loras": [{"id": item["id"], "name": item["name"]} for item in config.get("loras", [])],
         # Only expose a cost rate that was configured; never invent a price.
         "gpu_hourly_usd": float(os.getenv("GPU_HOURLY_USD", "0")) or None,

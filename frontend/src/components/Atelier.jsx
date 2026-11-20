@@ -102,9 +102,10 @@ export function AtelierQueue({p}) {
   </section>;
 }
 
-const isArtistId = id => id.startsWith("tuymans_") || ["tuy_small", "hofmann_sdxl", "mulen_mara"].includes(id);
-
 export function AtelierControls({atelier: a, update, models, archives = [], archiveStatus, reloadArchives, generating, onGenerate, onAddMix, onRemoveMix}) {
+  // The server marks the artist checkpoints (`atelier` in config/models.json); the id rule is only a fallback for old servers.
+  const byId = new Map(models.map(model => [model.id, model]));
+  const isArtistId = id => (byId.get(id)?.atelier ?? (id.startsWith("tuymans_") || ["tuy_small", "hofmann_sdxl", "mulen_mara"].includes(id)));
   const artists = models.filter(model => model.kind !== "mix" && isArtistId(model.id));
   // A mix is offered here only when every checkpoint in it is an artist checkpoint.
   const choices = models.filter(model => (model.kind === "mix" ? model.parts.every(part => isArtistId(part.id)) : isArtistId(model.id)));

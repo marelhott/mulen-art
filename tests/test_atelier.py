@@ -196,3 +196,21 @@ class MulenMaraModelTests(unittest.TestCase):
         self.assertEqual(atelier.painting_prompt("mulen_mara", ""), "mulpaint, ")
         self.assertEqual(atelier.painting_prompt("hofmann_sdxl", "a pale deer"), "a pale deer")
         self.assertEqual(atelier.painting_prompt("tuymans_modal_2400", "x"), "mvhpaint, x")
+
+
+class ModelMetadataTests(unittest.TestCase):
+    """config/models.json is the single source of truth for which checkpoints are artist models."""
+
+    def test_config_metadata_matches_the_prompt_and_colour_rules(self):
+        from app_runtime import atelier, core
+        models = {item["id"]: item for item in core.load_config()["models"]}
+        self.assertTrue(models["mulen_mara"]["atelier"])
+        self.assertNotIn("atelier", models["sdxl_base"])
+        self.assertFalse(atelier.is_atelier_model("sdxl_base"))
+        self.assertEqual(atelier.painting_prompt("mulen_mara", "a face"), "mulpaint, a face")
+        self.assertEqual(atelier.painting_prompt("hofmann_sdxl", "a face"), "a face")
+        self.assertEqual(atelier.painting_prompt("tuymans_modal_2400", "a face"), "mvhpaint, a face")
+        self.assertEqual(atelier.color_archive_for("tuy_small"), "tuymans")
+        self.assertEqual(atelier.color_archive_for("hofmann_sdxl"), "hofmann")
+        self.assertEqual({item["id"] for item in core.get_options()["models"] if item.get("atelier")},
+                         {"tuymans_sdxl", "tuymans_modal_2400", "tuy_small", "hofmann_sdxl", "mulen_mara"})
