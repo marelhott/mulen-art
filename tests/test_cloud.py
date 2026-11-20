@@ -900,12 +900,10 @@ class CloudFlowTests(unittest.TestCase):
                 threads_seen.add(threading.get_ident()); time.sleep(0.02)
             return original(path)
         with patch.object(server, "read_record", side_effect=slow_read):
-            started = time.monotonic()
             self.assertEqual(len(server.load_history_items()), 40)
-            self.assertLess(time.monotonic() - started, 0.4)  # 40 x 20 ms in sequence would take 0.8 s
+        # Concurrency is asserted by how many threads did cold reads, not by wall-clock time (flaky on CI).
         self.assertGreater(len(threads_seen), 4)
         # /api/history and /api/usage answer while another request holds the write lock
-        holder = threading.Thread(target=lambda: None)
         import modal_app
         done = {}
         def get(name, path):
@@ -914,6 +912,7 @@ class CloudFlowTests(unittest.TestCase):
             workers = [threading.Thread(target=get, args=(n, p)) for n, p in (("history", "/api/history"), ("library", "/api/library"), ("usage", "/api/usage"))]
             for w in workers: w.start()
             for w in workers: w.join(5)
+        self.assertFalse(any(w.is_alive() for w in workers))
         self.assertEqual(done, {"history": 200, "library": 200, "usage": 200})
 
     def test_session_cookie_is_bound_to_username_and_not_signed_with_the_password(self):

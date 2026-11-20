@@ -3,7 +3,7 @@ import io
 from pathlib import Path
 import modal
 from modal_app import gpu_image,models
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 app=modal.App('img2img-artist-patch-detail-experiment')
 image=gpu_image.add_local_python_source('modal_app').add_local_dir(str(ROOT/'outputs/verification/sr-patches'),'/patches')
 @app.function(image=image,volumes={'/models':models},gpu=['L4','A10G'],timeout=180,max_containers=1,retries=0)

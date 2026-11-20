@@ -52,7 +52,7 @@ def run(records, model_id):
 @app.local_entrypoint()
 def main(model: str = 'tuymans_modal_2400', count: int = 6):
     import httpx
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     credentials = json.loads((root / '.modal-app-credentials.json').read_text())
     with httpx.Client(base_url='https://mailhospodarsky--i.modal.run',
                       auth=(credentials['STUDIO_USERNAME'], credentials['STUDIO_PASSWORD']), timeout=90) as client:

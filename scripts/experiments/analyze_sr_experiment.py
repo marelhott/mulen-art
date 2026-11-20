@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image,ImageFilter,ImageDraw
 
-root=Path(__file__).resolve().parents[1]/'outputs/verification'
+root=Path(__file__).resolve().parents[2]/'outputs/verification'
 folder=root/'detail-sr'
 metrics={}
 for name in ['canvas','atelier']:

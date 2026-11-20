@@ -22,7 +22,7 @@ payloads = modal.Dict.from_name("img2img-payloads", create_if_missing=True)
 state = modal.Volume.from_name("img2img-state", create_if_missing=True)
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("fastapi==0.115.6", "pillow==11.1.0")
+    .pip_install_from_requirements("app_runtime/requirements-gateway.txt")
     .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
           # Fallback rate (Modal L4); per-image estimates use the GPU that actually ran the job.
           "GPU_HOURLY_USD": "0.80"})

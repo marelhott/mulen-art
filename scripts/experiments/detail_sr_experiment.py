@@ -3,7 +3,7 @@ import hashlib,io,json
 from pathlib import Path
 import modal
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 INPUTS=ROOT/'outputs/verification/sr-inputs'
 app=modal.App('img2img-reconstruction-sr-experiment')
 image=(modal.Image.debian_slim(python_version='3.11')

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import modal
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 app = modal.App("img2img-realsrgan-smoke")
 image = (modal.Image.debian_slim(python_version="3.11")
          .pip_install_from_requirements(str(ROOT / "app_runtime/requirements.txt"))

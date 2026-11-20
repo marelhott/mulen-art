@@ -4,7 +4,7 @@ from pathlib import Path
 import modal
 from modal_app import gpu_image, models
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 app = modal.App('img2img-output-restoration-smoke')
 image = gpu_image.add_local_python_source('modal_app').add_local_dir(str(ROOT / 'outputs/verification/sr-patches'), '/patches')
 
