@@ -1706,12 +1706,13 @@ input[type="range"]::-moz-range-progress {
 @media (max-width: 650px) {
   .studio,
   .studio.right-hidden {
-    display: grid;
-    grid-template-columns: 1fr;
-    grid-template-rows: 58px auto auto;
-    overflow: visible;
-    height: auto;
-    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+    height: 100dvh;
+  }
+  .studio > * {
+    flex: none;
   }
   .icon-rail {
     display: none;
@@ -1723,6 +1724,7 @@ input[type="range"]::-moz-range-progress {
     padding: 0 15px;
     position: sticky;
     top: 0;
+    height: 58px;
   }
   .brand-wordmark {
     font-size: 11px;
@@ -1741,7 +1743,6 @@ input[type="range"]::-moz-range-progress {
     display: flex;
     flex-direction: column;
     height: auto;
-    min-height: 0;
     border-bottom: 1px solid var(--line);
   }
   .left-panel > * {

@@ -8,6 +8,7 @@ export function RetryImage({ src, fallbackSrc, ...props }) {
   const [useFallback, setUseFallback] = useState(false);
   const timer = useRef(null);
   useEffect(() => {
+    window.clearTimeout(timer.current);
     setAttempt(0);
     setUseFallback(false);
   }, [src, fallbackSrc]);

@@ -323,9 +323,10 @@ function App() {
       (preset.loraId && preset.loraId !== "none" ? "lora" : "checkpoint");
     setGenerationMode(mode);
     if (preset.atelier) setAtelier(current => ({...current, ...preset.atelier}));
-    setUseRealsrgan(Boolean(preset.useRealsrgan));
-    setUseRealEsrgan(Boolean(preset.useRealEsrgan));
-    setRestormerMode(["off", "motion", "defocus"].includes(preset.restormerMode) ? preset.restormerMode : "off");
+    // Presets saved before these settings existed lack the keys: leave the current choice alone then.
+    if ("useRealsrgan" in preset) setUseRealsrgan(Boolean(preset.useRealsrgan));
+    if ("useRealEsrgan" in preset) setUseRealEsrgan(Boolean(preset.useRealEsrgan));
+    if ("restormerMode" in preset) setRestormerMode(["off", "motion", "defocus"].includes(preset.restormerMode) ? preset.restormerMode : "off");
     if (preset.variants && typeof preset.variants === "object") setVariants(current => ({...current, ...preset.variants}));
     setModelId(
       preset.modelId && preset.modelId !== "sdxl_base"

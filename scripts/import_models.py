@@ -3,6 +3,7 @@
 Run: .venv/bin/python -m modal run scripts/import_models.py
 """
 import hashlib
+import os
 import base64
 import struct
 import json
