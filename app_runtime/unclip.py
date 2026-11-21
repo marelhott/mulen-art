@@ -90,21 +90,123 @@ def step_callback(progress_callback, base: float, span: float, index: int, total
     return callback
 
 
+METAMORPH_MODEL_NAME = "SDXL Base + IP-Adapter (Metamorfóza)"
+IP_ADAPTER_WEIGHTS = {"plain": "ip-adapter_sdxl_vit-h.safetensors", "plus": "ip-adapter-plus_sdxl_vit-h.safetensors"}
+
+
+def ipadapter_dir() -> Path:
+    return Path(os.getenv("IPADAPTER_DIR", "/models/ipadapter"))
+
+
+def metamorph_size(width: int, height: int, pixels: int = 1024 * 1024) -> tuple[int, int]:
+    """About one megapixel (SDXL's native area) with the source's aspect ratio; both sides multiples of 64."""
+    ratio = width / height
+    return (max(512, round((pixels * ratio) ** 0.5 / 64) * 64), max(512, round((pixels / ratio) ** 0.5 / 64) * 64))
+
+
+def ensure_metamorph_pipeline():
+    """SDXL Base img2img with both ViT-H IP-Adapters loaded. Its own instance: core.PIPELINES must never see the adapters,
+    or the user's normal SDXL Base + LoRA jobs would be silently conditioned on an image."""
+    if "metamorph" in _PIPELINE:
+        return _PIPELINE["metamorph"]
+    base = core.get_config_item("models", "sdxl_base")["path"]
+    adapters = ipadapter_dir()
+    missing = [str(path) for path in (Path(base), adapters / "models/image_encoder/model.safetensors",
+               *(adapters / "sdxl_models" / name for name in IP_ADAPTER_WEIGHTS.values())) if not path.is_file()]
+    if missing:
+        raise RuntimeError("Metamorfóza is missing weights (" + ", ".join(missing) + "); run scripts/download_sdxl_base.py and scripts/download_ipadapter.py")
+    torch = core.get_torch()
+    from diffusers import StableDiffusionXLImg2ImgPipeline
+    pipe = StableDiffusionXLImg2ImgPipeline.from_single_file(base, torch_dtype=torch.float16, use_safetensors=True)
+    pipe.scheduler = core.make_scheduler(pipe.scheduler.config, "dpmpp_2m", "karras")
+    # Both adapters share the ViT-H encoder; each request switches one on through its scale. No xformers afterwards:
+    # enabling it would replace the IP-Adapter attention processors and the source image would stop having any effect.
+    pipe.load_ip_adapter(str(adapters), subfolder="sdxl_models", weight_name=list(IP_ADAPTER_WEIGHTS.values()),
+                         image_encoder_folder="models/image_encoder")
+    pipe.to("cuda")
+    pipe.set_progress_bar_config(disable=True)
+    pipe.enable_vae_tiling()
+    _PIPELINE["metamorph"] = pipe
+    return pipe
+
+
+def adapter_scales(variant: str, scale: float) -> list[float]:
+    return [scale if name == variant else 0.0 for name in IP_ADAPTER_WEIGHTS]
+
+
+def generate_metamorph(generation_input: GenerationInput, progress_callback: ProgressCallback | None = None,
+                       image_callback: Callable | None = None, extra_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Reimagine XL style: SDXL starts from the noised source (keeps layout, palette, gesture) while the IP-Adapter feeds
+    it the picture's content and style, so the forms are re-invented rather than copied."""
+    started = time.monotonic()
+    torch = core.get_torch()
+    report_progress(progress_callback, 0.06, "Loading SDXL Base + IP-Adapter")
+    pipe = ensure_metamorph_pipeline()
+    report_progress(progress_callback, 0.18, "Model ready: Metamorfóza")
+    source = core.decode_image(generation_input.image_base64)
+    width, height = metamorph_size(source.width, source.height)
+    source = source.resize((width, height))
+    reference = embedding_image(source)
+    pipe.set_ip_adapter_scale(adapter_scales(generation_input.ip_variant, generation_input.ip_scale))
+    setup_seconds = time.monotonic() - started
+    total = generation_input.num_images
+    meta = {
+        "generation_type": "reimagine", "reimagine_mode": "metamorph", "model_id": UNCLIP_MODEL_ID, "model_name": METAMORPH_MODEL_NAME,
+        "lora_id": "none", "denoise": generation_input.denoise, "ip_scale": generation_input.ip_scale, "ip_variant": generation_input.ip_variant,
+        "steps": generation_input.steps, "guidance_scale": generation_input.cfg, "sampler": "dpmpp_2m", "schedule": "karras",
+        "prompt": generation_input.prompt, "negative_prompt": generation_input.negative_prompt,
+        "scale": 1.0, "demo_mode": False, "recipe": core.runtime_recipe(pipe),
+        "generation_width": width, "generation_height": height,
+    }
+    output_images = []
+    inference_started = time.monotonic()
+    for index in range(total):
+        seed = random.randint(0, 2**32 - 1) if generation_input.seed == -1 else (generation_input.seed + index) % 2**32
+        generator = torch.Generator(device="cuda").manual_seed(seed)
+        base = 0.22 + (index / total) * 0.76
+        report_progress(progress_callback, base, f"Variation {index + 1}/{total}")
+        result = pipe(
+            prompt=generation_input.prompt, negative_prompt=generation_input.negative_prompt,
+            image=source, strength=generation_input.denoise,
+            ip_adapter_image=[reference] * len(IP_ADAPTER_WEIGHTS),
+            num_inference_steps=generation_input.steps, guidance_scale=generation_input.cfg,
+            generator=generator,
+            callback_on_step_end=core.build_step_callback(progress_callback, base, total, index, generation_input.steps, span=0.76 / total),
+            callback_on_step_end_tensor_inputs=[],
+        ).images[0]
+        image_meta = {**meta, "seed": seed, "actual_steps": int(pipe.num_timesteps),
+                      "output_width": result.width, "output_height": result.height,
+                      "setup_seconds": round(setup_seconds, 2),
+                      "generation_and_save_seconds": round(time.monotonic() - inference_started, 2),
+                      **(extra_meta or {})}
+        output_images.append({**core.encode_image(result, image_meta), "generation_meta": image_meta})
+        if image_callback is not None:
+            image_callback(output_images[-1], image_meta)
+        meta.update(image_meta)
+        report_progress(progress_callback, base + 0.76 / total, f"Variation {index + 1}/{total} saved")
+    meta["setup_seconds"] = round(setup_seconds, 2)
+    meta["generation_and_save_seconds"] = round(time.monotonic() - inference_started, 2)
+    report_progress(progress_callback, 1.0, "Generation complete")
+    return {"images": output_images, "meta": meta}
+
+
 def generate_variations(generation_input: GenerationInput, progress_callback: ProgressCallback | None = None,
                         image_callback: Callable | None = None, extra_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    if generation_input.reimagine_mode == "metamorph":
+        return generate_metamorph(generation_input, progress_callback, image_callback, extra_meta)
     started = time.monotonic()
     torch = core.get_torch()
     report_progress(progress_callback, 0.06, "Loading SD 2.1 unCLIP")
     pipe = ensure_unclip_pipeline()
     report_progress(progress_callback, 0.18, "Model ready: SD 2.1 unCLIP")
     source = core.decode_image(generation_input.image_base64)
-    width, height = output_size(source.width, source.height)
+    width, height = output_size(source.width, source.height, generation_input.long_side)
     source = source.resize((width, height))
     setup_seconds = time.monotonic() - started
     total = generation_input.num_images
     meta = {
         "generation_type": "reimagine", "model_id": UNCLIP_MODEL_ID, "model_name": UNCLIP_MODEL_NAME, "lora_id": "none",
-        "noise_level": generation_input.noise_level, "denoise": generation_input.denoise, "steps": generation_input.steps, "guidance_scale": generation_input.cfg,
+        "reimagine_mode": "unclip", "noise_level": generation_input.noise_level, "denoise": generation_input.denoise, "steps": generation_input.steps, "guidance_scale": generation_input.cfg,
         "prompt": generation_input.prompt, "negative_prompt": generation_input.negative_prompt,
         "scale": 1.0, "demo_mode": False, "recipe": core.runtime_recipe(pipe),
         "generation_width": width, "generation_height": height,

@@ -86,6 +86,10 @@ class GenerationInput:
     width: int = 1024
     height: int = 1024
     noise_level: int = 0  # Reimagine (SD 2.1 unCLIP): 0 = faithful variations, higher = looser (0-500)
+    reimagine_mode: str = "unclip"  # "unclip" (SD 2.1 unCLIP) or "metamorph" (SDXL Base img2img + IP-Adapter)
+    ip_scale: float = 0.8  # metamorph: how strongly the source picture steers the result
+    ip_variant: str = "plus"  # metamorph: "plus" (keeps texture and style) or "plain" IP-Adapter
+    long_side: int = 768  # unclip: output long side; 1024 gives more detail (the init latents keep it coherent)
 
 
 def check_job_size(num_images: int) -> None:
@@ -271,6 +275,16 @@ def is_cuda_oom(exc: Exception) -> bool:
     return exc.__class__.__name__ == "OutOfMemoryError" and exc.__class__.__module__.startswith("torch")
 
 
+def reimagine_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    mode = str(payload.get("reimagine_mode", "unclip"))
+    variant = str(payload.get("ip_variant", "plus"))
+    long_side = int(payload.get("long_side", 768))
+    if mode not in {"unclip", "metamorph"} or variant not in {"plus", "plain"} or long_side not in {768, 1024}:
+        raise ValueError("Unknown unCLIP mode, IP-Adapter variant or size")
+    return {"reimagine_mode": mode, "ip_variant": variant, "long_side": long_side,
+            "ip_scale": clamp(float(payload.get("ip_scale", 0.8)), 0.0, 1.5)}
+
+
 def parse_input(payload: dict[str, Any]) -> GenerationInput:
     generation_type = str(payload.get("generation_type", "img2img"))
     if generation_type not in {"img2img", "atelier", "reimagine"}:
@@ -383,6 +397,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
         noise_level=int(clamp(int(payload.get("noise_level", 0)), 0, 500)),
+        **(reimagine_fields(payload) if generation_type == "reimagine" else {}),
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
         atelier_photo_source=str(payload.get("atelier_photo_source", "generated")),
         atelier_photo_collection=str(payload.get("atelier_photo_collection", "malba")),

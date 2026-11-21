@@ -3,7 +3,7 @@ import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { randomId, safeStorage } from "./shared";
-import { planReimagine, plannedImages } from "./reimagineTools";
+import { DEFAULT_REIMAGINE, planReimagine, plannedImages, reimagineFromSettings } from "./reimagineTools";
 import { usePresets } from "./usePresets";
 import { useGallery } from "./useGallery";
 import { useServerOptions } from "./useServerOptions";
@@ -58,7 +58,7 @@ function App() {
   const [atelier, setAtelier] = useState({mode: "noise", theme: "all", archive: "hofmann", modelIds: ["tuymans_modal_2400"], source: "single", colorLevel: 2, count: 4,
     width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.82,
     sampler: "dpmpp_2m", schedule: "karras"});
-  const [reimagine, setReimagine] = useState({usePresets: false, count: 4, strength: 0.6, noise: 0, steps: 20, cfg: 10, seed: "-1"});
+  const [reimagine, setReimagine] = useState(DEFAULT_REIMAGINE);
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
   const { archives, gpuHourlyUsd, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
@@ -134,7 +134,7 @@ function App() {
 
   function applySettings(settings) {
     if (settings?.generation_type === "reimagine") {
-      setReimagine(current => ({...current, strength: settings.denoise ?? current.strength, noise: settings.noise_level ?? current.noise, steps: settings.steps ?? current.steps, cfg: settings.guidance_scale ?? settings.cfg ?? current.cfg}));
+      setReimagine(current => reimagineFromSettings(settings, current));
       return;
     }
     const next = controlsFromSettings(settings);
@@ -464,8 +464,7 @@ function App() {
     const requestedSeed = Number(reimagine.seed === "" ? -1 : reimagine.seed);
     if (!inputItems.length || !Number.isSafeInteger(count) || count < 1) {setError("Přidej obrázek a zvol kladný počet variant."); return;}
     if (!Number.isInteger(requestedSeed) || requestedSeed < -1 || requestedSeed > 4294967295) {setError("Seed musí být celé číslo od −1 do 4294967295."); return;}
-    const settings = {generation_type: "reimagine", steps: Number(reimagine.steps), cfg: Number(reimagine.cfg)};
-    const planFor = seed => planReimagine({count, strength: Number(reimagine.strength), noise: Number(reimagine.noise), seed, usePresets: Boolean(reimagine.usePresets)});
+    const planFor = seed => planReimagine(reimagine, seed);
     const total = inputItems.length * plannedImages(planFor(0));
     const continuing = submitting.current || activeJobs.length > 0;
     pendingSubmissions.current += 1; submitting.current = true;
@@ -489,7 +488,7 @@ function App() {
       for (const request of planFor(seed)) {
         try {
           const response = await apiFetch("/api/generate-batch", {method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({inputs: [{name: item.file.name, source_id: sourceId}], settings: {...settings, ...request}})});
+            body: JSON.stringify({inputs: [{name: item.file.name, source_id: sourceId}], settings: request})});
           const data = await readJson(response, "Odeslání se nezdařilo.");
           const jobs = data.jobs.map(job => ({...job, source_id: item.id, source_name: item.file.name}));
           const accepted = jobs.reduce((sum, job) => sum + job.expected_images, 0); sent += accepted;

@@ -299,7 +299,7 @@ class ImageWorker:
 
 
 @app.cls(
-    image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=16384,
+    image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=24576,  # metamorph also loads SDXL Base from a single file
     volumes={"/models": models, "/outputs": outputs, "/archives": archives},
     min_containers=0, max_containers=MAX_GPU_JOBS, scaledown_window=20,
     timeout=1200, retries=0,

@@ -646,7 +646,7 @@ export default function StudioView(p) {
                 ? `${items.length} uložených obrázků`
                 : p.isGenerating
                   ? `Celá fronta: ${p.readyCount} / ${p.outputCount} hotovo`
-                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : isReimagine ? `${unclipItems.filter(Boolean).length} variant · SD 2.1 unCLIP bez promptu` : `${canvasItems.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
+                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : isReimagine ? `${unclipItems.filter(Boolean).length} variant · varianty a metamorfózy bez promptu` : `${canvasItems.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
             </p>
           </div>
           <button
@@ -789,7 +789,7 @@ export default function StudioView(p) {
               Prostor pro <em>nové obrazy.</em>
             </h2>
             <p>
-              {isAtelier ? <>Vyber způsob tvorby a checkpoint v levém panelu.<br />Vlastní fotografie ani psaní zadání nejsou potřeba.</> : isReimagine ? <>Přidej obrázek v levém panelu a nastav odchylku.<br />unCLIP z něj vytvoří varianty bez psaní promptu.</> : <>Přidej vstupní obrázky, vyber checkpoint nebo LoRA<br />a nech své modely pracovat v cloudu.</>}
+              {isAtelier ? <>Vyber způsob tvorby a checkpoint v levém panelu.<br />Vlastní fotografie ani psaní zadání nejsou potřeba.</> : isReimagine ? <>Přidej obrázek v levém panelu a nastav odchylku.<br />Vznikne z něj varianta nebo metamorfóza, bez psaní promptu.</> : <>Přidej vstupní obrázky, vyber checkpoint nebo LoRA<br />a nech své modely pracovat v cloudu.</>}
             </p>
             <button
               className="toolbar-button"
