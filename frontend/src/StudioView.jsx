@@ -701,13 +701,15 @@ export default function StudioView(p) {
             <button type="button" aria-label="Zavřít hlášení" onClick={() => p.setError("")}><X size={13} /></button>
           </div>
         )}
-        <div className="canvas-actions">
-          <button className={`toolbar-button ${selecting ? "active" : ""}`} aria-pressed={selecting}
-            onClick={() => {setSelecting(!selecting); setSelection(new Set());}}>
-            <Check size={13} /> {selecting ? "Ukončit výběr" : "Vybrat více"}
-          </button>
-          <span className="help-text">Kliknutím zvětšíš · ve výběru označíš rámečkem</span>
-        </div>
+        {!isReimagine && (
+          <div className="canvas-actions">
+            <button className={`toolbar-button ${selecting ? "active" : ""}`} aria-pressed={selecting}
+              onClick={() => {setSelecting(!selecting); setSelection(new Set());}}>
+              <Check size={13} /> {selecting ? "Ukončit výběr" : "Vybrat více"}
+            </button>
+            <span className="help-text">Kliknutím zvětšíš · ve výběru označíš rámečkem</span>
+          </div>
+        )}
         {selection.size > 0 && (
           <div className="selection-toolbar">
             <span>
@@ -737,7 +739,7 @@ export default function StudioView(p) {
             )}
           </div>
         )}
-        {tab !== "atelier" && unfiltered.filter(Boolean).length > 1 && (
+        {tab !== "atelier" && !isReimagine && unfiltered.filter(Boolean).length > 1 && (
           <div className="filter-bar" role="search">
             <select aria-label="Filtrovat podle modelu" value={filterModel} onChange={(event) => setFilterModel(event.target.value)}>
               <option value="">{TEXT.filterModelAll}</option>
