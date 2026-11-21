@@ -24,7 +24,7 @@ export function ReimagineControls({value: r, update, inputCount, generating, onG
     {inputBlock}
     <label className="variants-toggle realsr-toggle">
       <input type="checkbox" checked={presets} onChange={event => update({usePresets: event.target.checked})} />
-      <span><b>Sada přednastavení</b><small>Každý obrázek vznikne najednou ve {presetList.length} verzích se stejným seedem, takže je lze porovnat. Vypnuto = vlastní nastavení níže.</small></span>
+      <span><b>Sada přednastavení</b><small>Každý obrázek vznikne najednou ve {presetList.length} různých verzích, každá s vlastním seedem a jiným nastavením. Vypnuto = vlastní nastavení níže.</small></span>
     </label>
     {presets && <ul className="help-text" aria-label="Přednastavení">{presetList.map(preset => <li key={preset.id}>{presetLabel(preset)}</li>)}</ul>}
     {presets && <p className="help-text">{inputCount ? `${inputCount} × ${presetList.length} = ${total} výstupů` : "Přidej obrázek, ze kterého se verze odvodí."}</p>}

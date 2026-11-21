@@ -15,17 +15,20 @@ test("metamorph mode sends its own strength, adapter and guidance and no unCLIP 
   assert.equal(request.noise_level, undefined);
 });
 
-test("preset mode gives one image per preset of the active mode with a shared seed", () => {
+test("preset mode gives one image per preset of the active mode, each with its own seed", () => {
   for (const mode of ["unclip", "metamorph"]) {
     const plan = planReimagine({...DEFAULT_REIMAGINE, mode, usePresets: true, count: 16}, 7);
     assert.equal(plan.length, REIMAGINE_PRESETS[mode].length);
-    assert.ok(plan.every(r => r.num_images === 1 && r.seed === 7 && r.reimagine_mode === mode));
+    assert.ok(plan.every(r => r.num_images === 1 && r.reimagine_mode === mode));
+    assert.deepEqual(plan.map(r => r.seed), plan.map((_, index) => 7 + index));
     assert.deepEqual(plan.map(r => r.denoise), REIMAGINE_PRESETS[mode].map(p => p.settings.denoise));
   }
 });
 
 test("labels and the repeat action round-trip the settings", () => {
-  assert.equal(presetLabel(REIMAGINE_PRESETS.metamorph[2]), "Ukotvená v obraze · síla 0,85 · vliv obrazu 0,8");
+  assert.equal(presetLabel(REIMAGINE_PRESETS.metamorph[2]), "Ukotvená v obraze · síla 0,93 · vliv obrazu 0,7 · CFG 5");
+  const [first] = planReimagine({...DEFAULT_REIMAGINE, mode: "metamorph", usePresets: true}, 1);
+  assert.equal(first.cfg, 4.5);
   const back = reimagineFromSettings({reimagine_mode: "metamorph", denoise: 0.75, ip_scale: 0.5, ip_variant: "plus", steps: 25, guidance_scale: 6}, DEFAULT_REIMAGINE);
   assert.deepEqual([back.mode, back.mStrength, back.ipScale, back.ipVariant, back.mSteps, back.mCfg], ["metamorph", 0.75, 0.5, "plus", 25, 6]);
   assert.equal(reimagineFromSettings({denoise: 0.5, generation_width: 576, generation_height: 768}, DEFAULT_REIMAGINE).longSide, 768);
