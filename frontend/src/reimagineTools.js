@@ -8,13 +8,13 @@ export const REIMAGINE_MODES = [
 ];
 
 export const DEFAULT_REIMAGINE = {
-  mode: "unclip", usePresets: false, count: 4, seed: "-1",
+  mode: "unclip", usePresets: false, sameSeed: false, count: 4, seed: "-1",
   strength: 0.6, noise: 0, steps: 35, cfg: 5, longSide: 1024,
   mStrength: 0.85, ipScale: 0.6, ipVariant: "plain", mSteps: 30, mCfg: 5.5,
 };
 
-// One input image becomes one version per preset. Each version gets its own seed: with a shared seed the versions
-// started from the same noise and looked alike (tested: the seed changes the result far more than the settings).
+// One input image becomes one version per preset. By default each version gets its own seed (a shared seed starts every
+// version from the same noise, so they look alike); sameSeed keeps one seed to compare only the effect of the settings.
 export const REIMAGINE_PRESETS = {
   unclip: [
     {id: "faithful", name: "Věrná", settings: {denoise: 0.5, noise_level: 0}},
@@ -44,7 +44,7 @@ function modeSettings(r) {
 // The request settings sent for ONE input image. Manual mode: chunks of up to 8 images with consecutive seeds.
 export function planReimagine(r, seed) {
   const base = {generation_type: "reimagine", ...modeSettings(r)};
-  if (r.usePresets) return (REIMAGINE_PRESETS[r.mode] || REIMAGINE_PRESETS.unclip).map((preset, index) => ({...base, ...preset.settings, num_images: 1, seed: (seed + index) % 4294967296}));
+  if (r.usePresets) return (REIMAGINE_PRESETS[r.mode] || REIMAGINE_PRESETS.unclip).map((preset, index) => ({...base, ...preset.settings, num_images: 1, seed: r.sameSeed ? seed : (seed + index) % 4294967296}));
   const count = Number(r.count);
   return Array.from({length: Math.ceil(count / 8)}, (_, chunk) => ({...base, num_images: Math.min(8, count - chunk * 8), seed: (seed + chunk * 8) % 4294967296}));
 }

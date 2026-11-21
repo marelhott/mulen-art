@@ -21,6 +21,8 @@ test("preset mode gives one image per preset of the active mode, each with its o
     assert.equal(plan.length, REIMAGINE_PRESETS[mode].length);
     assert.ok(plan.every(r => r.num_images === 1 && r.reimagine_mode === mode));
     assert.deepEqual(plan.map(r => r.seed), plan.map((_, index) => 7 + index));
+    const shared = planReimagine({...DEFAULT_REIMAGINE, mode, usePresets: true, sameSeed: true}, 7);
+    assert.ok(shared.every(r => r.seed === 7));
     assert.deepEqual(plan.map(r => r.denoise), REIMAGINE_PRESETS[mode].map(p => p.settings.denoise));
   }
 });

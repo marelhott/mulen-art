@@ -24,8 +24,16 @@ export function ReimagineControls({value: r, update, inputCount, generating, onG
     {inputBlock}
     <label className="variants-toggle realsr-toggle">
       <input type="checkbox" checked={presets} onChange={event => update({usePresets: event.target.checked})} />
-      <span><b>Sada přednastavení</b><small>Každý obrázek vznikne najednou ve {presetList.length} různých verzích, každá s vlastním seedem a jiným nastavením. Vypnuto = vlastní nastavení níže.</small></span>
+      <span><b>Sada přednastavení</b><small>Každý obrázek vznikne najednou ve {presetList.length} verzích s jiným nastavením. Vypnuto = vlastní nastavení níže.</small></span>
     </label>
+    {presets && <div className="control-block">
+      <Label>SEEDY VERZÍ</Label>
+      <div className="segmented" role="group" aria-label="Seedy verzí">
+        <button aria-pressed={!r.sameSeed} onClick={() => update({sameSeed: false})}>Různé</button>
+        <button aria-pressed={Boolean(r.sameSeed)} onClick={() => update({sameSeed: true})}>Jeden</button>
+      </div>
+      <span className="help-text">{r.sameSeed ? "Všechny verze ze stejného šumu: liší se jen nastavením, takže jsou si podobné a dají se přímo porovnat." : "Každá verze má vlastní seed: výsledky jsou výrazně rozmanitější."}</span>
+    </div>}
     {presets && <ul className="help-text" aria-label="Přednastavení">{presetList.map(preset => <li key={preset.id}>{presetLabel(preset)}</li>)}</ul>}
     {presets && <p className="help-text">{inputCount ? `${inputCount} × ${presetList.length} = ${total} výstupů` : "Přidej obrázek, ze kterého se verze odvodí."}</p>}
     {!presets && <Range label="POČET VARIANT NA OBRÁZEK" min={1} max={16} step={1} value={r.count} onChange={count => update({count})}
