@@ -298,6 +298,37 @@ class ImageWorker:
                 log.warning(f"dispatch wake-up failed (the periodic sweep will catch up): {exc}")
 
 
+@app.cls(
+    image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=16384,
+    volumes={"/models": models, "/outputs": outputs, "/archives": archives},
+    min_containers=0, max_containers=MAX_GPU_JOBS, scaledown_window=20,
+    timeout=1200, retries=0,
+)
+class UnclipWorker:
+    """Reimagine (SD 2.1 unCLIP). Own pool: its pipeline is not an SDXL checkpoint, so ImageWorker cannot load it.
+    Jobs still go through `dispatch`, so the global GPU cap, FIFO queue and spend accounting apply."""
+
+    @modal.enter()
+    def preload(self):
+        try:
+            models.reload()
+            from app_runtime.unclip import ensure_unclip_pipeline
+            ensure_unclip_pipeline()
+        except Exception as exc:  # run() reports the real error on the job
+            log.warning(f"preload of unCLIP failed: {exc}")
+
+    @modal.method()
+    def run(self, job_id: str, payload: dict):
+        try:
+            return generate_job(job_id, payload)
+        finally:
+            release_slot(slots, job_id)
+            try:
+                dispatch.spawn()
+            except Exception as exc:
+                log.warning(f"dispatch wake-up failed (the periodic sweep will catch up): {exc}")
+
+
 @app.function(
     image=base_image, max_containers=1, scaledown_window=20, cpu=0.25, memory=512, timeout=300,
     # Safety net if a wake-up is ever lost: the queue is also swept every two minutes.
@@ -307,6 +338,8 @@ def dispatch():
     from app_runtime.server import now_iso
 
     def spawn(job_id, payload):
+        if payload.get("generation_type") == "reimagine":
+            return UnclipWorker().run.spawn(job_id, payload).object_id
         return ImageWorker(model_id=payload["model_id"]).run.spawn(job_id, payload).object_id
 
     def is_cancelled(job_id):

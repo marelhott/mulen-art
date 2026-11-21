@@ -14,6 +14,7 @@ import {
   Columns2,
   Plus,
   Search,
+  Shuffle,
   Sparkles,
   Sun,
   Trash2,
@@ -29,6 +30,7 @@ import { Compare } from "./components/Compare";
 import { CheckpointPicker } from "./components/CheckpointPicker";
 import { VariantsPanel } from "./components/VariantsPanel";
 import { AtelierControls, AtelierQueue } from "./components/Atelier";
+import { ReimagineControls } from "./components/Reimagine";
 import { ContextMenu } from "./components/ContextMenu";
 import { LibraryDialog } from "./components/LibraryDialog";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -56,6 +58,7 @@ export default function StudioView(p) {
   const [filterText, setFilterText] = useState("");
   const [tab, setTab] = useState("atelier");
   const isAtelier = tab === "atelier";
+  const isReimagine = tab === "reimagine";
   const updateAtelier = patch => p.setAtelier(current => ({...current, ...patch}));
   const [thumbSize, setThumbSize] = useState(
     () => Number(safeStorage.get("img2img-thumb-size")) || 0,
@@ -110,9 +113,11 @@ export default function StudioView(p) {
   // Two separate feeds: canvas (img2img) and Atelier; the library holds both. Pending placeholders
   // (null) belong to the kind of job currently running.
   const isAtelierItem = (item) => item?.settings?.generation_type === "atelier";
+  const isUnclipItem = (item) => item?.settings?.generation_type === "reimagine";
   const atelierItems = p.results.filter((item) => (item ? isAtelierItem(item) : p.pendingMode === "atelier"));
-  const canvasItems = p.results.filter((item) => (item ? !isAtelierItem(item) : p.pendingMode !== "atelier"));
-  const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : canvasItems;
+  const unclipItems = p.results.filter((item) => (item ? isUnclipItem(item) : p.pendingMode === "reimagine"));
+  const canvasItems = p.results.filter((item) => (item ? !isAtelierItem(item) && !isUnclipItem(item) : p.pendingMode === "results"));
+  const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : isReimagine ? unclipItems : canvasItems;
   const items = filterItems(unfiltered, { modelId: filterModel, text: filterText });
   const filtering = Boolean(filterModel || filterText.trim());
   const modelNameFor = (item) => p.models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name;
@@ -291,7 +296,7 @@ export default function StudioView(p) {
   const viewerPool =
     p.selectedImage?.context === "library"
       ? p.libraryItems
-      : (isAtelier ? atelierItems : canvasItems).filter(Boolean);
+      : (isAtelier ? atelierItems : isReimagine ? unclipItems : canvasItems).filter(Boolean);
   const viewerIndex = viewerPool.findIndex(
     (item) => item.id === p.selectedImage?.id,
   );
@@ -302,6 +307,98 @@ export default function StudioView(p) {
         ? p.openLibraryImage(item)
         : p.openResultImage(item, viewerIndex + delta);
   };
+
+  const inputBlock = (
+    <div className="control-block input-block">
+      <div className="label-row">
+        <Label>VSTUPNÍ OBRÁZKY</Label>
+        <span>{p.inputItems.length}</span>
+      </div>
+      <div
+        className={`upload-zone ${dragging ? "drag-over" : ""}`}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false); }}
+        onDrop={drop}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept="image/png,image/jpeg,image/webp"
+          disabled={false}
+          aria-label="Přidat vstupní obrázky"
+          onChange={p.handleFileChange}
+        />
+        {p.inputItems.length ? (
+          <div className="input-grid">
+            {p.inputItems.map((item, index) => (
+              <div className="input-thumb" key={item.id}>
+                <button
+                  className="input-preview"
+                  title={`Zvětšit ${item.file.name}`}
+                  onClick={() =>
+                    p.setSelectedImage({
+                      id: item.id,
+                      src: item.url,
+                      filename: item.file.name,
+                      context: "input",
+                    })
+                  }
+                >
+                  <img src={item.url} alt={item.file.name} loading="lazy" />
+                </button>
+                <button
+                  className="thumb-remove"
+                  disabled={false}
+                  aria-label={`Odebrat ${item.file.name}`}
+                  onClick={() =>
+                    p.setInputItems((current) =>
+                      current.filter((other) => other.id !== item.id),
+                    )
+                  }
+                >
+                  <X size={11} />
+                </button>
+                <span>{index + 1}</span>
+              </div>
+            ))}
+            <button
+              className="add-input-tile"
+              aria-label="Přidat další obrázky"
+              disabled={false}
+              onClick={() => inputRef.current.click()}
+            >
+              <Plus size={18} />
+            </button>
+          </div>
+        ) : (
+          <button
+            className="upload-empty"
+            disabled={false}
+            onClick={() => inputRef.current.click()}
+          >
+            <Plus size={23} />
+            <span>Přetáhni obrázky nebo vyber soubory</span>
+          </button>
+        )}
+      </div>
+      <p className="help-text">
+        Každý obrázek samostatně. Další výběr přidává vstupy.
+      </p>
+      {p.inputItems.length > 0 && (
+        <button
+          className="text-button"
+          disabled={false}
+          onClick={() => p.setInputItems([])}
+        >
+          Vyprázdnit vstupy
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div className={`studio ${rightOpen ? "" : "right-hidden"}`}>
@@ -319,6 +416,9 @@ export default function StudioView(p) {
         >
           <Grid2X2 />
           <span>PLÁTNO</span>
+        </button>
+        <button className={isReimagine ? "active" : ""} onClick={() => setTab("reimagine")} title="unCLIP — varianty z jednoho obrázku (SD 2.1 unCLIP, dříve Clipdrop Reimagine)">
+          <Shuffle /><span>UNCLIP</span>
         </button>
         <button
           className={tab === "library" ? "active" : ""}
@@ -362,7 +462,7 @@ export default function StudioView(p) {
         </div>
       </header>
       <aside className="left-panel control-panel">
-        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} onAddMix={p.addMix} onRemoveMix={p.removeMix} /> : <>
+        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} onAddMix={p.addMix} onRemoveMix={p.removeMix} /> : isReimagine ? <ReimagineControls value={p.reimagine} update={patch => p.setReimagine(current => ({...current, ...patch}))} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateReimagine} inputBlock={inputBlock} /> : <>
         <button
           className="primary-button generate"
           disabled={!p.inputItems.length || (p.generationMode === "checkpoint" && !idsForSource(p.selectedModelIds, p.checkpointSource).length)}
@@ -426,95 +526,7 @@ export default function StudioView(p) {
             <span>nebo vlastní počet</span>
           </div>
         </div>
-        <div className="control-block input-block">
-          <div className="label-row">
-            <Label>VSTUPNÍ OBRÁZKY</Label>
-            <span>{p.inputItems.length}</span>
-          </div>
-          <div
-            className={`upload-zone ${dragging ? "drag-over" : ""}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false); }}
-            onDrop={drop}
-          >
-            <input
-              ref={inputRef}
-              type="file"
-              multiple
-              accept="image/png,image/jpeg,image/webp"
-              disabled={false}
-              aria-label="Přidat vstupní obrázky"
-              onChange={p.handleFileChange}
-            />
-            {p.inputItems.length ? (
-              <div className="input-grid">
-                {p.inputItems.map((item, index) => (
-                  <div className="input-thumb" key={item.id}>
-                    <button
-                      className="input-preview"
-                      title={`Zvětšit ${item.file.name}`}
-                      onClick={() =>
-                        p.setSelectedImage({
-                          id: item.id,
-                          src: item.url,
-                          filename: item.file.name,
-                          context: "input",
-                        })
-                      }
-                    >
-                      <img src={item.url} alt={item.file.name} loading="lazy" />
-                    </button>
-                    <button
-                      className="thumb-remove"
-                      disabled={false}
-                      aria-label={`Odebrat ${item.file.name}`}
-                      onClick={() =>
-                        p.setInputItems((current) =>
-                          current.filter((other) => other.id !== item.id),
-                        )
-                      }
-                    >
-                      <X size={11} />
-                    </button>
-                    <span>{index + 1}</span>
-                  </div>
-                ))}
-                <button
-                  className="add-input-tile"
-                  aria-label="Přidat další obrázky"
-                  disabled={false}
-                  onClick={() => inputRef.current.click()}
-                >
-                  <Plus size={18} />
-                </button>
-              </div>
-            ) : (
-              <button
-                className="upload-empty"
-                disabled={false}
-                onClick={() => inputRef.current.click()}
-              >
-                <Plus size={23} />
-                <span>Přetáhni obrázky nebo vyber soubory</span>
-              </button>
-            )}
-          </div>
-          <p className="help-text">
-            Každý obrázek samostatně. Další výběr přidává vstupy.
-          </p>
-          {p.inputItems.length > 0 && (
-            <button
-              className="text-button"
-              disabled={false}
-              onClick={() => p.setInputItems([])}
-            >
-              Vyprázdnit vstupy
-            </button>
-          )}
-        </div>
+        {inputBlock}
         <div className="control-block">
           <Label>REŽIM GENEROVÁNÍ</Label>
           <div className="segmented">
@@ -627,14 +639,14 @@ export default function StudioView(p) {
           <div>
             <h1>
               <span className="heading-glow" />
-              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : isAtelier ? "ATELIÉR · NOVÉ STUDIE" : "PLÁTNO · HISTORIE GENEROVÁNÍ"}
+              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : isAtelier ? "ATELIÉR · NOVÉ STUDIE" : isReimagine ? "UNCLIP · VARIANTY Z OBRÁZKU" : "PLÁTNO · HISTORIE GENEROVÁNÍ"}
             </h1>
             <p>
               {tab === "library"
                 ? `${items.length} uložených obrázků`
                 : p.isGenerating
                   ? `Celá fronta: ${p.readyCount} / ${p.outputCount} hotovo`
-                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : `${canvasItems.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
+                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : isReimagine ? `${unclipItems.filter(Boolean).length} variant · SD 2.1 unCLIP bez promptu` : `${canvasItems.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
             </p>
           </div>
           <button
@@ -656,6 +668,7 @@ export default function StudioView(p) {
             >
               Plátno <span>{canvasItems.filter(Boolean).length}</span>
             </button>
+            <button aria-pressed={isReimagine} onClick={() => setTab("reimagine")}>unCLIP <span>{unclipItems.filter(Boolean).length}</span></button>
             <button
               aria-pressed={tab === "library"}
               onClick={() => setTab("library")}
@@ -776,7 +789,7 @@ export default function StudioView(p) {
               Prostor pro <em>nové obrazy.</em>
             </h2>
             <p>
-              {isAtelier ? <>Vyber způsob tvorby a checkpoint v levém panelu.<br />Vlastní fotografie ani psaní zadání nejsou potřeba.</> : <>Přidej vstupní obrázky, vyber checkpoint nebo LoRA<br />a nech své modely pracovat v cloudu.</>}
+              {isAtelier ? <>Vyber způsob tvorby a checkpoint v levém panelu.<br />Vlastní fotografie ani psaní zadání nejsou potřeba.</> : isReimagine ? <>Přidej obrázek v levém panelu a nastav odchylku.<br />unCLIP z něj vytvoří varianty bez psaní promptu.</> : <>Přidej vstupní obrázky, vyber checkpoint nebo LoRA<br />a nech své modely pracovat v cloudu.</>}
             </p>
             <button
               className="toolbar-button"
@@ -795,7 +808,7 @@ export default function StudioView(p) {
           </div>
         )}
       </main>
-      <SettingsPanel p={p} isAtelier={isAtelier} updateAtelier={updateAtelier} progressState={progressState} />
+      <SettingsPanel p={p} isAtelier={isAtelier} isReimagine={isReimagine} updateAtelier={updateAtelier} progressState={progressState} />
       <LibraryDialog open={libraryOpen} onClose={closeLibrary} suspended={Boolean(p.selectedImage) || compareOpen}
         items={p.libraryItems} models={p.models} actions={libraryActions} />
       {compareOpen && (

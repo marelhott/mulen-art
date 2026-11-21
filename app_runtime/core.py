@@ -85,6 +85,7 @@ class GenerationInput:
     vae_tiling: bool = True  # tiled VAE decode (the long-standing default); off only for A/B comparison
     width: int = 1024
     height: int = 1024
+    noise_level: int = 0  # Reimagine (SD 2.1 unCLIP): 0 = faithful variations, higher = looser (0-500)
 
 
 def check_job_size(num_images: int) -> None:
@@ -104,6 +105,12 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
             raise ValueError("Ateliér requires a cloud GPU; demo filters cannot verify this mode.")
         from .atelier import generate_study
         return generate_study(generation_input, progress_callback, image_callback)
+
+    if generation_input.generation_type == "reimagine":
+        if use_demo_mode():
+            raise ValueError("Reimagine requires a cloud GPU; demo filters cannot reproduce it.")
+        from .unclip import generate_variations
+        return generate_variations(generation_input, progress_callback, image_callback, extra_meta)
 
     if use_demo_mode():
         return build_demo_response(generation_input, progress_callback)
@@ -266,9 +273,9 @@ def is_cuda_oom(exc: Exception) -> bool:
 
 def parse_input(payload: dict[str, Any]) -> GenerationInput:
     generation_type = str(payload.get("generation_type", "img2img"))
-    if generation_type not in {"img2img", "atelier"}:
+    if generation_type not in {"img2img", "atelier", "reimagine"}:
         raise ValueError("Unknown generation type")
-    if generation_type == "img2img" and not payload.get("image_base64"):
+    if generation_type in {"img2img", "reimagine"} and not payload.get("image_base64"):
         raise ValueError("image_base64 is required.")
 
     scale = clamp(float(payload.get("scale", 1.0)), MIN_SCALE, MAX_SCALE)
@@ -292,13 +299,18 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     steps = int(clamp(int(payload.get("steps", QUALITY_TO_STEPS[quality])), 1, 150))
     cfg = clamp(float(payload.get("cfg", os.getenv("DEFAULT_GUIDANCE_SCALE", "1.8"))), 0.5, 20.0)
 
-    model_id = str(payload.get("model_id", "tuymans_sdxl"))
-    lora_id = str(payload.get("lora_id", "none"))
-    model = get_config_item("models", model_id)
-    get_config_item("loras", lora_id)
-    if model.get("kind") == "base" and lora_id == "none":
+    if generation_type == "reimagine":
+        # Not an SDXL checkpoint, so it has no entry in config/models.json (and stays out of every picker).
+        model_id, lora_id = "sd21_unclip", "none"
+        model = {}
+    else:
+        model_id = str(payload.get("model_id", "tuymans_sdxl"))
+        lora_id = str(payload.get("lora_id", "none"))
+        model = get_config_item("models", model_id)
+        get_config_item("loras", lora_id)
+    if generation_type != "reimagine" and model.get("kind") == "base" and lora_id == "none":
         raise ValueError("Select a trained LoRA for SDXL Base.")
-    if model.get("kind") != "base" and lora_id != "none":
+    if generation_type != "reimagine" and model.get("kind") != "base" and lora_id != "none":
         raise ValueError("Trained checkpoints run without LoRA. Use SDXL Base for LoRA mode.")
 
     raw_count = payload.get("num_images", 1)
@@ -347,7 +359,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         if render_mode != "quick":
             raise ValueError("Ateliér does not use AI detail enhancement")
     from .repaint import DEFAULT_REPAINT_DENOISE
-    default_denoise = DEFAULT_REPAINT_DENOISE if generation_type == "atelier" and atelier_mode in {"photo", "archive"} else 0.35
+    default_denoise = DEFAULT_REPAINT_DENOISE if generation_type == "atelier" and atelier_mode in {"photo", "archive"} else (0.6 if generation_type == "reimagine" else 0.35)
     return GenerationInput(
         image_base64=str(payload.get("image_base64", "")),
         model_id=model_id,
@@ -370,6 +382,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         detail_strength=clamp(float(payload.get("detail_strength", 0.25)), 0.05, 0.6),
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
+        noise_level=int(clamp(int(payload.get("noise_level", 0)), 0, 500)),
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
         atelier_photo_source=str(payload.get("atelier_photo_source", "generated")),
         atelier_photo_collection=str(payload.get("atelier_photo_collection", "malba")),

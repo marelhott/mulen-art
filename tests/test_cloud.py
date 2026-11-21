@@ -108,6 +108,19 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(client.post("/api/generate-batch", json={"inputs": [source] * 2, "settings": {"num_images": 2}}).status_code, 200)
         self.assertEqual(len(self.submissions), 4)
 
+    def test_reimagine_batch_stores_the_source_and_queues_one_job_per_variation(self):
+        response = self.client.post("/api/generate-batch", json={
+            "inputs": [{"image_base64": self.payload["image_base64"], "name": "photo.png"}],
+            "settings": {"generation_type": "reimagine", "num_images": 2, "noise_level": 150, "steps": 20, "cfg": 10, "seed": 5}})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(self.submissions), 2)
+        for index, (_, payload) in enumerate(self.submissions):
+            self.assertEqual((payload["generation_type"], payload["model_id"], payload["noise_level"], payload["seed"]),
+                             ("reimagine", "sd21_unclip", 150, 5 + index))
+            self.assertTrue((self.output / payload["source_file"]).is_file())
+            self.assertEqual(payload["image_base64"], "")
+        self.assertTrue(all(job["generation_type"] == "reimagine" for job in self.jobs.values() if "generation_type" in job))
+
     def test_login_cookie_and_tamper_rejection(self):
         client = TestClient(self.app, base_url="https://studio.test")
         self.assertEqual(client.get("/login").status_code, 200)

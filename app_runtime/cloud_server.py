@@ -281,7 +281,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if not isinstance(payload, dict):
             raise ValueError("Expected a JSON object")
         parsed = parse_input(payload)
-        if parsed.generation_type == "img2img" and verify_image:
+        if parsed.generation_type in {"img2img", "reimagine"} and verify_image:
             image_data = base64.b64decode(parsed.image_base64.split(",")[-1], validate=True)
             with Image.open(io.BytesIO(image_data)) as image:
                 image.verify()

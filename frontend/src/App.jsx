@@ -3,6 +3,7 @@ import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { randomId, safeStorage } from "./shared";
+import { planReimagine, plannedImages } from "./reimagineTools";
 import { usePresets } from "./usePresets";
 import { useGallery } from "./useGallery";
 import { useServerOptions } from "./useServerOptions";
@@ -57,6 +58,7 @@ function App() {
   const [atelier, setAtelier] = useState({mode: "noise", theme: "all", archive: "hofmann", modelIds: ["tuymans_modal_2400"], source: "single", colorLevel: 2, count: 4,
     width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.82,
     sampler: "dpmpp_2m", schedule: "karras"});
+  const [reimagine, setReimagine] = useState({usePresets: false, count: 4, strength: 0.6, noise: 0, steps: 20, cfg: 10, seed: "-1"});
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
   const { archives, gpuHourlyUsd, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
@@ -131,6 +133,10 @@ function App() {
   averageSeconds.current = typicalSeconds;
 
   function applySettings(settings) {
+    if (settings?.generation_type === "reimagine") {
+      setReimagine(current => ({...current, strength: settings.denoise ?? current.strength, noise: settings.noise_level ?? current.noise, steps: settings.steps ?? current.steps, cfg: settings.guidance_scale ?? settings.cfg ?? current.cfg}));
+      return;
+    }
     const next = controlsFromSettings(settings);
     if (next.modelId && isMixId(next.modelId) && mixEntry(next.modelId, serverModels))
       setMixIds(current => (current.includes(next.modelId) ? current : [...current, next.modelId]));
@@ -453,6 +459,52 @@ function App() {
     if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: "Ateliér: žádná úloha nebyla přijata."});
   }
 
+  async function handleGenerateReimagine() {
+    const count = Number(reimagine.count);
+    const requestedSeed = Number(reimagine.seed === "" ? -1 : reimagine.seed);
+    if (!inputItems.length || !Number.isSafeInteger(count) || count < 1) {setError("Přidej obrázek a zvol kladný počet variant."); return;}
+    if (!Number.isInteger(requestedSeed) || requestedSeed < -1 || requestedSeed > 4294967295) {setError("Seed musí být celé číslo od −1 do 4294967295."); return;}
+    const settings = {generation_type: "reimagine", steps: Number(reimagine.steps), cfg: Number(reimagine.cfg)};
+    const planFor = seed => planReimagine({count, strength: Number(reimagine.strength), noise: Number(reimagine.noise), seed, usePresets: Boolean(reimagine.usePresets)});
+    const total = inputItems.length * plannedImages(planFor(0));
+    const continuing = submitting.current || activeJobs.length > 0;
+    pendingSubmissions.current += 1; submitting.current = true;
+    plannedCount.current = (continuing ? Math.max(plannedCount.current, activeJobs.reduce((sum, item) => sum + item.expected_images, 0)) : 0) + total;
+    setIsSubmitting(true); setPlannedOutputs(plannedCount.current);
+    if (!continuing) {
+      setSubmittedOutputs(0); setStartedAt(Date.now()); recordsCache.current.clear();
+      setSubmissionErrors([]); setBatchResults([]); setJob({...EMPTY_JOB, status: "preparing", message: "unCLIP: odesílání do fronty"});
+      safeStorage.remove("img2img-last-batch");
+    }
+    setError("");
+    let sent = 0;
+    const issues = [];
+    for (const item of inputItems) {
+      let sourceId;
+      try {
+        const upload = await apiFetch("/api/sources", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({image_base64: await fileToBase64(item.file)})});
+        sourceId = (await readJson(upload, "Nahrání se nezdařilo.")).source_id;
+      } catch (error) { issues.push(`${item.file.name}: ${error.message}`); continue; }
+      const seed = requestedSeed === -1 ? crypto.getRandomValues(new Uint32Array(1))[0] : requestedSeed;
+      for (const request of planFor(seed)) {
+        try {
+          const response = await apiFetch("/api/generate-batch", {method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({inputs: [{name: item.file.name, source_id: sourceId}], settings: {...settings, ...request}})});
+          const data = await readJson(response, "Odeslání se nezdařilo.");
+          const jobs = data.jobs.map(job => ({...job, source_id: item.id, source_name: item.file.name}));
+          const accepted = jobs.reduce((sum, job) => sum + job.expected_images, 0); sent += accepted;
+          setActiveJobs(current => [...current, ...jobs]); setSubmittedOutputs(current => current + accepted);
+          issues.push(...(data.errors || []));
+        } catch (error) { issues.push(`${item.file.name}: ${error.message}`); }
+      }
+    }
+    pendingSubmissions.current -= 1; submitting.current = pendingSubmissions.current > 0;
+    setIsSubmitting(submitting.current); setSubmissionErrors(current => [...current, ...issues]);
+    if (issues.length) setError(issues.join(" · "));
+    plannedCount.current -= total - sent; setPlannedOutputs(plannedCount.current);
+    if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: "unCLIP: žádná úloha nebyla přijata."});
+  }
+
   async function handleCancel() {
     // The next poll tick sees "cancelled"; images that were already saved stay in the library.
     await Promise.allSettled(
@@ -580,7 +632,7 @@ function App() {
         setSelectedModelIds,
         generationMode,
         setGenerationMode,
-        handleCancel, atelier, setAtelier, handleGenerateAtelier, archives, archiveStatus, reloadArchives,
+        handleCancel, atelier, setAtelier, handleGenerateAtelier, reimagine, setReimagine, handleGenerateReimagine, archives, archiveStatus, reloadArchives,
         loraId,
         setLoraId,
         loraStrength,
@@ -635,7 +687,7 @@ function App() {
         downloadLibraryImage,
         downloadSelectedImage,
         gpuHourlyUsd, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
-        pendingMode: activeJobs.at(-1)?.generation_type === "atelier" ? "atelier" : "results",
+        pendingMode: {atelier: "atelier", reimagine: "reimagine"}[activeJobs.at(-1)?.generation_type] || "results",
       }}
     />
   );
