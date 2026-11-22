@@ -68,6 +68,9 @@ class AvailabilityTests(unittest.TestCase):
         self.assertFalse(result["gpt-image-2"]["available"])
         self.assertEqual(result["gemini-3-pro"]["missing"], ["OPENAI_API_KEY"])
         self.assertEqual(set(catalog.availability({})) , set(catalog.ENGINES))
+        retired = catalog.availability({"FAL_KEY": "x"})["stable"]
+        self.assertFalse(retired["available"])  # the fal endpoint is gone, whatever keys exist
+        self.assertIn("endpoint", retired["note"])
         self.assertTrue(all(not item["available"] for item in catalog.availability({}).values()))
 
 

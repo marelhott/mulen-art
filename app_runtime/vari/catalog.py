@@ -31,7 +31,8 @@ ENGINES: dict[str, dict[str, Any]] = {
     "unclip": {"label": "Stable unCLIP", "provider": "replicate", "keys": ["REPLICATE_API_TOKEN"]},
     "comfy-unclip": {"label": "Comfy IPAdapter", "provider": "replicate", "keys": ["REPLICATE_API_TOKEN", "FAL_KEY"]},
     "sdxl-artistic": {"label": "SDXL Artistic (exp)", "provider": "fal", "keys": ["FAL_KEY"]},
-    "stable": {"label": "Stable Variation (slow)", "provider": "fal", "keys": ["FAL_KEY"]},
+    "stable": {"label": "Stable Variation (slow)", "provider": "fal", "keys": ["FAL_KEY"],
+               "retired": "fal už endpoint stable-diffusion-v3-medium nenabízí"},
     "fofr-any-comfyui-workflow": {"label": "fofr/any-comfyui-workflow", "provider": "replicate", "keys": ["REPLICATE_API_TOKEN"]},
 }
 
@@ -83,8 +84,9 @@ def availability(environ) -> dict[str, dict[str, Any]]:
     for engine, spec in ENGINES.items():
         missing = [key for key in spec["keys"] if not environ.get(key)]
         # A dead key is only discovered by calling the provider; it surfaces as that job's error.
-        result[engine] = {"id": engine, "name": spec["label"], "provider": spec["provider"], "available": not missing,
-                          "missing": missing, "tuning": TUNING.get(engine, [])}
+        result[engine] = {"id": engine, "name": spec["label"], "provider": spec["provider"],
+                          "available": not missing and not spec.get("retired"), "missing": missing,
+                          "note": spec.get("retired") or "", "tuning": TUNING.get(engine, [])}
     return result
 
 

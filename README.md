@@ -27,6 +27,28 @@ An optional faster migration from the existing R2 copies is available with
 `.venv/bin/python -m modal run scripts/import_models.py`. It verifies the full SHA-256 of
 every cloud file against the local source before committing it.
 
+## Vari: variations through fal, Replicate, OpenAI and Gemini
+
+The **VARI** tab turns one picture into variations with 13 provider engines (formerly the standalone Variants app).
+Code: `app_runtime/vari/` (`catalog.py` engines and payload builders, `providers.py`, `run.py`), UI: `frontend/src/components/Vari.jsx`.
+
+- **Runs as a CPU Modal function** (`vari_job` in `modal_app.py`), not on a GPU: no GPU slot, no GPU spend. Results go
+  to the outputs Volume and the library like every other job. A batch is one provider call per engine and distance
+  (the provider returns all its images and bills once).
+- **Keys:** Modal secret `vari-keys` (`FAL_KEY`, `REPLICATE_API_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`). Only
+  `vari_job` and `vari_status` see it; the studio asks `vari_status` which engines have their keys
+  (`/api/options` -> `vari_engines`). Engines without a key are shown as unavailable.
+  GPT Image 2, Gemini 3 Pro and Vision Remix need `OPENAI_API_KEY`.
+- **Known provider issues:** *Stable Variation* is retired (fal removed the endpoint). *SD Image Variation* can sit
+  in Replicate's "starting" state for a long time (cold public model); the job gives up after 8 minutes with a clear
+  message. Replicate accounts with under 5 USD credit are throttled to 6 requests a minute; jobs wait and retry.
+- **Parity with the original:** `tests/fixtures/vari_payloads.json` (2520 payloads) is produced by the original
+  TypeScript builders (`Vari/scripts/dump-payloads.ts`) and `tests/test_vari.py` reproduces it exactly: version hashes,
+  clamps and per-distance tuning cannot drift.
+- **Old gallery:** `scripts/migrate_vari_gallery.py` copied the 277 images of the R2 bucket `variants` into the library
+  (read-only on R2, repeatable, `--apply` to write).
+- `Vari/` (the Next.js original) is kept only as a reference and for the parity oracle.
+
 ## Setup and deploy
 
 Run from this repository (Python 3.11 recommended). Modal currently requires a

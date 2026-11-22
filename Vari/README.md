@@ -1,3 +1,7 @@
+> **Legacy.** Vari now lives inside the studio as the VARI tab (`app_runtime/vari/`, see the root README). This Next.js
+> app is kept as the reference for the port and for the parity oracle (`scripts/dump-payloads.ts`); it is no longer the
+> place where Vari runs.
+
 # Vari
 
 Image variations (Next.js 15). Part of the Mulen art repo; the studio has a **VARI** tab that opens it.

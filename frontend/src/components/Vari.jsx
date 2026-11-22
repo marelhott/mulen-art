@@ -23,7 +23,7 @@ export function VariControls({value: v, update, engines, inputCount, generating,
       {engines.map(engine => <button key={engine.id} className="atelier-mode" aria-pressed={!v.allEngines && v.engineId === engine.id}
         disabled={!engine.available || v.allEngines} onClick={() => update({engineId: engine.id})}>
         <span>{engine.name}</span>
-        <small>{engine.available ? engine.provider : `nedostupný · chybí ${engine.missing.join(", ")}`}</small>
+        <small>{engine.available ? engine.provider : engine.note ? `nedostupný · ${engine.note}` : `nedostupný · chybí ${engine.missing.join(", ")}`}</small>
       </button>)}
     </div>
     <label className="variants-toggle realsr-toggle">
