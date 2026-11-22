@@ -21,6 +21,15 @@ QWEN = {  # venice model -> (api id, max inputs, max prompt chars)
 VENICE_RATIOS = {"1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:3", "4:5"}
 
 
+def nearest_ratio(aspect_ratio: str, options) -> str:
+    """The closest of `options` (ratio strings such as "4:5") to `aspect_ratio`."""
+    match = re.fullmatch(r"(\d+):(\d+)", aspect_ratio)
+    if not match:
+        return aspect_ratio
+    target = int(match[1]) / int(match[2])
+    return min(options, key=lambda item: abs(math.log((int(item.split(":")[0]) / int(item.split(":")[1])) / target)))
+
+
 def nearest_venice_ratio(aspect_ratio: str) -> str:
     """Venice has no 5:4 (and a few others): use the closest ratio it supports instead of failing the whole job."""
     match = re.fullmatch(r"(\d+):(\d+)", aspect_ratio)
@@ -142,7 +151,7 @@ def _venice_post(client: httpx.Client, path: str, payload: dict[str, Any]) -> ht
         try:
             parsed = response.json()
             error = parsed.get("error")
-            detail = _scrub((error.get("message") if isinstance(error, dict) else error) or parsed.get("message") or "")[:200]
+            detail = _scrub((error.get("message") if isinstance(error, dict) else error) or parsed.get("message") or "")[:400]
         except ValueError:
             pass
         raise ProviderError(f"Venice HTTP {response.status_code}. {hints.get(response.status_code, 'Požadavek poskytovatel odmítl.')}" + (f" ({detail})" if detail else ""),
@@ -177,7 +186,16 @@ def venice_image(client: httpx.Client, model: str, prompt: str, images: list[str
             payload["aspect_ratio"] = nearest_venice_ratio(aspect_ratio)
         if api_id != "qwen-edit-uncensored" and resolution:
             payload["resolution"] = resolution
-        response = _venice_post(client, "multi-edit" if multi else "edit", payload)
+        try:
+            response = _venice_post(client, "multi-edit" if multi else "edit", payload)
+        except ProviderError as exc:
+            # The ratios differ per Qwen model and Venice names the supported ones in its error: retry once with the nearest.
+            listed = re.search(r"Supported options:([^)]*)", str(exc))
+            options = re.findall(r"\b\d+:\d+\b", listed.group(1)) if listed else []
+            if not options or "aspect_ratio" not in payload:
+                raise
+            payload["aspect_ratio"] = nearest_ratio(payload["aspect_ratio"], options)
+            response = _venice_post(client, "multi-edit" if multi else "edit", payload)
         if response.headers.get("content-type", "").split(";")[0] not in ("image/png", "image/jpeg", "image/webp") or not response.content:
             raise ProviderError("Venice nevrátil obrázek.", retryable=True)
         return response.content

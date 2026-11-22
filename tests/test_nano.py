@@ -203,6 +203,18 @@ if __name__ == "__main__":
 
 
 class FixTests(unittest.TestCase):
+    def test_a_venice_ratio_error_is_retried_with_the_nearest_supported_option(self):
+        bodies = []
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            if bodies[-1].get("aspect_ratio") == "4:3":
+                return httpx.Response(400, json={"error": {"message": "Aspect ratio '4:3' is not supported by model 'x'. Supported options: auto, 1:1, 3:2, 16:9, 3:4, 4:5"}})
+            return httpx.Response(200, content=b"PNG", headers={"content-type": "image/png"})
+        with mock.patch.dict("os.environ", {"VENICE_API_KEY": "v"}):
+            data = providers.venice_image(httpx.Client(transport=httpx.MockTransport(handler)), "venice/qwen-image-2-1-pro-edit", "p", ["a"], "4:3", None)
+        self.assertEqual(data, b"PNG")
+        self.assertEqual(bodies[-1]["aspect_ratio"], "3:2")  # 4:3 lies between 3:2 and 3:4; the nearer one in log terms is 3:2
+
     def test_venice_gets_the_nearest_supported_ratio_instead_of_an_error(self):
         self.assertIn(providers.nearest_venice_ratio("5:4"), providers.VENICE_RATIOS)
         self.assertEqual(providers.nearest_venice_ratio("16:9"), "16:9")
