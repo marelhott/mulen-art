@@ -654,7 +654,7 @@ export default function StudioView(p) {
             disabled={!items.some(Boolean) || exporting}
             onClick={() => exportImages()}
           >
-            <ArrowDownToLine size={14} />
+            <ArrowDownToLine size={12} />
             {exporting ? `BALÍM… ${exportProgress}` : "EXPORTOVAT VŠE"}
           </button>
         </div>

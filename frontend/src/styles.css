@@ -733,9 +733,11 @@ input[type="range"]::-moz-range-progress {
   margin: 0 0 0 13px;
 }
 .workspace-toolbar > .toolbar-button {
-  max-width: 125px;
-  font-size: 11px;
-  padding: 12px 10px;
+  white-space: nowrap;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  padding: 8px 11px;
 }
 .gallery-tools {
   display: flex;
@@ -1652,8 +1654,7 @@ input[type="range"]::-moz-range-progress {
     letter-spacing: 1.4px;
   }
   .workspace-toolbar > .toolbar-button {
-    font-size: 11px;
-    max-width: 95px;
+    font-size: 10px;
   }
   .viewer-details {
     width: 300px;
@@ -1686,8 +1687,7 @@ input[type="range"]::-moz-range-progress {
     flex-wrap: wrap;
   }
   .workspace-toolbar > .toolbar-button {
-    max-width: 100%;
-    font-size: 11px;
+    font-size: 10px;
   }
   .viewer-details {
     width: 270px;
