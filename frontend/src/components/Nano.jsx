@@ -1,7 +1,7 @@
 import React from "react";
 import { Layers3, Combine } from "lucide-react";
 import { Label } from "./controls";
-import { COLLAGE_MAX_SOURCES, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, forCollage, isFused, takesImages, usableModels } from "../nanoTools";
+import { COLLAGE_MAX_SOURCES, VARI_CHAINS, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, forCollage, isFused, takesImages, usableModels } from "../nanoTools";
 
 // Model picker shared by Vari and Koláž: a model whose provider key is missing is shown but cannot be chosen, with the reason.
 function ModelPicker({models, value, update}) {
@@ -58,6 +58,13 @@ export function VariControls({value, update, models, inputCount, generating, onG
         {NANO_DISTANCES.map(item => <button key={item.id} aria-pressed={value.distance === item.id} onClick={() => update({distance: item.id})}>{item.name}</button>)}
       </div>
       <span className="help-text">{distance.hint}</span>
+    </div>
+    <div className="control-block">
+      <Label>NEJDŘÍV UNCLIP</Label>
+      <div className="segmented" role="group" aria-label="Nejdřív unCLIP">
+        {VARI_CHAINS.map(item => <button key={item.id || "off"} aria-pressed={(value.chain || "") === item.id} onClick={() => update({chain: item.id})}>{item.name}</button>)}
+      </div>
+      <span className="help-text">{value.chain ? "Obrázek se nejdřív přepíše modelem unCLIP na GPU (každá varianta zvlášť), z toho vznikne výsledek. Zdroj se víc rozbije, trvá to déle." : "Volitelný mezikrok: nejdřív přepsat obraz unCLIPem, pak teprve Posun."}</span>
     </div>
     <CountField value={value.count} update={update} label="POČET NA MODEL A OBRÁZEK"
       hint={!inputCount ? "Přidej obrázek, ze kterého se varianty odvodí." : !picked ? "Vyber alespoň jeden model." : `${inputCount} × ${picked} × ${count} = ${total} obrázků`} />

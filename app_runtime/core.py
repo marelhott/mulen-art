@@ -92,6 +92,7 @@ class GenerationInput:
     long_side: int = 768  # unclip: output long side; 1024 gives more detail (the init latents keep it coherent)
     nano_model: str = "nano-pro"  # Vari / Koláž: id from app_runtime/nano/models.py
     nano_distance: str = "middle"  # Vari: near | middle | far | weird
+    pre_unclip: str = ""  # Vari: run the source through unCLIP first ("free" or "loose"), then make the variants from that
     collage_fuse: bool = True  # Koláž: fuse all inputs into one picture (False = each input on its own)
     extra_source_ids: list = field(default_factory=list)  # Koláž: stored sources beyond the first (64 hex chars each)
 
@@ -316,7 +317,10 @@ def nano_input_fields(payload: dict[str, Any], generation_type: str) -> dict[str
         raise ValueError("extra_source_ids must be a list of stored source ids")
     if extra and generation_type != "collage":
         raise ValueError("Only Koláž takes more than one input")
-    return {"nano_model": model_id, "nano_distance": distance, "collage_fuse": bool(payload.get("collage_fuse", True)), "extra_source_ids": list(extra)}
+    pre = str(payload.get("pre_unclip") or "")
+    if pre not in {"", "free", "loose"} or (pre and generation_type != "vari"):
+        raise ValueError("Unknown unCLIP pre-stage")
+    return {"nano_model": model_id, "nano_distance": distance, "pre_unclip": pre, "collage_fuse": bool(payload.get("collage_fuse", True)), "extra_source_ids": list(extra)}
 
 
 def parse_input(payload: dict[str, Any]) -> GenerationInput:

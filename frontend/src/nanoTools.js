@@ -11,7 +11,13 @@ export const NANO_DISTANCES = [
   {id: "displace", name: "Posun", hint: "Místo, které neexistuje: kompozice a paleta zůstanou, ale každá věc a tah se přečte jako něco jiného"},
 ];
 
-export const DEFAULT_VARI = {models: ["nano-pro", "gemini"], distance: "displace", count: 3, prompt: ""};
+// chain: "" = off, otherwise the source goes through unCLIP first ("free" or "loose"), then the models make their variants of that.
+export const VARI_CHAINS = [
+  {id: "", name: "Vypnuto"},
+  {id: "free", name: "Volná"},
+  {id: "loose", name: "Střední + odchylka"},
+];
+export const DEFAULT_VARI = {models: ["nano-pro", "gemini"], distance: "displace", count: 3, prompt: "", chain: ""};
 export const DEFAULT_COLLAGE = {models: ["nano-pro"], fuse: true, count: 3, prompt: ""};
 
 export const clampCount = value => Math.min(NANO_MAX_PER_MODEL, Math.max(1, Math.round(Number(value)) || 1));
@@ -33,7 +39,8 @@ export const isFused = (collage, inputCount) => Boolean(collage.fuse) && inputCo
 export function planVari(state, catalogue) {
   const count = clampCount(state.count);
   return usableModels(state.models, catalogue).map(model => ({
-    generation_type: "vari", nano_model: model.id, nano_distance: state.distance, num_images: count, prompt: String(state.prompt || "").trim()}));
+    generation_type: "vari", nano_model: model.id, nano_distance: state.distance, num_images: count, prompt: String(state.prompt || "").trim(),
+    ...(state.chain ? {pre_unclip: state.chain} : {})}));
 }
 
 // Koláž requests for `inputCount` stored sources. `uploadIds` are the stored source ids in input order.
@@ -56,7 +63,7 @@ export const plannedImages = plan => plan.reduce((sum, item) => sum + (item.sett
 // Back from a stored image's settings to the controls (the "repeat" action).
 export function variFromSettings(settings, current) {
   return {...current, models: settings.nano_model ? [settings.nano_model] : current.models, distance: settings.nano_distance || current.distance,
-    prompt: settings.custom_prompt ?? current.prompt};
+    prompt: settings.custom_prompt ?? current.prompt, chain: settings.pre_unclip || ""};
 }
 
 export function collageFromSettings(settings, current) {

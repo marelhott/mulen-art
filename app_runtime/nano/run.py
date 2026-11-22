@@ -23,6 +23,15 @@ TOTAL_INPUT_BYTES = 2_800_000  # shared by all inputs of one request (JSON and b
 MAX_DIMENSION = 1400
 
 
+_PRE_STAGE: Callable[..., list] | None = None
+
+
+def set_pre_stage(stage: Callable[..., list] | None) -> None:
+    """The Modal job registers how to run the unCLIP pre-stage (a GPU job it queues and waits for)."""
+    global _PRE_STAGE
+    _PRE_STAGE = stage
+
+
 def set_cancel_check(check: Callable[[], bool] | None) -> None:
     global _CANCEL_CHECK
     _CANCEL_CHECK = check
@@ -114,8 +123,18 @@ def _generate(generation_input: GenerationInput, kind: str, progress_callback, i
 
     tasks: list[dict[str, Any]] = []
     if kind == "vari":
-        data = prepare_input(primary, budget)
+        if generation_input.pre_unclip:
+            if _PRE_STAGE is None:
+                raise ValueError("unCLIP před Posunem tu není k dispozici.")
+            report_progress(progress_callback, 0.06, "unCLIP: příprava mezikroku")
+            middles = _PRE_STAGE(primary, generation_input.pre_unclip, count, progress_callback)
+            if not middles:
+                raise providers.ProviderError("unCLIP nevrátil žádný obrázek.")
+            sources_for_variants = [prepare_input(middles[index % len(middles)], budget) for index in range(count)]
+        else:
+            sources_for_variants = [prepare_input(primary, budget)] * count
         for index in range(count):
+            data = sources_for_variants[index]
             tasks.append({"index": index, "images": [data], "aspect": None,
                           "prompt": plans.build_prompt_for_model(spec["model"], custom, generation_input.nano_distance, index)})
     elif fuse:
@@ -132,7 +151,7 @@ def _generate(generation_input: GenerationInput, kind: str, progress_callback, i
     meta = {"generation_type": kind, "nano_model": spec["id"], "nano_distance": generation_input.nano_distance, "model_id": f"nano_{spec['id']}",
             "model_name": f"{title} · {spec['title']}", "lora_id": "none", "provider": models.provider_of(spec), "provider_model": spec["model"],
             "prompt": tasks[0]["prompt"], "negative_prompt": "", "scale": 1.0, "demo_mode": False, "source_width": primary.width,
-            "source_height": primary.height, "collage_fuse": fuse, "source_count": len(sources), "custom_prompt": custom.strip()}
+            "source_height": primary.height, "collage_fuse": fuse, "source_count": len(sources), "custom_prompt": custom.strip(), "pre_unclip": generation_input.pre_unclip}
     results: list = []
 
     def on_image(task, data: bytes):

@@ -190,6 +190,53 @@ def gpu_rate():
     return name, None
 
 
+# The unCLIP presets of the frontend (reimagineTools.js) that Vari can run before its own model.
+UNCLIP_PRESETS = {"free": {"denoise": 0.8, "noise_level": 0}, "loose": {"denoise": 0.65, "noise_level": 150}}
+
+
+def unclip_stage(job_id, payload, preset, count, progress, cancelled):
+    """Vari pre-stage: queue an unCLIP GPU job for the same source (through the normal queue and GPU cap), wait for it and
+    return its images. A cancelled parent job cancels the child."""
+    import time
+    from dataclasses import asdict
+    from PIL import Image
+    from app_runtime.core import parse_input
+    from app_runtime.server import OUTPUTS_DIR, now_iso
+    settings = {"generation_type": "reimagine", "reimagine_mode": "unclip", "long_side": 1024, "steps": 35, "cfg": 5.0, "num_images": count,
+                "seed": -1, "image_base64": "stored", **UNCLIP_PRESETS[preset]}
+    pre = asdict(parse_input(settings))
+    pre.update(image_base64="", source_file=payload["source_file"], source_name=payload.get("source_name", "Input image"),
+               source_url=payload.get("source_url"), queue_priority=0)
+    pre_id = f"{job_id}-unclip"
+    jobs[pre_id] = {"id": pre_id, "status": "queued", "progress": 0, "message": "Waiting for cloud GPU", "source_name": pre["source_name"],
+                    "source_url": pre["source_url"], "expected_images": count, "generation_type": "reimagine", "model_id": pre["model_id"],
+                    "logs": [], "result": None, "error": None, "created_at": now_iso(), "updated_at": now_iso()}
+    call_id = spawn_job(pre_id, pre)
+    if call_id:
+        jobs[f"call:{pre_id}"] = call_id
+    deadline = time.monotonic() + 1300
+    while True:
+        if cancelled():
+            jobs[f"cancelled:{pre_id}"] = True
+            raise RuntimeError("Zrušeno.")
+        record = jobs.get(pre_id) or {}
+        status = record.get("status")
+        progress(0.06 + 0.24 * float(record.get("progress") or 0), f"unCLIP: {record.get('message') or status or 'čeká'}")
+        if status == "completed":
+            break
+        if status in ("failed", "cancelled"):
+            raise RuntimeError("unCLIP selhal: " + str((record.get("error") or {}).get("detail", status)))
+        if time.monotonic() > deadline:
+            raise RuntimeError("unCLIP trvá příliš dlouho.")
+        time.sleep(3)
+    outputs.reload()
+    images = []
+    for item in (record.get("result") or {}).get("library_items") or record.get("partial_images") or []:
+        with Image.open(OUTPUTS_DIR / item["filename"]) as image:
+            images.append(image.convert("RGB"))
+    return images
+
+
 def generate_job(job_id: str, payload: dict):
     import time
     from app_runtime.core import generate
@@ -205,8 +252,9 @@ def generate_job(job_id: str, payload: dict):
         return bool(current and current.get("status") == "cancelled")
 
     if payload.get("generation_type") in {"vari", "collage"}:
-        from app_runtime.nano.run import set_cancel_check
+        from app_runtime.nano.run import set_cancel_check, set_pre_stage
         set_cancel_check(cancelled)  # a cancelled job stops starting new provider calls
+        set_pre_stage(lambda image, preset, count, report: unclip_stage(job_id, payload, preset, count, report, cancelled))
 
     def put(value):
         if cancelled():

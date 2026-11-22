@@ -207,6 +207,28 @@ class RunTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             core.parse_input({**base, "generation_type": "collage", "extra_source_ids": ["../etc/passwd"]})
 
+    def test_the_unclip_pre_stage_feeds_each_variant_from_its_own_intermediate(self):
+        seen = []
+        def stage(image, preset, count, report):
+            seen.append((preset, count))
+            return [Image.new("RGB", (40, 30), (index * 40, 0, 0)) for index in range(count)]
+        run.set_pre_stage(stage)
+        self.addCleanup(run.set_pre_stage, None)
+        result = core.generate(self.payload(pre_unclip="loose", nano_distance="displace"))
+        self.assertEqual(seen, [("loose", 3)])
+        self.assertEqual(len({call["images"][0] for call in self.calls}), 3)  # three different intermediates
+        self.assertEqual(result["meta"]["pre_unclip"], "loose")
+
+    def test_the_pre_stage_needs_a_runner_and_is_validated(self):
+        run.set_pre_stage(None)
+        with self.assertRaisesRegex(ValueError, "unCLIP"):
+            core.generate(self.payload(pre_unclip="free"))
+        with self.assertRaises(ValueError):
+            core.parse_input(self.payload(pre_unclip="bold"))
+        with self.assertRaises(ValueError):
+            core.parse_input({"generation_type": "collage", "image_base64": png_data_url(), "num_images": 1, "pre_unclip": "free"})
+        self.assertEqual(core.parse_input(self.payload()).pre_unclip, "")
+
     def test_prepare_input_stays_under_its_byte_budget(self):
         noisy = Image.effect_noise((2400, 1800), 90).convert("RGB")
         url = run.prepare_input(noisy, 400_000)

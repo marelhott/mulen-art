@@ -54,3 +54,10 @@ test("repeat restores the controls from stored settings", () => {
   assert.deepEqual(variFromSettings({nano_model: "gpt", nano_distance: "weird", custom_prompt: "x"}, DEFAULT_VARI), {...DEFAULT_VARI, models: ["gpt"], distance: "weird", prompt: "x"});
   assert.equal(collageFromSettings({nano_model: "flux", collage_fuse: false}, DEFAULT_COLLAGE).fuse, false);
 });
+
+test("the unCLIP chain is sent only when switched on and restored from settings", () => {
+  assert.equal(planVari({...DEFAULT_VARI, models: ["gpt"]}, catalogue)[0].pre_unclip, undefined);
+  assert.equal(planVari({...DEFAULT_VARI, models: ["gpt"], chain: "loose"}, catalogue)[0].pre_unclip, "loose");
+  assert.equal(variFromSettings({nano_model: "gpt", pre_unclip: "free"}, DEFAULT_VARI).chain, "free");
+  assert.equal(variFromSettings({nano_model: "gpt"}, {...DEFAULT_VARI, chain: "free"}).chain, "");
+});
