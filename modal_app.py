@@ -29,17 +29,6 @@ base_image = (
     .add_local_python_source("app_runtime")
     .add_local_dir("config", "/app/config")
 )
-vari_secret = modal.Secret.from_name("vari-keys")  # provider keys; only the Vari functions see it
-# Own image (not base_image + pip_install): Modal wants build steps before add_local_*.
-vari_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install_from_requirements("app_runtime/requirements-gateway.txt")
-    .pip_install("httpx==0.28.1")
-    .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
-          "GPU_HOURLY_USD": "0.80"})
-    .add_local_python_source("app_runtime")
-    .add_local_dir("config", "/app/config")
-)
 gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install_from_requirements("app_runtime/requirements.txt")
@@ -123,9 +112,6 @@ def spawn_job(job_id, payload):
     Returns None because there is no FunctionCall yet; dispatch records `call:<job_id>` for cancel.
     """
     import time
-    if payload.get("generation_type") == "vari":
-        # Provider API calls need no GPU: straight to the Vari function, no slot, no queue.
-        return vari_job.spawn(job_id, payload).object_id
     if store_size(pending) >= MAX_BACKLOG_JOBS:
         raise RuntimeError(f"Job backlog full ({MAX_BACKLOG_JOBS} jobs waiting)")
     payloads[job_id] = payload
@@ -204,10 +190,6 @@ def generate_job(job_id: str, payload: dict):
         current = jobs.get(job_id)
         return bool(current and current.get("status") == "cancelled")
 
-    if payload.get("generation_type") == "vari":
-        from app_runtime.vari.run import set_cancel_check
-        set_cancel_check(cancelled)  # a cancelled Vari job stops polling its provider
-
     def put(value):
         if cancelled():
             return
@@ -276,8 +258,7 @@ def generate_job(job_id: str, payload: dict):
         raise
     finally:
         try:
-            if payload.get("generation_type") != "vari":  # Vari runs on a CPU function: no GPU cost to account
-                record_spend(job_id, time.monotonic() - started, gpu_hourly)
+            record_spend(job_id, time.monotonic() - started, gpu_hourly)
         except Exception as exc:  # accounting must never fail a finished job
             log.warning(f"spend accounting failed: {exc}")
 
@@ -346,23 +327,6 @@ class UnclipWorker:
                 dispatch.spawn()
             except Exception as exc:
                 log.warning(f"dispatch wake-up failed (the periodic sweep will catch up): {exc}")
-
-
-@app.function(
-    image=vari_image, secrets=[vari_secret], volumes={"/models": models, "/outputs": outputs},
-    cpu=1, memory=1024, min_containers=0, max_containers=10, scaledown_window=30, timeout=1500, retries=0,
-)
-def vari_job(job_id: str, payload: dict):
-    """One Vari variation job (a provider API call, no GPU). Same job record as the GPU jobs, so polling, the
-    library and cancel work unchanged."""
-    return generate_job(job_id, payload)
-
-
-@app.function(image=vari_image, secrets=[vari_secret], cpu=0.25, memory=256, timeout=30, scaledown_window=60)
-def vari_status():
-    """Which Vari engines have their keys (names only; the keys never leave this function)."""
-    from app_runtime.vari.catalog import availability
-    return list(availability(os.environ).values())
 
 
 @app.function(
@@ -466,5 +430,4 @@ def web():
         spend=month_spend, monthly_budget_usd=optional_float_env("MONTHLY_BUDGET_USD"),
         max_jobs_per_request=optional_int_env("MAX_JOBS_PER_REQUEST", DEFAULT_MAX_JOBS_PER_REQUEST),
         frontend_dir="/app/frontend/dist",
-        vari_engines=lambda: vari_status.remote(),
     )

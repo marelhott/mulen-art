@@ -11,11 +11,3 @@ venv/
 .modal-app-credentials.json
 models/
 outputs/
-
-# Vari (Next.js app)
-Vari/node_modules/
-Vari/.next/
-Vari/.next-build/
-Vari/public/outputs/
-Vari/.env*
-!Vari/.env.example

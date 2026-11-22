@@ -10,7 +10,6 @@ export function useServerOptions({ onModels, onLoras }) {
   const [archiveStatus, setArchiveStatus] = useState("loading");
   const [serverModels, setServerModels] = useState([]);
   const [loras, setLoras] = useState([]);
-  const [variEngines, setVariEngines] = useState([]);
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
@@ -23,7 +22,6 @@ export function useServerOptions({ onModels, onLoras }) {
         if (cancelled) return;
         setArchives(data.archives || []);
         setGpuHourlyUsd(data.gpu_hourly_usd ?? null);
-        setVariEngines(data.vari_engines || []);
         setArchiveStatus(data.archives?.length ? "ready" : "error");
         if (data.models?.length) {
           setServerModels(data.models);
@@ -40,5 +38,5 @@ export function useServerOptions({ onModels, onLoras }) {
     return () => { cancelled = true; clearTimeout(retry); };
   }, [revision]);
 
-  return { archives, gpuHourlyUsd, variEngines, archiveStatus, serverModels, loras, reload: () => setRevision((v) => v + 1) };
+  return { archives, gpuHourlyUsd, archiveStatus, serverModels, loras, reload: () => setRevision((v) => v + 1) };
 }

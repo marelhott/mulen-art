@@ -31,7 +31,6 @@ import { CheckpointPicker } from "./components/CheckpointPicker";
 import { VariantsPanel } from "./components/VariantsPanel";
 import { AtelierControls, AtelierQueue } from "./components/Atelier";
 import { ReimagineControls } from "./components/Reimagine";
-import { VariControls } from "./components/Vari";
 import { ContextMenu } from "./components/ContextMenu";
 import { LibraryDialog } from "./components/LibraryDialog";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -60,7 +59,6 @@ export default function StudioView(p) {
   const [tab, setTab] = useState("atelier");
   const isAtelier = tab === "atelier";
   const isReimagine = tab === "reimagine";
-  const isVari = tab === "vari";
   const updateAtelier = patch => p.setAtelier(current => ({...current, ...patch}));
   const [thumbSize, setThumbSize] = useState(
     () => Number(safeStorage.get("img2img-thumb-size")) || 0,
@@ -116,12 +114,10 @@ export default function StudioView(p) {
   // (null) belong to the kind of job currently running.
   const isAtelierItem = (item) => item?.settings?.generation_type === "atelier";
   const isUnclipItem = (item) => item?.settings?.generation_type === "reimagine";
-  const isVariItem = (item) => item?.settings?.generation_type === "vari";
   const atelierItems = p.results.filter((item) => (item ? isAtelierItem(item) : p.pendingMode === "atelier"));
   const unclipItems = p.results.filter((item) => (item ? isUnclipItem(item) : p.pendingMode === "reimagine"));
-  const variItems = p.results.filter((item) => (item ? isVariItem(item) : p.pendingMode === "vari"));
-  const canvasItems = p.results.filter((item) => (item ? !isAtelierItem(item) && !isUnclipItem(item) && !isVariItem(item) : p.pendingMode === "results"));
-  const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : isReimagine ? unclipItems : isVari ? variItems : canvasItems;
+  const canvasItems = p.results.filter((item) => (item ? !isAtelierItem(item) && !isUnclipItem(item) : p.pendingMode === "results"));
+  const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : isReimagine ? unclipItems : canvasItems;
   const items = filterItems(unfiltered, { modelId: filterModel, text: filterText });
   const filtering = Boolean(filterModel || filterText.trim());
   const modelNameFor = (item) => p.models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name;
@@ -300,7 +296,7 @@ export default function StudioView(p) {
   const viewerPool =
     p.selectedImage?.context === "library"
       ? p.libraryItems
-      : (isAtelier ? atelierItems : isReimagine ? unclipItems : isVari ? variItems : canvasItems).filter(Boolean);
+      : (isAtelier ? atelierItems : isReimagine ? unclipItems : canvasItems).filter(Boolean);
   const viewerIndex = viewerPool.findIndex(
     (item) => item.id === p.selectedImage?.id,
   );
@@ -424,9 +420,6 @@ export default function StudioView(p) {
         <button className={isReimagine ? "active" : ""} onClick={() => setTab("reimagine")} title="unCLIP — varianty z jednoho obrázku (SD 2.1 unCLIP, dříve Clipdrop Reimagine)">
           <Shuffle /><span>UNCLIP</span>
         </button>
-        {p.variEngines?.length > 0 && <button className={isVari ? "active" : ""} onClick={() => setTab("vari")} title="Vari — varianty obrázku přes fal, Replicate, OpenAI a Gemini">
-          <Layers3 /><span>VARI</span>
-        </button>}
         <button
           className={tab === "library" ? "active" : ""}
           onClick={() => setTab("library")}
@@ -469,7 +462,7 @@ export default function StudioView(p) {
         </div>
       </header>
       <aside className="left-panel control-panel">
-        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} onAddMix={p.addMix} onRemoveMix={p.removeMix} /> : isReimagine ? <ReimagineControls value={p.reimagine} update={patch => p.setReimagine(current => ({...current, ...patch}))} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateReimagine} inputBlock={inputBlock} /> : isVari ? <VariControls value={p.vari} update={patch => p.setVari(current => ({...current, ...patch}))} engines={p.variEngines || []} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateVari} inputBlock={inputBlock} /> : <>
+        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} onAddMix={p.addMix} onRemoveMix={p.removeMix} /> : isReimagine ? <ReimagineControls value={p.reimagine} update={patch => p.setReimagine(current => ({...current, ...patch}))} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateReimagine} inputBlock={inputBlock} /> : <>
         <button
           className="primary-button generate"
           disabled={!p.inputItems.length || (p.generationMode === "checkpoint" && !idsForSource(p.selectedModelIds, p.checkpointSource).length)}
@@ -646,14 +639,14 @@ export default function StudioView(p) {
           <div>
             <h1>
               <span className="heading-glow" />
-              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : isAtelier ? "ATELIÉR · NOVÉ STUDIE" : isReimagine ? "UNCLIP · VARIANTY Z OBRÁZKU" : isVari ? "VARI · VARIANTY PŘES POSKYTOVATELE" : "PLÁTNO · HISTORIE GENEROVÁNÍ"}
+              {tab === "library" ? "KNIHOVNA OBRÁZKŮ" : isAtelier ? "ATELIÉR · NOVÉ STUDIE" : isReimagine ? "UNCLIP · VARIANTY Z OBRÁZKU" : "PLÁTNO · HISTORIE GENEROVÁNÍ"}
             </h1>
             <p>
               {tab === "library"
                 ? `${items.length} uložených obrázků`
                 : p.isGenerating
                   ? `Celá fronta: ${p.readyCount} / ${p.outputCount} hotovo`
-                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : isReimagine ? `${unclipItems.filter(Boolean).length} variant · varianty a metamorfózy bez promptu` : isVari ? `${variItems.filter(Boolean).length} variant · fal, Replicate, OpenAI a Gemini` : `${canvasItems.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
+                  : isAtelier ? `${atelierItems.length} studií · bez vlastní vstupní fotografie` : isReimagine ? `${unclipItems.filter(Boolean).length} variant · varianty a metamorfózy bez promptu` : `${canvasItems.filter(Boolean).length} vygenerovaných obrázků · historie zůstává na plátně`}
             </p>
           </div>
           <button
@@ -676,7 +669,6 @@ export default function StudioView(p) {
               Plátno <span>{canvasItems.filter(Boolean).length}</span>
             </button>
             <button aria-pressed={isReimagine} onClick={() => setTab("reimagine")}>unCLIP <span>{unclipItems.filter(Boolean).length}</span></button>
-            {p.variEngines?.length > 0 && <button aria-pressed={isVari} onClick={() => setTab("vari")}>Vari <span>{variItems.filter(Boolean).length}</span></button>}
             <button
               aria-pressed={tab === "library"}
               onClick={() => setTab("library")}
@@ -747,7 +739,7 @@ export default function StudioView(p) {
             )}
           </div>
         )}
-        {tab !== "atelier" && !isReimagine && !isVari && unfiltered.filter(Boolean).length > 1 && (
+        {tab !== "atelier" && !isReimagine && unfiltered.filter(Boolean).length > 1 && (
           <div className="filter-bar" role="search">
             <select aria-label="Filtrovat podle modelu" value={filterModel} onChange={(event) => setFilterModel(event.target.value)}>
               <option value="">{TEXT.filterModelAll}</option>
@@ -799,7 +791,7 @@ export default function StudioView(p) {
               Prostor pro <em>nové obrazy.</em>
             </h2>
             <p>
-              {isAtelier ? <>Vyber způsob tvorby a checkpoint v levém panelu.<br />Vlastní fotografie ani psaní zadání nejsou potřeba.</> : isReimagine ? <>Přidej obrázek v levém panelu a nastav odchylku.<br />Vznikne z něj varianta nebo metamorfóza, bez psaní promptu.</> : isVari ? <>Přidej obrázek, vyber engine a vzdálenost.<br />Varianty vzniknou přes fal, Replicate, OpenAI nebo Gemini.</> : <>Přidej vstupní obrázky, vyber checkpoint nebo LoRA<br />a nech své modely pracovat v cloudu.</>}
+              {isAtelier ? <>Vyber způsob tvorby a checkpoint v levém panelu.<br />Vlastní fotografie ani psaní zadání nejsou potřeba.</> : isReimagine ? <>Přidej obrázek v levém panelu a nastav odchylku.<br />Vznikne z něj varianta nebo metamorfóza, bez psaní promptu.</> : <>Přidej vstupní obrázky, vyber checkpoint nebo LoRA<br />a nech své modely pracovat v cloudu.</>}
             </p>
             <button
               className="toolbar-button"
@@ -818,7 +810,7 @@ export default function StudioView(p) {
           </div>
         )}
       </main>
-      <SettingsPanel p={p} isAtelier={isAtelier} isReimagine={isReimagine || isVari} updateAtelier={updateAtelier} progressState={progressState} />
+      <SettingsPanel p={p} isAtelier={isAtelier} isReimagine={isReimagine} updateAtelier={updateAtelier} progressState={progressState} />
       <LibraryDialog open={libraryOpen} onClose={closeLibrary} suspended={Boolean(p.selectedImage) || compareOpen}
         items={p.libraryItems} models={p.models} actions={libraryActions} />
       {compareOpen && (
