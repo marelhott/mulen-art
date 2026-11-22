@@ -23,7 +23,7 @@ from PIL import Image
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image, check_job_size
 from app_runtime.server import (api_atelier_photo, api_atelier_photos, api_options, OUTPUTS_DIR, THUMBS_DIR, api_library_save, load_deleted_ids,
                                 load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
-                                ensure_thumbnail, is_safe_filename, thumb_filename as thumb_name)
+                                ensure_thumbnail, is_safe_filename, thumb_filename as thumb_name, scan_records)
 
 VOLUME_REFRESH_INTERVAL = float(os.getenv("VOLUME_REFRESH_SECONDS", "2.0"))
 
@@ -738,6 +738,18 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
 
     if frontend_dir and Path(frontend_dir).is_dir():
         app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    def warm_gallery():
+        """A fresh container reads every file from the network Volume on first use (seconds per thumbnail). Do that once, in the
+        background, right after start, so the first time the library is opened it is not the one paying for it."""
+        try:
+            scan_records()
+            files = [path for path in THUMBS_DIR.iterdir() if path.is_file()] if THUMBS_DIR.is_dir() else []
+            with ThreadPoolExecutor(max_workers=32) as pool:
+                list(pool.map(lambda path: path.read_bytes(), files))
+        except Exception:
+            logging.getLogger("studio").warning("Gallery warm-up failed", exc_info=True)
+
+    threading.Thread(target=warm_gallery, name="gallery-warmup", daemon=True).start()
     return app
 
 
