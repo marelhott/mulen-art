@@ -59,6 +59,7 @@ export default function StudioView(p) {
   const [tab, setTab] = useState("atelier");
   const isAtelier = tab === "atelier";
   const isReimagine = tab === "reimagine";
+  const isVari = tab === "vari" && Boolean(p.variUrl);
   const updateAtelier = patch => p.setAtelier(current => ({...current, ...patch}));
   const [thumbSize, setThumbSize] = useState(
     () => Number(safeStorage.get("img2img-thumb-size")) || 0,
@@ -401,7 +402,7 @@ export default function StudioView(p) {
   );
 
   return (
-    <div className={`studio ${rightOpen ? "" : "right-hidden"}`}>
+    <div className={`studio ${rightOpen ? "" : "right-hidden"} ${isVari ? "vari-mode" : ""}`}>
       <nav className="icon-rail" aria-label="Navigace studia">
         <a href="#" className="brand-symbol" aria-label="Mulen IMG2IMG">
           <Sparkles size={23} />
@@ -420,6 +421,9 @@ export default function StudioView(p) {
         <button className={isReimagine ? "active" : ""} onClick={() => setTab("reimagine")} title="unCLIP — varianty z jednoho obrázku (SD 2.1 unCLIP, dříve Clipdrop Reimagine)">
           <Shuffle /><span>UNCLIP</span>
         </button>
+        {p.variUrl && <button className={isVari ? "active" : ""} onClick={() => setTab("vari")} title="Vari — varianty obrázku přes fal, Replicate, OpenAI a Gemini">
+          <Layers3 /><span>VARI</span>
+        </button>}
         <button
           className={tab === "library" ? "active" : ""}
           onClick={() => setTab("library")}
@@ -810,6 +814,25 @@ export default function StudioView(p) {
           </div>
         )}
       </main>
+      {isVari && (
+        <main className="workspace vari-workspace">
+          <div className="empty-workspace">
+            <div className="empty-orbit">
+              <Layers3 size={35} strokeWidth={1} />
+            </div>
+            <h2>
+              <em>Vari</em> je samostatná aplikace.
+            </h2>
+            <p>
+              Varianty obrázku přes fal, Replicate, OpenAI a Gemini.<br />Otevře se v novém okně a zeptá se na stejné jméno a heslo jako studio.
+            </p>
+            <a className="toolbar-button" href={p.variUrl} target="_blank" rel="noreferrer">
+              <Layers3 size={12} />
+              OTEVŘÍT VARI
+            </a>
+          </div>
+        </main>
+      )}
       <SettingsPanel p={p} isAtelier={isAtelier} isReimagine={isReimagine} updateAtelier={updateAtelier} progressState={progressState} />
       <LibraryDialog open={libraryOpen} onClose={closeLibrary} suspended={Boolean(p.selectedImage) || compareOpen}
         items={p.libraryItems} models={p.models} actions={libraryActions} />

@@ -61,7 +61,7 @@ function App() {
   const [reimagine, setReimagine] = useState(DEFAULT_REIMAGINE);
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
-  const { archives, gpuHourlyUsd, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
+  const { archives, gpuHourlyUsd, variUrl, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
     onModels: (data) => setSelectedModelIds(current => reconcileOptionIds(current,
       [...data, ...current.filter(id => mixEntry(id, data)).map(id => ({id}))],
       data.find(item => item.kind !== "base")?.id)),
@@ -685,7 +685,7 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
-        gpuHourlyUsd, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
+        gpuHourlyUsd, variUrl, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
         pendingMode: {atelier: "atelier", reimagine: "reimagine"}[activeJobs.at(-1)?.generation_type] || "results",
       }}
     />

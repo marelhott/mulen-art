@@ -25,7 +25,9 @@ base_image = (
     .pip_install_from_requirements("app_runtime/requirements-gateway.txt")
     .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
           # Fallback rate (Modal L4); per-image estimates use the GPU that actually ran the job.
-          "GPU_HOURLY_USD": "0.80"})
+          "GPU_HOURLY_USD": "0.80",
+          # Where the Vari tab points (the separate `vari` Modal app); set at deploy time, empty = no tab.
+          "VARI_URL": os.environ.get("VARI_URL", "")})
     .add_local_python_source("app_runtime")
     .add_local_dir("config", "/app/config")
 )
