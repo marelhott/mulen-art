@@ -445,9 +445,9 @@ def purge_deleted_images():
 @app.function(
     image=base_image.add_local_dir("frontend/dist", "/app/frontend/dist"),
     volumes={"/outputs": outputs, "/state": state, "/archives": archives},
-    # Stays warm for 5 minutes after the last request: a page reload used to hit a cold start.
-    min_containers=0, max_containers=1, scaledown_window=300,
-    cpu=1, memory=1024,  # thumbnails of 2048 px PNGs are decoded here; 0.25 CPU made them take 20+ s
+    # Stays warm for 15 minutes after the last request: a cold start (image, Volume, record scan) takes ~20 s.
+    min_containers=0, max_containers=1, scaledown_window=900,
+    cpu=2, memory=2048,  # thumbnails of 2048 px PNGs are decoded here; 0.25 CPU made them take 20+ s
     # STUDIO_USERNAME / STUDIO_PASSWORD, optional MONTHLY_IMAGE_LIMIT and MAX_JOBS_PER_REQUEST.
     secrets=[modal.Secret.from_name("img2img-auth")],
 )

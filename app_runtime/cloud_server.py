@@ -23,7 +23,7 @@ from PIL import Image
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image, check_job_size
 from app_runtime.server import (api_atelier_photo, api_atelier_photos, api_options, OUTPUTS_DIR, THUMBS_DIR, api_library_save, load_deleted_ids,
                                 load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
-                                ensure_thumbnail, is_safe_filename)
+                                ensure_thumbnail, is_safe_filename, thumb_filename as thumb_name)
 
 VOLUME_REFRESH_INTERVAL = float(os.getenv("VOLUME_REFRESH_SECONDS", "2.0"))
 
@@ -677,13 +677,17 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if source is None:
             raise HTTPException(404, "Thumbnail not found.")
         with thumbnail_lock:  # concurrent requests for the same image decode it only once
+            existing = THUMBS_DIR / thumb_name(source.name)
+            known = existing.is_file()
             target = ensure_thumbnail(source.name)
+            created = target is not None and not known
         if target is None:
             raise HTTPException(404, "Thumbnail not found.")
-        try:
-            commit()  # without this the thumbnail vanished with the container and was rebuilt on every cold start
-        except Exception:
-            logging.getLogger("studio").warning("Could not persist thumbnail %s", target.name, exc_info=True)
+        if created:
+            try:
+                commit()  # without this the thumbnail vanished with the container and was rebuilt on every cold start
+            except Exception:
+                logging.getLogger("studio").warning("Could not persist thumbnail %s", target.name, exc_info=True)
         return asset_response(target, "image/webp", request)
 
     @app.get("/api/library/{item_id}/export")
