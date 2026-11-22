@@ -90,7 +90,7 @@ def optional_int_env(name, default=None):
 
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                monthly_limit=None, max_jobs_per_request=DEFAULT_MAX_JOBS_PER_REQUEST, cancel=None,
-               frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None):
+               frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None, vari_engines=None):
     if auth_enabled and (not username or not password):
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
@@ -272,7 +272,23 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         return response
 
     # The read-only catalogue endpoints are identical to the local server's: one implementation, registered here.
-    app.get("/api/options")(api_options)
+    vari_cache = {"at": 0.0, "value": None}
+
+    @app.get("/api/options")
+    def options():
+        data = api_options()
+        if vari_engines is not None:
+            # Which Vari engines have their keys is known only to the Vari job; asked at most once per minute.
+            if vari_cache["value"] is None or time.monotonic() - vari_cache["at"] > 60:
+                try:
+                    vari_cache["value"] = list(vari_engines())
+                    vari_cache["at"] = time.monotonic()
+                except Exception:
+                    logging.getLogger("studio").warning("Vari availability could not be read", exc_info=True)
+            if vari_cache["value"] is not None:
+                data["vari_engines"] = vari_cache["value"]
+        return data
+
     app.get("/api/atelier/photos")(api_atelier_photos)
     app.get("/atelier-photo/{photo_id}")(api_atelier_photo)
 
@@ -531,6 +547,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         # Každá varianta má vlastní úlohu, takže velká dávka nepřekročí čas jednoho GPU workeru.
         expanded = []
         for source_index, payload in enumerate(payloads):
+            if payload["generation_type"] == "vari":
+                # One provider call returns all its images (and is billed once), so Vari is never split per image.
+                expanded.append({**payload, "source_index": source_index, "variant_index": 0})
+                continue
             for variant_index in range(payload["num_images"]):
                 expanded.append({**payload, "seed": -1 if payload["seed"] == -1 else (payload["seed"] + variant_index) % 2**32, "num_images": 1, "source_index": source_index, "variant_index": variant_index})
         return await run_in_threadpool(enqueue, expanded)

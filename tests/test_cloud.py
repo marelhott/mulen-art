@@ -121,6 +121,31 @@ class CloudFlowTests(unittest.TestCase):
             self.assertEqual(payload["image_base64"], "")
         self.assertTrue(all(job["generation_type"] == "reimagine" for job in self.jobs.values() if "generation_type" in job))
 
+    def test_options_report_the_vari_engines_known_to_the_vari_job(self):
+        engines = [{"id": "z-image", "name": "Z-Image", "available": True, "missing": [], "tuning": []}]
+        client = TestClient(self.make_app(lambda key, payload: None, vari_engines=lambda: engines))
+        client.auth = self.client.auth
+        self.assertEqual(client.get("/api/options").json()["vari_engines"], engines)
+        def broken():
+            raise RuntimeError("Vari function unreachable")
+        client = TestClient(self.make_app(lambda key, payload: None, vari_engines=broken))
+        client.auth = self.client.auth
+        response = client.get("/api/options")
+        self.assertEqual(response.status_code, 200)  # a dead Vari function must not take the studio's options down
+        self.assertTrue(all(not item["available"] for item in response.json()["vari_engines"]))
+
+    def test_vari_batch_queues_one_job_per_provider_call_and_stores_the_source(self):
+        response = self.client.post("/api/generate-batch", json={
+            "inputs": [{"image_base64": self.payload["image_base64"], "name": "photo.png"}],
+            "settings": {"generation_type": "vari", "vari_engine": "z-image", "vari_distance": "looser", "num_images": 2,
+                         "vari_tuning": {"z_image_creativity": 0.6}}})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(self.submissions), 1)  # two images, one provider call
+        for _, payload in self.submissions:
+            self.assertEqual((payload["generation_type"], payload["vari_engine"], payload["vari_distance"], payload["vari_tuning"], payload["num_images"]),
+                             ("vari", "z-image", "looser", {"z_image_creativity": 0.6}, 2))
+            self.assertTrue((self.output / payload["source_file"]).is_file())
+
     def test_login_cookie_and_tamper_rejection(self):
         client = TestClient(self.app, base_url="https://studio.test")
         self.assertEqual(client.get("/login").status_code, 200)

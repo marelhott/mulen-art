@@ -7,7 +7,7 @@ import os
 import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -90,6 +90,9 @@ class GenerationInput:
     ip_scale: float = 0.8  # metamorph: how strongly the source picture steers the result
     ip_variant: str = "plus"  # metamorph: "plus" (keeps texture and style) or "plain" IP-Adapter
     long_side: int = 768  # unclip: output long side; 1024 gives more detail (the init latents keep it coherent)
+    vari_engine: str = "sd-variation"  # Vari: which provider engine (app_runtime/vari/catalog.py)
+    vari_distance: str = "sibling"  # Vari: how far the variants may stray from the source
+    vari_tuning: dict = field(default_factory=dict)  # Vari: optional per-engine overrides (snake_case keys)
 
 
 def check_job_size(num_images: int) -> None:
@@ -109,6 +112,12 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
             raise ValueError("Ateliér requires a cloud GPU; demo filters cannot verify this mode.")
         from .atelier import generate_study
         return generate_study(generation_input, progress_callback, image_callback)
+
+    if generation_input.generation_type == "vari":
+        if use_demo_mode():
+            raise ValueError("Vari volá cloudové poskytovatele; v demo režimu nejde spustit.")
+        from .vari.run import generate_variations as generate_vari
+        return generate_vari(generation_input, progress_callback, image_callback, extra_meta)
 
     if generation_input.generation_type == "reimagine":
         if use_demo_mode():
@@ -220,6 +229,11 @@ def generate(payload: dict[str, Any], progress_callback: ProgressCallback | None
 }
 
 
+def vari_catalog():
+    from .vari import catalog
+    return catalog
+
+
 def get_options() -> dict[str, Any]:
     config = load_config()
     return {
@@ -230,6 +244,9 @@ def get_options() -> dict[str, Any]:
         "gpu_hourly_usd": float(os.getenv("GPU_HOURLY_USD", "0")) or None,
         # Address of the Vari app (Next.js, own Modal app); the studio shows a tab for it only when this is set.
         "vari_url": os.getenv("VARI_URL") or None,
+        # Vari engines with their availability (keys present in this process); the cloud gateway replaces it with the
+        # answer of the Vari job, which is the only place that holds the provider keys.
+        "vari_engines": list(vari_catalog().availability(os.environ).values()),
         "samplers": [
             {"id": "dpmpp_2m", "name": "DPM++ 2M"},
             {"id": "dpmpp_2m_sde", "name": "DPM++ 2M SDE"},
@@ -287,11 +304,31 @@ def reimagine_fields(payload: dict[str, Any]) -> dict[str, Any]:
             "ip_scale": clamp(float(payload.get("ip_scale", 0.8)), 0.0, 1.5)}
 
 
+def vari_input_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    from .vari import catalog
+    engine = str(payload.get("vari_engine", "sd-variation"))
+    distance = str(payload.get("vari_distance", "sibling"))
+    if engine not in catalog.ENGINES or distance not in catalog.DISTANCES:
+        raise ValueError("Unknown Vari engine or distance")
+    raw = payload.get("vari_tuning")
+    raw = {} if raw is None else raw
+    if not isinstance(raw, dict):
+        raise ValueError("vari_tuning must be an object")
+    tuning = {}
+    for key, value in raw.items():
+        if key not in catalog.TUNING_KEYS:
+            raise ValueError(f"Unknown Vari tuning value: {key}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+            raise ValueError(f"Vari tuning value must be a number: {key}")
+        tuning[key] = value
+    return {"vari_engine": engine, "vari_distance": distance, "vari_tuning": tuning}
+
+
 def parse_input(payload: dict[str, Any]) -> GenerationInput:
     generation_type = str(payload.get("generation_type", "img2img"))
-    if generation_type not in {"img2img", "atelier", "reimagine"}:
+    if generation_type not in {"img2img", "atelier", "reimagine", "vari"}:
         raise ValueError("Unknown generation type")
-    if generation_type in {"img2img", "reimagine"} and not payload.get("image_base64"):
+    if generation_type in {"img2img", "reimagine", "vari"} and not payload.get("image_base64"):
         raise ValueError("image_base64 is required.")
 
     scale = clamp(float(payload.get("scale", 1.0)), MIN_SCALE, MAX_SCALE)
@@ -315,7 +352,11 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
     steps = int(clamp(int(payload.get("steps", QUALITY_TO_STEPS[quality])), 1, 150))
     cfg = clamp(float(payload.get("cfg", os.getenv("DEFAULT_GUIDANCE_SCALE", "1.8"))), 0.5, 20.0)
 
-    if generation_type == "reimagine":
+    vari_fields: dict[str, Any] = {}
+    if generation_type == "vari":
+        vari_fields = vari_input_fields(payload)
+        model_id, lora_id, model = f"vari_{vari_fields['vari_engine']}", "none", {}
+    elif generation_type == "reimagine":
         # Not an SDXL checkpoint, so it has no entry in config/models.json (and stays out of every picker).
         model_id, lora_id = "sd21_unclip", "none"
         model = {}
@@ -324,9 +365,9 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         lora_id = str(payload.get("lora_id", "none"))
         model = get_config_item("models", model_id)
         get_config_item("loras", lora_id)
-    if generation_type != "reimagine" and model.get("kind") == "base" and lora_id == "none":
+    if generation_type not in {"reimagine", "vari"} and model.get("kind") == "base" and lora_id == "none":
         raise ValueError("Select a trained LoRA for SDXL Base.")
-    if generation_type != "reimagine" and model.get("kind") != "base" and lora_id != "none":
+    if generation_type not in {"reimagine", "vari"} and model.get("kind") != "base" and lora_id != "none":
         raise ValueError("Trained checkpoints run without LoRA. Use SDXL Base for LoRA mode.")
 
     raw_count = payload.get("num_images", 1)
@@ -400,6 +441,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
         noise_level=int(clamp(int(payload.get("noise_level", 0)), 0, 500)),
         **(reimagine_fields(payload) if generation_type == "reimagine" else {}),
+        **vari_fields,
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
         atelier_photo_source=str(payload.get("atelier_photo_source", "generated")),
         atelier_photo_collection=str(payload.get("atelier_photo_collection", "malba")),
