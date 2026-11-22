@@ -61,7 +61,7 @@ export function VariControls({value, update, models, inputCount, generating, onG
     </div>
     <CountField value={value.count} update={update} label="POČET NA MODEL A OBRÁZEK"
       hint={!inputCount ? "Přidej obrázek, ze kterého se varianty odvodí." : !picked ? "Vyber alespoň jeden model." : `${inputCount} × ${picked} × ${count} = ${total} obrázků`} />
-    <PromptField value={value.prompt} update={update} placeholder="Prázdné = ověřený obecný prompt" hint="Vzdálenost k němu přidá jednu větu. Vlastní prompt se pošle tak, jak je." />
+    <PromptField value={value.prompt} update={update} placeholder="Prázdné = ověřený prompt pro zvolenou vzdálenost" hint="Vlastní prompt se pošle tak, jak je (u Blíž až Divně se k němu přidá jedna věta o vzdálenosti)." />
     <p className="help-text">Modely z Mulen Nano přes OpenRouter a Venice. Qwen dostane místo obecného promptu krátký pokyn, jiný pro každou variantu.</p>
   </>;
 }

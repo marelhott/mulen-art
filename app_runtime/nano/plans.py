@@ -4,7 +4,7 @@ The English wording is deliberate: the models react best to it. Pure functions, 
 """
 import math
 
-DISTANCES = ("near", "middle", "far", "weird")
+DISTANCES = ("near", "middle", "far", "weird", "displace")
 
 GENERAL_PROMPT = """Create a new image from the same series as the attached image — a sibling, not a copy and not a different picture.
 
@@ -22,10 +22,15 @@ CHANGE:
 The result must feel unmistakably made by the same hand and in the same session, yet it must not repeat the original's composition.
 Do not add text, captions, borders, watermarks or unrelated objects. Do not stylise, beautify or "fix" anything. Output one image."""
 
+# "Posun" (displacement): not a sibling of the picture but a place that does not exist. The skeleton (composition, layout of the
+# large shapes, palette) stays, what everything IS changes. Models otherwise snap to the most probable recognisable object.
+DISPLACE_PROMPT = """Make a displaced version of this picture: a place that does not exist. Keep the composition, the layout of the large shapes, the horizon, the proportions and the colour palette. But change what everything IS: read every object, figure and brush mark as something else, of another material, so that nothing in the result is a recognisable real place, plant, animal or object. Gestural marks become physical matter, and the setting becomes a plausible nowhere. Keep the medium of the source (painting, print, collage); do not make it photorealistic, polished or symmetrical; do not beautify or fix. Output one image."""
+
 DISTANCE_SUFFIX = {
     "near": "Keep the change subtle: same pose family, slightly different angle.",
     "middle": None,
     "far": "Change the pose and composition strongly while keeping everything listed under KEEP.",
+    "displace": None,
     "weird": "Make it genuinely weird: push the scene into the strange and uncanny — dream logic, unexpected scale, odd juxtapositions, distorted space, something quietly wrong or impossible — while the identity of the subject and everything listed under KEEP (medium, palette, light, mood) stays recognisably the same hand.",
 }
 
@@ -59,6 +64,13 @@ EDIT_DIRECTIVES = {
         "Change the scale of the room around the subjects so that it feels vast and unreal.",
     ],
 }
+EDIT_DIRECTIVES["displace"] = [
+    "Keep the layout and colours but turn every brush mark and object into something else made of another material, so the place no longer exists.",
+    "Keep the composition and palette, but read the main shapes as bones, charred wood or stone, and change the sky into another surface such as rippled water.",
+    "Keep the composition and palette, but replace every recognisable thing with an unfamiliar object of a different material; nothing may look like a real place.",
+    "Keep the horizon and the large shapes, but make the figures and marks into physical matter such as bark, clay or coral, and shift the setting into a nowhere.",
+    "Keep the layout and colours, but misread every shape as a different thing, as if the picture was remembered wrongly, so no real landscape remains.",
+]
 EDIT_KEEP_SUFFIX = "Keep the same people and the same photographic style and lighting."
 
 
@@ -71,6 +83,8 @@ def is_instruction_edit_model(model: str) -> bool:
 
 
 def build_variants_prompt(base: str, distance: str) -> str:
+    if distance == "displace":  # a custom prompt replaces the displacement prompt as it is
+        return (base or "").strip() or DISPLACE_PROMPT
     text = (base or "").strip() or GENERAL_PROMPT
     suffix = DISTANCE_SUFFIX[distance]
     return f"{text}\n\n{suffix}" if suffix else text
@@ -79,7 +93,8 @@ def build_variants_prompt(base: str, distance: str) -> str:
 def build_edit_instruction(base: str, distance: str, variant_index: int) -> str:
     directives = EDIT_DIRECTIVES[distance]
     directive = directives[variant_index % len(directives)]
-    return " ".join(part for part in [(base or "").strip(), directive, EDIT_KEEP_SUFFIX] if part)
+    suffix = "" if distance == "displace" else EDIT_KEEP_SUFFIX  # that suffix asks to keep people and a photographic look
+    return " ".join(part for part in [(base or "").strip(), directive, suffix] if part)
 
 
 def build_prompt_for_model(model: str, base: str, distance: str, variant_index: int) -> str:

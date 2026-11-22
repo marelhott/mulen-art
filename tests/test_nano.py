@@ -24,6 +24,15 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(plans.build_variants_prompt("", "near").endswith(plans.DISTANCE_SUFFIX["near"]))
         self.assertEqual(plans.build_variants_prompt("  my own  ", "middle"), "my own")
 
+    def test_displacement_uses_its_own_prompt_and_a_custom_prompt_replaces_it(self):
+        self.assertEqual(plans.build_variants_prompt("", "displace"), plans.DISPLACE_PROMPT)
+        self.assertNotIn("sibling", plans.DISPLACE_PROMPT)
+        self.assertEqual(plans.build_variants_prompt(" mine ", "displace"), "mine")
+        qwen = [plans.build_prompt_for_model("venice/qwen-image-2-1-pro-edit", "", "displace", i) for i in range(5)]
+        self.assertEqual(len(set(qwen)), 5)
+        self.assertTrue(all(plans.EDIT_KEEP_SUFFIX not in item and item.startswith("Keep the") for item in qwen))
+        self.assertIn("displace", plans.DISTANCES)
+
     def test_qwen_gets_a_short_edit_instruction_that_differs_per_variant(self):
         prompts = [plans.build_prompt_for_model("venice/qwen-image-2-1-pro-edit", "", "far", i) for i in range(6)]
         self.assertEqual(len(set(prompts[:5])), 5)

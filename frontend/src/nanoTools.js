@@ -8,9 +8,10 @@ export const NANO_DISTANCES = [
   {id: "middle", name: "Střed", hint: "Výchozí vzdálenost"},
   {id: "far", name: "Dál", hint: "Silně jiná póza a kompozice"},
   {id: "weird", name: "Divně", hint: "Podivný, snový, neobvyklý posun, stále stejná ruka"},
+  {id: "displace", name: "Posun", hint: "Místo, které neexistuje: kompozice a paleta zůstanou, ale každá věc a tah se přečte jako něco jiného"},
 ];
 
-export const DEFAULT_VARI = {models: ["nano-pro"], distance: "middle", count: 3, prompt: ""};
+export const DEFAULT_VARI = {models: ["nano-pro", "gemini"], distance: "displace", count: 3, prompt: ""};
 export const DEFAULT_COLLAGE = {models: ["nano-pro"], fuse: true, count: 3, prompt: ""};
 
 export const clampCount = value => Math.min(NANO_MAX_PER_MODEL, Math.max(1, Math.round(Number(value)) || 1));
