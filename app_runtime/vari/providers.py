@@ -177,11 +177,12 @@ def cancel_replicate_prediction(client: httpx.Client, prediction_id: str) -> Non
         pass
 
 
-def run_replicate(client: httpx.Client, payload: dict[str, Any], timeout: float = 1200.0, poll: float = 2.0,
+def run_replicate(client: httpx.Client, payload: dict[str, Any], timeout: float = 1200.0, poll: float = 2.0, start_timeout: float = 480.0,
                   cancelled: Callable[[], bool] | None = None, on_status: Callable[[str], None] | None = None,
                   sleep: Callable[[float], None] = time.sleep) -> list[dict[str, str]]:
     prediction_id = create_replicate_prediction(client, payload)
-    deadline = time.monotonic() + timeout
+    began = time.monotonic()
+    deadline = began + timeout
     while True:
         if cancelled and cancelled():
             cancel_replicate_prediction(client, prediction_id)
@@ -198,6 +199,10 @@ def run_replicate(client: httpx.Client, payload: dict[str, Any], timeout: float 
             return [{"url": url} for url in urls if isinstance(url, str)]
         if data.get("status") in ("failed", "canceled"):
             raise ProviderError(str(data.get("error") or "Replicate úloha selhala."))
+        if data.get("status") == "starting" and time.monotonic() - began > start_timeout:
+            # A cold public model can stay in "starting" for a very long time (SD Image Variation does): stop waiting.
+            cancel_replicate_prediction(client, prediction_id)
+            raise ProviderError(f"Replicate model se nespustil do {int(start_timeout // 60)} minut (studený start). Zkus jiný engine, nebo to zopakuj později.")
         if time.monotonic() > deadline:
             cancel_replicate_prediction(client, prediction_id)
             raise ProviderError("Replicate neodpověděl včas (limit 20 minut).")

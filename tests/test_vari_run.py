@@ -100,6 +100,12 @@ class ProviderTests(unittest.TestCase):
         with patch.dict("os.environ", {"REPLICATE_API_TOKEN": "t"}), self.assertRaisesRegex(providers.ProviderError, "boom"):
             providers.run_replicate(net.client(), {"version": "v", "input": {}}, poll=0)
 
+    def test_a_prediction_stuck_in_starting_is_cancelled_with_a_clear_message(self):
+        net = FakeInternet(replicate_statuses=("starting",))
+        with patch.dict("os.environ", {"REPLICATE_API_TOKEN": "t"}), self.assertRaisesRegex(providers.ProviderError, "nespustil"):
+            providers.run_replicate(net.client(), {"version": "v", "input": {}}, poll=0, start_timeout=0)
+        self.assertTrue(any(call[1].endswith("/p1/cancel") for call in net.calls))
+
     def test_cancel_stops_polling_and_cancels_the_prediction(self):
         net = FakeInternet(replicate_statuses=("processing",))
         with patch.dict("os.environ", {"REPLICATE_API_TOKEN": "t"}), self.assertRaises(providers.Cancelled):
