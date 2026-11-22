@@ -1,7 +1,7 @@
 import React from "react";
 import { Layers3, Combine } from "lucide-react";
 import { Label } from "./controls";
-import { COLLAGE_MAX_SOURCES, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, isFused, usableModels } from "../nanoTools";
+import { COLLAGE_MAX_SOURCES, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, isFused, takesImages, usableModels } from "../nanoTools";
 
 // Model picker shared by Vari and Koláž: a model whose provider key is missing is shown but cannot be chosen, with the reason.
 function ModelPicker({models, value, update}) {
@@ -10,11 +10,11 @@ function ModelPicker({models, value, update}) {
   return <div className="control-block">
     <div className="label-row"><Label>MODELY</Label><span>{usable}</span></div>
     <div className="nano-models" role="group" aria-label="Modely">
-      {models.map(model => <button key={model.id} type="button" className="nano-model" aria-pressed={value.includes(model.id) && model.available}
-        disabled={!model.available} onClick={() => toggle(model.id)}
-        title={model.available ? model.model : `Chybí ${model.missing} (nastav v Modalu v secretu nano-keys)`}>
+      {models.map(model => <button key={model.id} type="button" className="nano-model" aria-pressed={value.includes(model.id) && model.available && takesImages(model)}
+        disabled={!model.available || !takesImages(model)} onClick={() => toggle(model.id)}
+        title={!takesImages(model) ? "Generuje jen z textu, z obrázku sourozence ani koláž neudělá" : model.available ? model.model : `Chybí ${model.missing} (nastav v Modalu v secretu nano-keys)`}>
         <b>{model.title}</b>
-        <small>{model.available ? (model.max_inputs === 0 ? "jen text" : model.min_inputs > 0 ? "editor" : "generátor") : `chybí klíč`}</small>
+        <small>{!takesImages(model) ? "jen text" : model.available ? (model.min_inputs > 0 ? "editor" : "generátor") : "chybí klíč"}</small>
       </button>)}
     </div>
     {!models.length && <span className="help-text">Seznam modelů se načítá.</span>}

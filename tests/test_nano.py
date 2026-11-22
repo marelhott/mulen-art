@@ -200,3 +200,40 @@ class RunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FixTests(unittest.TestCase):
+    def test_venice_gets_the_nearest_supported_ratio_instead_of_an_error(self):
+        self.assertIn(providers.nearest_venice_ratio("5:4"), providers.VENICE_RATIOS)
+        self.assertEqual(providers.nearest_venice_ratio("16:9"), "16:9")
+        self.assertEqual(providers.nearest_venice_ratio("Original"), "Original")
+
+    def test_the_uncensored_qwen_fuse_prompt_fits_its_1500_character_limit(self):
+        for images in (2, 3):
+            prompt = plans.build_fuse_prompt("venice/qwen-edit-uncensored", "", 4, images)[1]
+            self.assertLessEqual(len(prompt), 1500)
+        self.assertGreater(len(plans.build_fuse_prompt("venice/qwen-image-2-1-pro-edit", "", 4, 2)[1]), 1500)
+
+    def test_a_credit_error_caused_by_in_flight_requests_is_retried(self):
+        calls = []
+        def handler(request):
+            calls.append(1)
+            if len(calls) == 1:
+                return httpx.Response(402, json={"error": {"message": "This request would exceed your available credits given your current in-flight requests."}})
+            return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(b"OK").decode()}]})
+        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "k"}):
+            data = providers.generate_image(httpx.Client(transport=httpx.MockTransport(handler)), "m", "p", [], None, None, sleep=lambda s: None)
+        self.assertEqual((data, len(calls)), (b"OK", 2))
+
+    def test_a_model_that_rejects_the_ratio_with_references_is_retried_without_it(self):
+        bodies = []
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            if "aspect_ratio" in bodies[-1]:
+                return httpx.Response(400, json={"error": {"message": 'No provider supports the requested parameter(s): resolution "1K", aspect_ratio "5:4"'}})
+            return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(b"OK").decode()}]})
+        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "k"}):
+            data = providers.generate_image(httpx.Client(transport=httpx.MockTransport(handler)), "m", "p", ["data:image/png;base64,AA"], "5:4", "1K", sleep=lambda s: None)
+        self.assertEqual(data, b"OK")
+        self.assertNotIn("aspect_ratio", bodies[-1])
+        self.assertNotIn("resolution", bodies[-1])

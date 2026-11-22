@@ -4,11 +4,16 @@ import {DEFAULT_COLLAGE, DEFAULT_VARI, clampCount, collageFromSettings, isFused,
 
 const catalogue = [
   {id: "nano-pro", available: true}, {id: "gpt", available: true}, {id: "flux", available: false}, {id: "qwen-pro", available: true},
+  {id: "lustify", available: true, max_inputs: 0},
 ];
 
 test("only selected models with a key are used, in catalogue order", () => {
   assert.deepEqual(usableModels(["qwen-pro", "flux", "nano-pro"], catalogue).map(item => item.id), ["nano-pro", "qwen-pro"]);
   assert.deepEqual(usableModels([], catalogue), []);
+});
+
+test("a text-only model is never used, even when selected", () => {
+  assert.deepEqual(usableModels(["lustify", "gpt"], catalogue).map(item => item.id), ["gpt"]);
 });
 
 test("Vari plans one request per model with the clamped count and distance", () => {

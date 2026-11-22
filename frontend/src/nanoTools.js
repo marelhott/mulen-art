@@ -15,10 +15,13 @@ export const DEFAULT_COLLAGE = {models: ["nano-pro"], fuse: true, count: 3, prom
 
 export const clampCount = value => Math.min(NANO_MAX_PER_MODEL, Math.max(1, Math.round(Number(value)) || 1));
 
-// The selected models that have their provider key, in catalogue order (a model never runs twice).
+// A model is usable when its provider key is set and it takes an input image (text-only models cannot make siblings or fusions).
+export const takesImages = item => item.max_inputs !== 0;
+
+// The selected usable models, in catalogue order (a model never runs twice).
 export function usableModels(selected, catalogue = []) {
   const chosen = new Set(selected || []);
-  return catalogue.filter(item => chosen.has(item.id) && item.available);
+  return catalogue.filter(item => chosen.has(item.id) && item.available && takesImages(item));
 }
 
 // Koláž fuses all inputs only when there are two or more and the switch is on; otherwise each input is worked on its own.

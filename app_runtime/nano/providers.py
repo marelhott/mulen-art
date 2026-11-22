@@ -3,6 +3,7 @@
 Keys come from the environment only and are never logged or put into an error message.
 """
 import base64
+import math
 import os
 import re
 import time
@@ -18,6 +19,15 @@ QWEN = {  # venice model -> (api id, max inputs, max prompt chars)
     "venice/qwen-image-2-1-pro-edit": ("qwen-image-2-1-pro-edit", 10, 10000),
 }
 VENICE_RATIOS = {"1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:3", "4:5"}
+
+
+def nearest_venice_ratio(aspect_ratio: str) -> str:
+    """Venice has no 5:4 (and a few others): use the closest ratio it supports instead of failing the whole job."""
+    match = re.fullmatch(r"(\d+):(\d+)", aspect_ratio)
+    if not match or aspect_ratio in VENICE_RATIOS:
+        return aspect_ratio
+    target = int(match[1]) / int(match[2])
+    return min(VENICE_RATIOS, key=lambda item: abs(math.log((int(item.split(":")[0]) / int(item.split(":")[1])) / target)))
 
 
 class ProviderError(RuntimeError):
@@ -62,7 +72,10 @@ def _openrouter_error(response: httpx.Response) -> ProviderError:
     elif isinstance(raw, dict):
         upstream = (raw.get("error") or {}).get("message") or raw.get("message") or ""
     parts = [metadata.get("provider_name"), error.get("message") or (data.get("message") if isinstance(data, dict) else None) or f"OpenRouter HTTP {response.status_code}", upstream]
-    return ProviderError(_scrub(" — ".join(str(part) for part in parts if part)), retryable=response.status_code in (408, 429) or response.status_code >= 500)
+    message = _scrub(" — ".join(str(part) for part in parts if part))
+    # "would exceed your credits given your in-flight requests" clears by itself once the other requests settle.
+    in_flight = response.status_code == 402 and "in-flight" in message.lower()
+    return ProviderError(message, retryable=response.status_code in (408, 429) or response.status_code >= 500 or in_flight)
 
 
 def _image_url_from(data: dict[str, Any]) -> str | None:
@@ -161,9 +174,7 @@ def venice_image(client: httpx.Client, model: str, prompt: str, images: list[str
         payload: dict[str, Any] = {"modelId": api_id, "images": images, "prompt": prompt} if multi else {"model": api_id, "image": images[0], "prompt": prompt}
         payload.update(safe_mode=False, output_format="png")
         if aspect_ratio and aspect_ratio != "Original":
-            if aspect_ratio not in VENICE_RATIOS:
-                raise ProviderError("Tento poměr stran Qwen nepodporuje.")
-            payload["aspect_ratio"] = aspect_ratio
+            payload["aspect_ratio"] = nearest_venice_ratio(aspect_ratio)
         if api_id != "qwen-edit-uncensored" and resolution:
             payload["resolution"] = resolution
         response = _venice_post(client, "multi-edit" if multi else "edit", payload)
@@ -194,9 +205,15 @@ def generate_image(client: httpx.Client, model: str, prompt: str, images: list[s
         try:
             if call is venice_image:
                 return venice_image(client, model, prompt, images, aspect_ratio, resolution, size)
-            return openrouter_image(client, model, prompt, images, aspect_ratio, resolution)
+            try:
+                return openrouter_image(client, model, prompt, images, aspect_ratio, resolution)
+            except ProviderError as exc:
+                # Some models take reference images only without an explicit ratio/resolution: retry once without them.
+                if aspect_ratio and aspect_ratio != "Original" and "requested parameter" in str(exc) and "aspect_ratio" in str(exc):
+                    return openrouter_image(client, model, prompt, images, None, None)
+                raise
         except ProviderError as exc:
             if not exc.retryable or attempt == attempts:
                 raise
-            sleep(2.0 * attempt)
+            sleep(8.0 * attempt if "in-flight" in str(exc).lower() else 2.0 * attempt)
     raise ProviderError("Generování selhalo.")

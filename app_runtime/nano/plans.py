@@ -62,6 +62,9 @@ EDIT_DIRECTIVES = {
 EDIT_KEEP_SUFFIX = "Keep the same people and the same photographic style and lighting."
 
 
+SHORT_PROMPT_MODEL = "venice/qwen-edit-uncensored"
+
+
 def is_instruction_edit_model(model: str) -> bool:
     """Qwen Edit (Venice) is an instruction editor: a generation prompt like "make a sibling, keep everything" returns the same picture."""
     return model.startswith("venice/qwen-")
@@ -172,6 +175,8 @@ def build_fuse_prompt(model: str, custom: str, seed: int, image_count: int) -> t
     shift, text = build_fuse_directive(seed, image_count)
     if (custom or "").strip():
         return shift, custom.strip()
+    if model == SHORT_PROMPT_MODEL:  # accepts at most 1500 characters: the edit instruction and the directive only
+        return shift, f"{build_collage_edit_instruction(image_count)}\n\n{text}"
     body = f"{COLLAGE_GENERAL_PROMPT}\n\n{text}"
     if is_instruction_edit_model(model):
         body = f"{build_collage_edit_instruction(image_count)}\n\n{body}"
