@@ -168,18 +168,18 @@ svg {
   display: flex;
   align-items: center;
   flex-direction: column;
-  gap: 7px;
-  padding: 10px 0;
+  gap: 6px;
+  padding: 8px 0;
   color: var(--muted);
   position: relative;
 }
 .icon-rail > button svg {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
 }
 .icon-rail span {
-  font-size: 11px;
-  letter-spacing: 1px;
+  font-size: 9px;
+  letter-spacing: 0.8px;
   font-weight: 700;
 }
 .icon-rail > button.active {
@@ -189,10 +189,10 @@ svg {
   content: "";
   position: absolute;
   width: 2px;
-  height: 25px;
+  height: 20px;
   background: var(--accent);
   left: 0;
-  top: 10px;
+  top: 8px;
 }
 .rail-bottom {
   margin-top: auto;
