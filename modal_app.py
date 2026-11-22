@@ -30,7 +30,16 @@ base_image = (
     .add_local_dir("config", "/app/config")
 )
 vari_secret = modal.Secret.from_name("vari-keys")  # provider keys; only the Vari functions see it
-vari_image = base_image.pip_install("httpx==0.28.1")
+# Own image (not base_image + pip_install): Modal wants build steps before add_local_*.
+vari_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install_from_requirements("app_runtime/requirements-gateway.txt")
+    .pip_install("httpx==0.28.1")
+    .env({"MODEL_CONFIG_PATH": "/app/config/models.json", "OUTPUTS_DIR": "/outputs", "ARCHIVE_ROOT": "/archives/atelier-archives",
+          "GPU_HOURLY_USD": "0.80"})
+    .add_local_python_source("app_runtime")
+    .add_local_dir("config", "/app/config")
+)
 gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install_from_requirements("app_runtime/requirements.txt")

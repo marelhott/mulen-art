@@ -6,6 +6,7 @@ An explicit User-Agent is always sent: Replicate answers 403 to the default Pyth
 import base64
 import json
 import os
+import random
 import re
 import time
 from typing import Any, Callable
@@ -149,12 +150,24 @@ def replicate_headers() -> dict[str, str]:
     return {"Authorization": f"Token {_key('REPLICATE_API_TOKEN', 'Engine na Replicate')}", "Content-Type": "application/json"}
 
 
-def create_replicate_prediction(client: httpx.Client, payload: dict[str, Any]) -> str:
+def create_replicate_prediction(client: httpx.Client, payload: dict[str, Any], attempts: int = 8,
+                                sleep: Callable[[float], None] = time.sleep) -> str:
+    """Replicate throttles accounts with little credit (6 requests a minute, burst 1): a 429 carries `retry_after`,
+    so wait that long (plus jitter, because parallel jobs collide) and try again."""
     body = {"model": payload["model"], "input": payload["input"]} if payload.get("model") else {"version": payload["version"], "input": payload["input"]}
-    response = client.post(REPLICATE_API, json=body, headers=replicate_headers())
-    if response.status_code >= 400:
-        raise ProviderError(_error_text(response, "Replicate odmítl požadavek"))
-    return response.json()["id"]
+    for attempt in range(attempts):
+        response = client.post(REPLICATE_API, json=body, headers=replicate_headers())
+        if response.status_code == 429 and attempt < attempts - 1:
+            try:
+                wait = float(response.json().get("retry_after") or 10)
+            except Exception:
+                wait = 10.0
+            sleep(min(wait, 60.0) + random.uniform(0.5, 4.0) * (attempt + 1))
+            continue
+        if response.status_code >= 400:
+            raise ProviderError(_error_text(response, "Replicate odmítl požadavek"))
+        return response.json()["id"]
+    raise ProviderError("Replicate odmítá požadavky (limit).")
 
 
 def cancel_replicate_prediction(client: httpx.Client, prediction_id: str) -> None:

@@ -80,6 +80,21 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(create[2], {"version": "v", "input": {"a": 1}})
         self.assertEqual(create[3]["user-agent"], providers.USER_AGENT)
 
+    def test_replicate_throttling_is_retried_after_the_announced_wait(self):
+        responses = [httpx.Response(429, json={"detail": "throttled", "retry_after": 7}), httpx.Response(429, json={"retry_after": 3}),
+                     httpx.Response(201, json={"id": "p9", "status": "starting"})]
+        waits = []
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: responses.pop(0)))
+        with patch.dict("os.environ", {"REPLICATE_API_TOKEN": "t"}):
+            self.assertEqual(providers.create_replicate_prediction(client, {"version": "v", "input": {}}, sleep=waits.append), "p9")
+        self.assertEqual(len(waits), 2)
+        self.assertTrue(7 <= waits[0] <= 12 and 3 <= waits[1] <= 14)
+
+    def test_replicate_gives_up_after_the_last_attempt(self):
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(429, json={"detail": "Request was throttled.", "retry_after": 1})))
+        with patch.dict("os.environ", {"REPLICATE_API_TOKEN": "t"}), self.assertRaisesRegex(providers.ProviderError, "throttled"):
+            providers.create_replicate_prediction(client, {"version": "v", "input": {}}, attempts=2, sleep=lambda s: None)
+
     def test_replicate_failure_surfaces_the_providers_message(self):
         net = FakeInternet(replicate_statuses=("failed",))
         with patch.dict("os.environ", {"REPLICATE_API_TOKEN": "t"}), self.assertRaisesRegex(providers.ProviderError, "boom"):
