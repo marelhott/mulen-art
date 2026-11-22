@@ -2248,3 +2248,13 @@ input[type="range"]::-moz-range-progress {
 }
 @keyframes skeleton-sweep { to { background-position: -220% 0; } }
 @media (prefers-reduced-motion: reduce) { .skeleton-card { animation: none; } }
+
+/* Vari and Koláž: model picker */
+.nano-models { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.nano-model { display: grid; gap: 2px; text-align: left; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line, rgba(255,255,255,.12)); background: transparent; color: inherit; cursor: pointer; }
+.nano-model b { font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.nano-model small { font-size: 10px; color: var(--muted); }
+.nano-model[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.nano-model:disabled { opacity: .45; cursor: not-allowed; }
+.nano-model:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.control-block textarea { width: 100%; resize: vertical; min-height: 64px; font: inherit; font-size: 12px; }

@@ -4,6 +4,7 @@ import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { randomId, safeStorage } from "./shared";
 import { DEFAULT_REIMAGINE, planReimagine, plannedImages, reimagineFromSettings } from "./reimagineTools";
+import { DEFAULT_VARI, DEFAULT_COLLAGE, COLLAGE_MAX_SOURCES, planVari, planCollage, plannedImages as nanoPlannedImages, variFromSettings, collageFromSettings, usableModels } from "./nanoTools";
 import { usePresets } from "./usePresets";
 import { useGallery } from "./useGallery";
 import { useServerOptions } from "./useServerOptions";
@@ -59,9 +60,11 @@ function App() {
     width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.82,
     sampler: "dpmpp_2m", schedule: "karras"});
   const [reimagine, setReimagine] = useState(DEFAULT_REIMAGINE);
+  const [vari, setVari] = useState(DEFAULT_VARI);
+  const [collage, setCollage] = useState(DEFAULT_COLLAGE);
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
-  const { archives, gpuHourlyUsd, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
+  const { archives, gpuHourlyUsd, nanoModels, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
     onModels: (data) => setSelectedModelIds(current => reconcileOptionIds(current,
       [...data, ...current.filter(id => mixEntry(id, data)).map(id => ({id}))],
       data.find(item => item.kind !== "base")?.id)),
@@ -133,6 +136,14 @@ function App() {
   averageSeconds.current = typicalSeconds;
 
   function applySettings(settings) {
+    if (settings?.generation_type === "vari") {
+      setVari(current => variFromSettings(settings, current));
+      return;
+    }
+    if (settings?.generation_type === "collage") {
+      setCollage(current => collageFromSettings(settings, current));
+      return;
+    }
     if (settings?.generation_type === "reimagine") {
       setReimagine(current => reimagineFromSettings(settings, current));
       return;
@@ -504,6 +515,76 @@ function App() {
     if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: "unCLIP: žádná úloha nebyla přijata."});
   }
 
+  // Vari and Koláž: `buildCalls(issues)` uploads what it needs and returns the calls {name, sourceId, refId, settings}; one
+  // /api/generate-batch request per call (one job per model run). `total` is the number of images the plan will make.
+  async function submitCalls(label, total, buildCalls) {
+    const continuing = submitting.current || activeJobs.length > 0;
+    pendingSubmissions.current += 1; submitting.current = true;
+    plannedCount.current = (continuing ? Math.max(plannedCount.current, activeJobs.reduce((sum, item) => sum + item.expected_images, 0)) : 0) + total;
+    setIsSubmitting(true); setPlannedOutputs(plannedCount.current);
+    if (!continuing) {
+      setSubmittedOutputs(0); setStartedAt(Date.now()); recordsCache.current.clear();
+      setSubmissionErrors([]); setBatchResults([]); setJob({...EMPTY_JOB, status: "preparing", message: `${label}: odesílání do fronty`});
+      safeStorage.remove("img2img-last-batch");
+    }
+    setError("");
+    let sent = 0;
+    const issues = [];
+    let calls = [];
+    try { calls = await buildCalls(issues); } catch (error) { issues.push(error.message); }
+    for (const call of calls) {
+      try {
+        const response = await apiFetch("/api/generate-batch", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({inputs: [{name: call.name, source_id: call.sourceId}], settings: call.settings})});
+        const data = await readJson(response, "Odeslání se nezdařilo.");
+        const jobs = data.jobs.map(job => ({...job, source_id: call.refId, source_name: call.name}));
+        const accepted = jobs.reduce((sum, job) => sum + job.expected_images, 0); sent += accepted;
+        setActiveJobs(current => [...current, ...jobs]); setSubmittedOutputs(current => current + accepted);
+        issues.push(...(data.errors || []));
+      } catch (error) { issues.push(`${call.name}: ${error.message}`); }
+    }
+    pendingSubmissions.current -= 1; submitting.current = pendingSubmissions.current > 0;
+    setIsSubmitting(submitting.current); setSubmissionErrors(current => [...current, ...issues]);
+    if (issues.length) setError(issues.join(" · "));
+    plannedCount.current -= total - sent; setPlannedOutputs(plannedCount.current);
+    if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: `${label}: žádná úloha nebyla přijata.`});
+  }
+
+  async function uploadSource(item) {
+    const upload = await apiFetch("/api/sources", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({image_base64: await fileToBase64(item.file)})});
+    return (await readJson(upload, "Nahrání se nezdařilo.")).source_id;
+  }
+
+  async function handleGenerateVari() {
+    const plan = planVari(vari, nanoModels);
+    if (!inputItems.length) {setError("Přidej obrázek, ze kterého se varianty odvodí."); return;}
+    if (!plan.length) {setError("Vyber model, který má nastavený klíč."); return;}
+    await submitCalls("Vari", inputItems.length * nanoPlannedImages(plan), async issues => {
+      const calls = [];
+      for (const item of inputItems) {
+        let sourceId;
+        try { sourceId = await uploadSource(item); } catch (error) { issues.push(`${item.file.name}: ${error.message}`); continue; }
+        for (const settings of plan) calls.push({name: item.file.name, sourceId, refId: item.id, settings});
+      }
+      return calls;
+    });
+  }
+
+  async function handleGenerateCollage() {
+    if (!inputItems.length) {setError("Přidej aspoň jeden obrázek."); return;}
+    if (inputItems.length > COLLAGE_MAX_SOURCES) {setError(`Nejvýš ${COLLAGE_MAX_SOURCES} vstupních obrázků.`); return;}
+    if (!usableModels(collage.models, nanoModels).length) {setError("Vyber model, který má nastavený klíč."); return;}
+    const seedStart = crypto.getRandomValues(new Uint32Array(1))[0] % 1000;
+    // The plan depends only on the number of inputs, so the image total is known before anything is uploaded.
+    const preview = planCollage(collage, nanoModels, inputItems.map(item => item.id), seedStart);
+    await submitCalls("Koláž", nanoPlannedImages(preview), async issues => {
+      const ids = [];
+      for (const item of inputItems) ids.push(await uploadSource(item));
+      return planCollage(collage, nanoModels, ids, seedStart).map(({sourceIndex, settings}) =>
+        ({name: inputItems[sourceIndex].file.name, sourceId: ids[sourceIndex], refId: inputItems[sourceIndex].id, settings}));
+    });
+  }
+
   async function handleCancel() {
     // The next poll tick sees "cancelled"; images that were already saved stay in the library.
     await Promise.allSettled(
@@ -685,8 +766,8 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
-        gpuHourlyUsd, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
-        pendingMode: {atelier: "atelier", reimagine: "reimagine"}[activeJobs.at(-1)?.generation_type] || "results",
+        gpuHourlyUsd, nanoModels, vari, setVari, handleGenerateVari, collage, setCollage, handleGenerateCollage, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
+        pendingMode: {atelier: "atelier", reimagine: "reimagine", vari: "vari", collage: "collage"}[activeJobs.at(-1)?.generation_type] || "results",
       }}
     />
   );

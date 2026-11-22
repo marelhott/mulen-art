@@ -90,7 +90,7 @@ def optional_int_env(name, default=None):
 
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                monthly_limit=None, max_jobs_per_request=DEFAULT_MAX_JOBS_PER_REQUEST, cancel=None,
-               frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None):
+               frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None, nano_models=None):
     if auth_enabled and (not username or not password):
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
@@ -272,7 +272,23 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         return response
 
     # The read-only catalogue endpoints are identical to the local server's: one implementation, registered here.
-    app.get("/api/options")(api_options)
+    nano_cache = {"at": 0.0, "value": None}
+
+    @app.get("/api/options")
+    def options():
+        data = api_options()
+        if nano_models is not None:
+            # Which models have their keys is known only to the job function; asked at most once per minute.
+            if nano_cache["value"] is None or time.monotonic() - nano_cache["at"] > 60:
+                try:
+                    nano_cache["value"] = list(nano_models())
+                    nano_cache["at"] = time.monotonic()
+                except Exception:
+                    logging.getLogger("studio").warning("Vari model availability could not be read", exc_info=True)
+            if nano_cache["value"] is not None:
+                data["nano_models"] = nano_cache["value"]
+        return data
+
     app.get("/api/atelier/photos")(api_atelier_photos)
     app.get("/atelier-photo/{photo_id}")(api_atelier_photo)
 
@@ -281,7 +297,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if not isinstance(payload, dict):
             raise ValueError("Expected a JSON object")
         parsed = parse_input(payload)
-        if parsed.generation_type in {"img2img", "reimagine"} and verify_image:
+        if parsed.generation_type in {"img2img", "reimagine", "vari", "collage"} and verify_image:
             image_data = base64.b64decode(parsed.image_base64.split(",")[-1], validate=True)
             with Image.open(io.BytesIO(image_data)) as image:
                 image.verify()
@@ -531,6 +547,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         # Každá varianta má vlastní úlohu, takže velká dávka nepřekročí čas jednoho GPU workeru.
         expanded = []
         for source_index, payload in enumerate(payloads):
+            if payload["generation_type"] in {"vari", "collage"}:
+                # One model run returns all its variants (each a billed provider call), so it stays one job.
+                expanded.append({**payload, "source_index": source_index, "variant_index": 0})
+                continue
             for variant_index in range(payload["num_images"]):
                 expanded.append({**payload, "seed": -1 if payload["seed"] == -1 else (payload["seed"] + variant_index) % 2**32, "num_images": 1, "source_index": source_index, "variant_index": variant_index})
         return await run_in_threadpool(enqueue, expanded)

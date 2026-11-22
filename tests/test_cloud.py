@@ -121,6 +121,31 @@ class CloudFlowTests(unittest.TestCase):
             self.assertEqual(payload["image_base64"], "")
         self.assertTrue(all(job["generation_type"] == "reimagine" for job in self.jobs.values() if "generation_type" in job))
 
+    def test_options_report_the_nano_models_known_to_the_job_function(self):
+        models = [{"id": "nano-pro", "title": "Nano Pro", "available": True, "missing": None}]
+        client = TestClient(self.make_app(lambda key, payload: None, nano_models=lambda: models))
+        client.auth = self.client.auth
+        self.assertEqual(client.get("/api/options").json()["nano_models"], models)
+        def broken():
+            raise RuntimeError("job function unreachable")
+        client = TestClient(self.make_app(lambda key, payload: None, nano_models=broken))
+        client.auth = self.client.auth
+        response = client.get("/api/options")
+        self.assertEqual(response.status_code, 200)  # a dead job function must not take the studio's options down
+        self.assertTrue(all(not item["available"] for item in response.json()["nano_models"]))
+
+    def test_vari_and_collage_batches_are_one_job_per_model_run(self):
+        for kind in ("vari", "collage"):
+            self.submissions.clear()
+            response = self.client.post("/api/generate-batch", json={
+                "inputs": [{"image_base64": self.payload["image_base64"], "name": "photo.png"}],
+                "settings": {"generation_type": kind, "nano_model": "gpt", "nano_distance": "far", "num_images": 1, "prompt": "x"}})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(len(self.submissions), 1)  # one model run, one job (variants are made inside it)
+            _, payload = self.submissions[0]
+            self.assertEqual((payload["generation_type"], payload["nano_model"], payload["nano_distance"], payload["num_images"]), (kind, "gpt", "far", 1))
+            self.assertTrue((self.output / payload["source_file"]).is_file())
+
     def test_login_cookie_and_tamper_rejection(self):
         client = TestClient(self.app, base_url="https://studio.test")
         self.assertEqual(client.get("/login").status_code, 200)
