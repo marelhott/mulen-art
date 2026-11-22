@@ -21,10 +21,11 @@ function ModelPicker({models, value, update}) {
   </div>;
 }
 
-function PromptField({value, update, placeholder}) {
+function PromptField({value, update, placeholder, hint}) {
   return <label className="control-block">
     <Label>VLASTNÍ PROMPT (VOLITELNÉ)</Label>
     <textarea aria-label="Vlastní prompt" rows={3} value={value} placeholder={placeholder} onChange={event => update({prompt: event.target.value})} />
+    {hint && <span className="help-text">{hint}</span>}
   </label>;
 }
 
@@ -60,7 +61,7 @@ export function VariControls({value, update, models, inputCount, generating, onG
     </div>
     <CountField value={value.count} update={update} label="POČET NA MODEL A OBRÁZEK"
       hint={!inputCount ? "Přidej obrázek, ze kterého se varianty odvodí." : !picked ? "Vyber alespoň jeden model." : `${inputCount} × ${picked} × ${count} = ${total} obrázků`} />
-    <PromptField value={value.prompt} update={update} placeholder="Prázdné = ověřený obecný prompt „sourozenec obrazu“. Vzdálenost k němu přidá jednu větu." />
+    <PromptField value={value.prompt} update={update} placeholder="Prázdné = ověřený obecný prompt" hint="Vzdálenost k němu přidá jednu větu. Vlastní prompt se pošle tak, jak je." />
     <p className="help-text">Modely z Mulen Nano přes OpenRouter a Venice. Qwen dostane místo obecného promptu krátký pokyn, jiný pro každou variantu.</p>
   </>;
 }
@@ -86,7 +87,7 @@ export function CollageControls({value, update, models: allModels, inputCount, g
     </div>}
     <ModelPicker models={models} value={value.models} update={update} />
     {!fused && <CountField value={value.count} update={update} label="POČET NA MODEL A VSTUP" />}
-    <PromptField value={value.prompt} update={update} placeholder="Prázdné = ověřený prompt pro organické splynutí. Každý model dostane jiné místo vstupu a techniku." />
+    <PromptField value={value.prompt} update={update} placeholder="Prázdné = ověřený prompt pro splynutí" hint="Každý model dostane jiné místo vstupu a jinou techniku." />
     <p className="help-text">{tooMany ? `Nejvýš ${COLLAGE_MAX_SOURCES} vstupních obrázků.`
       : !inputCount ? "Přidej aspoň jeden obrázek."
       : !picked ? "Vyber alespoň jeden model."

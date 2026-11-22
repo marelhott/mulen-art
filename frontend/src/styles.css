@@ -2257,4 +2257,21 @@ input[type="range"]::-moz-range-progress {
 .nano-model[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .nano-model:disabled { opacity: .45; cursor: not-allowed; }
 .nano-model:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.control-block textarea { width: 100%; resize: vertical; min-height: 64px; font: inherit; font-size: 12px; }
+.control-block textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--secondary);
+  padding: 10px 11px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.control-block textarea::placeholder { color: var(--muted); opacity: .8; }
+.control-block textarea:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line-strong)); }
+.control-block textarea:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
