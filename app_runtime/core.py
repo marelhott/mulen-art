@@ -242,8 +242,6 @@ def get_options() -> dict[str, Any]:
         "loras": [{"id": item["id"], "name": item["name"]} for item in config.get("loras", [])],
         # Only expose a cost rate that was configured; never invent a price.
         "gpu_hourly_usd": float(os.getenv("GPU_HOURLY_USD", "0")) or None,
-        # Address of the Vari app (Next.js, own Modal app); the studio shows a tab for it only when this is set.
-        "vari_url": os.getenv("VARI_URL") or None,
         # Vari engines with their availability (keys present in this process); the cloud gateway replaces it with the
         # answer of the Vari job, which is the only place that holds the provider keys.
         "vari_engines": list(vari_catalog().availability(os.environ).values()),

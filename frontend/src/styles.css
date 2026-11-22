@@ -2248,19 +2248,3 @@ input[type="range"]::-moz-range-progress {
 }
 @keyframes skeleton-sweep { to { background-position: -220% 0; } }
 @media (prefers-reduced-motion: reduce) { .skeleton-card { animation: none; } }
-
-/* Vari tab: a launch card instead of the studio side panels (Vari is a separate app with its own sign-in). */
-.studio.vari-mode {
-  grid-template-columns: 64px minmax(0, 1fr);
-}
-.vari-mode .left-panel,
-.vari-mode .right-panel,
-.vari-mode .workspace:not(.vari-workspace) {
-  display: none;
-}
-.vari-mode .app-header {
-  grid-column: 2/3;
-}
-.vari-workspace .toolbar-button {
-  text-decoration: none;
-}

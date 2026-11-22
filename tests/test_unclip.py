@@ -193,13 +193,5 @@ class ReimagineTests(unittest.TestCase):
                 unclip.ensure_unclip_pipeline()
 
 
-class OptionsTests(unittest.TestCase):
-    def test_vari_url_is_exposed_only_when_configured(self):
-        with patch.dict('os.environ', {'VARI_URL': 'https://vari.example'}):
-            self.assertEqual(core.get_options()['vari_url'], 'https://vari.example')
-        with patch.dict('os.environ', {'VARI_URL': ''}):
-            self.assertIsNone(core.get_options()['vari_url'])
-
-
 if __name__ == '__main__':
     unittest.main()

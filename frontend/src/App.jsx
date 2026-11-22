@@ -4,6 +4,7 @@ import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { randomId, safeStorage } from "./shared";
 import { DEFAULT_REIMAGINE, planReimagine, plannedImages, reimagineFromSettings } from "./reimagineTools";
+import { DEFAULT_VARI, planVari, variFromSettings } from "./variTools";
 import { usePresets } from "./usePresets";
 import { useGallery } from "./useGallery";
 import { useServerOptions } from "./useServerOptions";
@@ -59,9 +60,10 @@ function App() {
     width: 1024, height: 1024, ratio: "random", scale: 2, cfg: 0.5, steps: 28, seed: "-1", denoise: 0.82,
     sampler: "dpmpp_2m", schedule: "karras"});
   const [reimagine, setReimagine] = useState(DEFAULT_REIMAGINE);
+  const [vari, setVari] = useState(DEFAULT_VARI);
   const [loraId, setLoraId] = useState("none");
   const [loraStrength, setLoraStrength] = useState(0.8);
-  const { archives, gpuHourlyUsd, variUrl, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
+  const { archives, gpuHourlyUsd, variEngines, archiveStatus, serverModels, loras, reload: reloadArchives } = useServerOptions({
     onModels: (data) => setSelectedModelIds(current => reconcileOptionIds(current,
       [...data, ...current.filter(id => mixEntry(id, data)).map(id => ({id}))],
       data.find(item => item.kind !== "base")?.id)),
@@ -133,6 +135,10 @@ function App() {
   averageSeconds.current = typicalSeconds;
 
   function applySettings(settings) {
+    if (settings?.generation_type === "vari") {
+      setVari(current => variFromSettings(settings, current));
+      return;
+    }
     if (settings?.generation_type === "reimagine") {
       setReimagine(current => reimagineFromSettings(settings, current));
       return;
@@ -459,20 +465,17 @@ function App() {
     if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: "Ateliér: žádná úloha nebyla přijata."});
   }
 
-  async function handleGenerateReimagine() {
-    const count = Number(reimagine.count);
-    const requestedSeed = Number(reimagine.seed === "" ? -1 : reimagine.seed);
-    if (!inputItems.length || !Number.isSafeInteger(count) || count < 1) {setError("Přidej obrázek a zvol kladný počet variant."); return;}
-    if (!Number.isInteger(requestedSeed) || requestedSeed < -1 || requestedSeed > 4294967295) {setError("Seed musí být celé číslo od −1 do 4294967295."); return;}
-    const planFor = seed => planReimagine(reimagine, seed);
-    const total = inputItems.length * plannedImages(planFor(0));
+  // One submission path for the tabs that send a plan of requests per input image (unCLIP, Vari): upload each input once,
+  // then one /api/generate-batch call per request. `requestsFor()` returns the requests for ONE input.
+  async function submitPlans(label, requestsFor) {
+    const total = inputItems.length * plannedImages(requestsFor());
     const continuing = submitting.current || activeJobs.length > 0;
     pendingSubmissions.current += 1; submitting.current = true;
     plannedCount.current = (continuing ? Math.max(plannedCount.current, activeJobs.reduce((sum, item) => sum + item.expected_images, 0)) : 0) + total;
     setIsSubmitting(true); setPlannedOutputs(plannedCount.current);
     if (!continuing) {
       setSubmittedOutputs(0); setStartedAt(Date.now()); recordsCache.current.clear();
-      setSubmissionErrors([]); setBatchResults([]); setJob({...EMPTY_JOB, status: "preparing", message: "unCLIP: odesílání do fronty"});
+      setSubmissionErrors([]); setBatchResults([]); setJob({...EMPTY_JOB, status: "preparing", message: `${label}: odesílání do fronty`});
       safeStorage.remove("img2img-last-batch");
     }
     setError("");
@@ -484,8 +487,7 @@ function App() {
         const upload = await apiFetch("/api/sources", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({image_base64: await fileToBase64(item.file)})});
         sourceId = (await readJson(upload, "Nahrání se nezdařilo.")).source_id;
       } catch (error) { issues.push(`${item.file.name}: ${error.message}`); continue; }
-      const seed = requestedSeed === -1 ? crypto.getRandomValues(new Uint32Array(1))[0] : requestedSeed;
-      for (const request of planFor(seed)) {
+      for (const request of requestsFor()) {
         try {
           const response = await apiFetch("/api/generate-batch", {method: "POST", headers: {"Content-Type": "application/json"},
             body: JSON.stringify({inputs: [{name: item.file.name, source_id: sourceId}], settings: request})});
@@ -501,7 +503,22 @@ function App() {
     setIsSubmitting(submitting.current); setSubmissionErrors(current => [...current, ...issues]);
     if (issues.length) setError(issues.join(" · "));
     plannedCount.current -= total - sent; setPlannedOutputs(plannedCount.current);
-    if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: "unCLIP: žádná úloha nebyla přijata."});
+    if (!sent && !continuing && !submitting.current) setJob({...EMPTY_JOB, status: "failed", message: `${label}: žádná úloha nebyla přijata.`});
+  }
+
+  async function handleGenerateReimagine() {
+    const count = Number(reimagine.count);
+    const requestedSeed = Number(reimagine.seed === "" ? -1 : reimagine.seed);
+    if (!inputItems.length || !Number.isSafeInteger(count) || count < 1) {setError("Přidej obrázek a zvol kladný počet variant."); return;}
+    if (!Number.isInteger(requestedSeed) || requestedSeed < -1 || requestedSeed > 4294967295) {setError("Seed musí být celé číslo od −1 do 4294967295."); return;}
+    await submitPlans("unCLIP", () => planReimagine(reimagine, requestedSeed === -1 ? crypto.getRandomValues(new Uint32Array(1))[0] : requestedSeed));
+  }
+
+  async function handleGenerateVari() {
+    const count = Number(vari.count);
+    if (!inputItems.length || !Number.isSafeInteger(count) || count < 1) {setError("Přidej obrázek a zvol kladný počet variant."); return;}
+    if (!planVari({...vari, count}, variEngines).length) {setError("Vybraný engine nemá nastavený klíč. Zvol jiný, nebo doplň klíč v Modalu."); return;}
+    await submitPlans("Vari", () => planVari({...vari, count}, variEngines));
   }
 
   async function handleCancel() {
@@ -685,8 +702,8 @@ function App() {
         downloadDataImage,
         downloadLibraryImage,
         downloadSelectedImage,
-        gpuHourlyUsd, variUrl, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
-        pendingMode: {atelier: "atelier", reimagine: "reimagine"}[activeJobs.at(-1)?.generation_type] || "results",
+        gpuHourlyUsd, variEngines, vari, setVari, handleGenerateVari, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
+        pendingMode: {atelier: "atelier", reimagine: "reimagine", vari: "vari"}[activeJobs.at(-1)?.generation_type] || "results",
       }}
     />
   );
