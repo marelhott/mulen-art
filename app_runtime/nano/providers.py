@@ -1,4 +1,4 @@
-"""OpenRouter (/images) and Venice (Qwen edit, Lustify) over httpx; ported from Mulen Nano's lib/openrouter.cjs and lib/external-images.cjs.
+"""OpenRouter (/images) and Venice (Qwen edit) over httpx; ported from Mulen Nano's lib/openrouter.cjs and lib/external-images.cjs.
 
 Keys come from the environment only and are never logged or put into an error message.
 """
@@ -159,17 +159,8 @@ def _venice_post(client: httpx.Client, path: str, payload: dict[str, Any]) -> ht
     return response
 
 
-def _dimensions(aspect_ratio: str | None, width: int, height: int) -> dict[str, int]:
-    ratio = width / height if height else 1.0
-    match = re.fullmatch(r"(\d+):(\d+)", aspect_ratio or "")
-    if match:
-        ratio = int(match[1]) / int(match[2])
-    ratio = min(4.0, max(0.25, ratio))
-    return {"width": round((1024 if ratio >= 1 else 1024 * ratio) / 8) * 8, "height": round((1024 if ratio <= 1 else 1024 / ratio) / 8) * 8}
-
-
 def venice_image(client: httpx.Client, model: str, prompt: str, images: list[str], aspect_ratio: str | None, resolution: str | None,
-                 size: tuple[int, int] = (1024, 1024)) -> bytes:
+                 size: tuple[int, int] = (1024, 1024)) -> bytes:  # size is kept for the call signature; Qwen edits take no size
     qwen = QWEN.get(model)
     if qwen:
         api_id, max_inputs, prompt_max = qwen
@@ -199,16 +190,6 @@ def venice_image(client: httpx.Client, model: str, prompt: str, images: list[str
         if response.headers.get("content-type", "").split(";")[0] not in ("image/png", "image/jpeg", "image/webp") or not response.content:
             raise ProviderError("Venice nevrátil obrázek.", retryable=True)
         return response.content
-    if model == "venice/lustify-v8":
-        if images:
-            raise ProviderError("Lustify v8 podporuje pouze generování z textu.")
-        if len(prompt) > 1500:
-            raise ProviderError("Prompt Lustify smí mít nejvýše 1500 znaků.")
-        data = _venice_post(client, "generate", {"model": "lustify-v8", "prompt": prompt, **_dimensions(aspect_ratio, *size), "format": "png", "return_binary": False, "safe_mode": False}).json()
-        image = (data.get("images") or [None])[0]
-        if not isinstance(image, str) or not image:
-            raise ProviderError("Lustify nevrátil obrázek.", retryable=True)
-        return data_url_bytes(image) if image.startswith("data:") else base64.b64decode(image)
     raise ProviderError("Nepodporovaný externí model.")
 
 

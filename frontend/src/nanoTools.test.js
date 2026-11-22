@@ -5,6 +5,7 @@ import {DEFAULT_COLLAGE, DEFAULT_VARI, clampCount, collageFromSettings, isFused,
 const catalogue = [
   {id: "nano-pro", available: true}, {id: "gpt", available: true}, {id: "flux", available: false}, {id: "qwen-pro", available: true},
   {id: "lustify", available: true, max_inputs: 0},
+  {id: "recraft", available: true, max_inputs: 1, collage: false},
 ];
 
 test("only selected models with a key are used, in catalogue order", () => {
@@ -14,6 +15,12 @@ test("only selected models with a key are used, in catalogue order", () => {
 
 test("a text-only model is never used, even when selected", () => {
   assert.deepEqual(usableModels(["lustify", "gpt"], catalogue).map(item => item.id), ["gpt"]);
+});
+
+test("Recraft stays out of Koláž plans but is still used by Vari", () => {
+  const collage = planCollage({...DEFAULT_COLLAGE, models: ["recraft", "gpt"]}, catalogue, ["a", "b"], 0);
+  assert.deepEqual(collage.map(item => item.settings.nano_model), ["gpt"]);
+  assert.deepEqual(planVari({...DEFAULT_VARI, models: ["recraft"]}, catalogue).map(item => item.nano_model), ["recraft"]);
 });
 
 test("Vari plans one request per model with the clamped count and distance", () => {

@@ -1,7 +1,7 @@
 import React from "react";
 import { Layers3, Combine } from "lucide-react";
 import { Label } from "./controls";
-import { COLLAGE_MAX_SOURCES, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, isFused, takesImages, usableModels } from "../nanoTools";
+import { COLLAGE_MAX_SOURCES, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, forCollage, isFused, takesImages, usableModels } from "../nanoTools";
 
 // Model picker shared by Vari and Koláž: a model whose provider key is missing is shown but cannot be chosen, with the reason.
 function ModelPicker({models, value, update}) {
@@ -65,7 +65,8 @@ export function VariControls({value, update, models, inputCount, generating, onG
   </>;
 }
 
-export function CollageControls({value, update, models, inputCount, generating, onGenerate, inputBlock}) {
+export function CollageControls({value, update, models: allModels, inputCount, generating, onGenerate, inputBlock}) {
+  const models = allModels.filter(forCollage);
   const picked = usableModels(value.models, models).length;
   const fused = isFused(value, inputCount);
   const count = clampCount(value.count);

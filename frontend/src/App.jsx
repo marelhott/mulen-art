@@ -4,7 +4,7 @@ import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
 import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
 import { randomId, safeStorage } from "./shared";
 import { DEFAULT_REIMAGINE, planReimagine, plannedImages, reimagineFromSettings } from "./reimagineTools";
-import { DEFAULT_VARI, DEFAULT_COLLAGE, COLLAGE_MAX_SOURCES, planVari, planCollage, plannedImages as nanoPlannedImages, variFromSettings, collageFromSettings, usableModels } from "./nanoTools";
+import { DEFAULT_VARI, DEFAULT_COLLAGE, COLLAGE_MAX_SOURCES, forCollage, planVari, planCollage, plannedImages as nanoPlannedImages, variFromSettings, collageFromSettings, usableModels } from "./nanoTools";
 import { usePresets } from "./usePresets";
 import { useGallery } from "./useGallery";
 import { useServerOptions } from "./useServerOptions";
@@ -573,7 +573,7 @@ function App() {
   async function handleGenerateCollage() {
     if (!inputItems.length) {setError("Přidej aspoň jeden obrázek."); return;}
     if (inputItems.length > COLLAGE_MAX_SOURCES) {setError(`Nejvýš ${COLLAGE_MAX_SOURCES} vstupních obrázků.`); return;}
-    if (!usableModels(collage.models, nanoModels).length) {setError("Vyber model, který má nastavený klíč."); return;}
+    if (!usableModels(collage.models, nanoModels.filter(forCollage)).length) {setError("Vyber model, který má nastavený klíč."); return;}
     const seedStart = crypto.getRandomValues(new Uint32Array(1))[0] % 1000;
     // The plan depends only on the number of inputs, so the image total is known before anything is uploaded.
     const preview = planCollage(collage, nanoModels, inputItems.map(item => item.id), seedStart);

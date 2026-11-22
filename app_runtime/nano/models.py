@@ -11,11 +11,10 @@ MODELS: list[dict[str, Any]] = [
     {"id": "muse", "title": "Muse", "model": "meta/muse-image", "min_inputs": 0, "max_inputs": None, "resolution": None},
     {"id": "grok", "title": "Grok Image 2", "model": "x-ai/grok-imagine-image-2.0", "min_inputs": 0, "max_inputs": 3, "resolution": "1K"},
     {"id": "mai", "title": "MAI Image 2.6", "model": "microsoft/mai-image-2.6", "min_inputs": 0, "max_inputs": 5, "resolution": None},
-    {"id": "recraft", "title": "Recraft 4.1 Pro", "model": "recraft/recraft-v4.1-pro", "min_inputs": 0, "max_inputs": 1, "resolution": None},
+    {"id": "recraft", "title": "Recraft 4.1 Pro", "model": "recraft/recraft-v4.1-pro", "min_inputs": 0, "max_inputs": 1, "resolution": None, "collage": False},
     {"id": "qwen-uncensored", "title": "Qwen Uncensored", "model": "venice/qwen-edit-uncensored", "min_inputs": 1, "max_inputs": 3, "resolution": None},
     {"id": "qwen-turbo", "title": "Qwen Turbo", "model": "venice/qwen-image-2-1-turbo-edit", "min_inputs": 1, "max_inputs": 6, "resolution": "1K"},
     {"id": "qwen-pro", "title": "Qwen Pro", "model": "venice/qwen-image-2-1-pro-edit", "min_inputs": 1, "max_inputs": 10, "resolution": "1K"},
-    {"id": "lustify", "title": "Lustify v8", "model": "venice/lustify-v8", "min_inputs": 0, "max_inputs": 0, "resolution": None},
 ]
 BY_ID = {item["id"]: item for item in MODELS}
 MAX_PER_MODEL = 5
@@ -49,6 +48,6 @@ def availability(env) -> list[dict[str, Any]]:
         name = key_name(item)
         has_key = bool(str(env.get(name, "")).strip())
         result.append({"id": item["id"], "title": item["title"], "model": item["model"], "provider": provider_of(item),
-                       "min_inputs": item["min_inputs"], "max_inputs": item["max_inputs"],
+                       "min_inputs": item["min_inputs"], "max_inputs": item["max_inputs"], "collage": item.get("collage", True),
                        "available": has_key, "missing": None if has_key else name})
     return result

@@ -49,7 +49,6 @@ class PlanTests(unittest.TestCase):
 
     def test_input_checks_follow_the_model_limits(self):
         self.assertIn("vyžaduje", models.input_error(models.BY_ID["qwen-pro"], 0))
-        self.assertIn("pouze generování", models.input_error(models.BY_ID["lustify"], 1))
         self.assertIn("nejvýše 1", models.input_error(models.BY_ID["recraft"], 2))
         self.assertIsNone(models.input_error(models.BY_ID["muse"], 10))
 
@@ -58,6 +57,14 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(items["gpt"]["available"])
         self.assertEqual(items["qwen-pro"]["missing"], "VENICE_API_KEY")
         self.assertNotIn("secret-value", json.dumps(items))
+
+
+class CatalogueTests(unittest.TestCase):
+    def test_lustify_is_gone_and_recraft_is_not_offered_for_collage(self):
+        self.assertNotIn("lustify", models.BY_ID)
+        items = {item["id"]: item for item in models.availability({})}
+        self.assertFalse(items["recraft"]["collage"])
+        self.assertTrue(items["gpt"]["collage"])
 
 
 class ProviderTests(unittest.TestCase):

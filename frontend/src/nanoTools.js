@@ -17,6 +17,8 @@ export const clampCount = value => Math.min(NANO_MAX_PER_MODEL, Math.max(1, Math
 
 // A model is usable when its provider key is set and it takes an input image (text-only models cannot make siblings or fusions).
 export const takesImages = item => item.max_inputs !== 0;
+// Models offered in the Koláž tab (Recraft takes one reference image, so it cannot fuse).
+export const forCollage = item => item.collage !== false;
 
 // The selected usable models, in catalogue order (a model never runs twice).
 export function usableModels(selected, catalogue = []) {
@@ -38,7 +40,7 @@ export function planVari(state, catalogue) {
 // Each input on its own: one request per input and model, `count` variants each.
 export function planCollage(state, catalogue, uploadIds, seedStart = 0) {
   const prompt = String(state.prompt || "").trim();
-  const models = usableModels(state.models, catalogue);
+  const models = usableModels(state.models, catalogue.filter(forCollage));
   if (isFused(state, uploadIds.length)) {
     return models.map((model, index) => ({sourceIndex: 0, settings: {generation_type: "collage", nano_model: model.id, collage_fuse: true, num_images: 1, prompt,
       extra_source_ids: uploadIds.slice(1), seed: (seedStart + index) % 4294967296}}));
