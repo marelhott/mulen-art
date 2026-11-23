@@ -25,6 +25,7 @@ from app_runtime.server import (api_atelier_photo, api_atelier_photos, api_optio
                                 load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
                                 ensure_thumbnail, is_safe_filename, thumb_filename as thumb_name, scan_records)
 
+PUBLIC_PATHS = {"/login", "/logout", "/health", "/manifest.webmanifest", "/favicon.svg"}
 WARM_THUMBNAILS = 120  # roughly the first screens of the gallery
 VOLUME_REFRESH_INTERVAL = float(os.getenv("VOLUME_REFRESH_SECONDS", "2.0"))
 
@@ -265,7 +266,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
-        if not auth_enabled or request.url.path in {"/login", "/logout", "/health"}:
+        # The install files hold nothing private; iOS and Chrome fetch them without the session cookie.
+        if not auth_enabled or request.url.path in PUBLIC_PATHS or request.url.path.startswith("/icons/"):
             return await call_next(request)
         ip = client_ip(request)
         remaining = lockout_remaining(ip)
@@ -799,13 +801,13 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
 
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>IMG2IMG · Sign in</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Mulen Art · Sign in</title>
 <style>body{margin:0;background:#111214;color:#eee;font:15px system-ui;display:grid;place-items:center;min-height:100vh}
 form{width:min(320px,80vw);padding:40px;background:#1b1c1f;border:1px solid #333;border-radius:12px}
 h1{letter-spacing:.15em;font-size:26px}p{color:#aaa;margin-bottom:28px}label{display:block;margin-top:18px}
 input,button{box-sizing:border-box;width:100%;padding:12px;border-radius:6px;border:1px solid #444;background:#111;color:#eee;margin-top:8px;font:inherit}
 button{margin-top:28px;background:#d8eb9d;color:#161b0c;border:0;cursor:pointer;font-weight:600}</style></head>
-<body><form method="post" action="/login"><h1>IMG2IMG</h1><p>Sign in to your studio</p>
+<body><form method="post" action="/login"><h1>MULEN ART</h1><p>Sign in to your studio</p>
 <label>Username<input name="username" autocomplete="username" required></label>
 <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
 <button type="submit">Sign in</button></form></body></html>"""
