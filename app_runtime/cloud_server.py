@@ -25,6 +25,7 @@ from app_runtime.server import (api_atelier_photo, api_atelier_photos, api_optio
                                 load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
                                 ensure_thumbnail, is_safe_filename, thumb_filename as thumb_name, scan_records)
 
+WARM_THUMBNAILS = 120  # roughly the first screens of the gallery
 VOLUME_REFRESH_INTERVAL = float(os.getenv("VOLUME_REFRESH_SECONDS", "2.0"))
 
 
@@ -782,10 +783,13 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def warm_gallery():
         """A fresh container reads every file from the network Volume on first use (seconds per thumbnail). Do that once, in the
         background, right after start, so the first time the library is opened it is not the one paying for it."""
+        # Gently: 32 threads over every thumbnail (deleted ones too) starved the 2-CPU gateway for a minute or two after
+        # start, so requests and even Modal's heartbeat stalled. Only live images, newest first, the first screens' worth.
         try:
-            scan_records()
-            files = [path for path in THUMBS_DIR.iterdir() if path.is_file()] if THUMBS_DIR.is_dir() else []
-            with ThreadPoolExecutor(max_workers=32) as pool:
+            items, _ = scan_records()
+            names = [Path(item["thumb_url"]).name for item in items if item.get("thumb_url")][:WARM_THUMBNAILS]
+            files = [THUMBS_DIR / name for name in names if (THUMBS_DIR / name).is_file()]
+            with ThreadPoolExecutor(max_workers=4) as pool:
                 list(pool.map(lambda path: path.read_bytes(), files))
         except Exception:
             logging.getLogger("studio").warning("Gallery warm-up failed", exc_info=True)

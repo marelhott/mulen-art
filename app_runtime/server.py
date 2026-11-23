@@ -381,7 +381,8 @@ def invalidate_records(path: Path | None = None) -> None:
 
 def warm_records(paths: list[Path]) -> None:
     """Read not-yet-cached records concurrently. On a cold container every file is a network round trip, and
-    reading hundreds one after another took ~50 s; 32 at a time takes a couple of seconds."""
+    reading hundreds one after another took ~50 s; 8 at a time still takes seconds without starving the 2-CPU gateway
+    (32 threads stalled every other request after a cold start)."""
     with _CACHE_LOCK:
         cold = [path for path in paths if str(path) not in _RECORD_CACHE]
     if len(cold) < 8:
@@ -393,7 +394,7 @@ def warm_records(paths: list[Path]) -> None:
             read_record(path)
         except (OSError, ValueError):
             pass
-    with ThreadPoolExecutor(max_workers=32) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(read, cold))
 
 
