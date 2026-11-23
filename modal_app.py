@@ -507,7 +507,7 @@ def web():
     # Missing credentials make create_app refuse to start rather than serve an open GPU.
     return create_app(
         jobs=jobs, usage=VolumeUsage("/state/usage.json", state), submit=spawn_job,
-        refresh=outputs.reload, commit=outputs.commit,
+        refresh=outputs.reload, commit=outputs.commit, background_commit=True,
         cancel=cancel_call,
         username=os.environ.get("STUDIO_USERNAME"), password=os.environ.get("STUDIO_PASSWORD"),
         monthly_limit=optional_int_env("MONTHLY_IMAGE_LIMIT"),

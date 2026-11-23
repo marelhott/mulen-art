@@ -30,27 +30,37 @@ VOLUME_REFRESH_INTERVAL = float(os.getenv("VOLUME_REFRESH_SECONDS", "2.0"))
 
 class VolumeUsage:
     """Monthly reservations must outlive Modal Dict's seven-day inactivity TTL."""
+    # Only the single gateway container writes the ledger, so a read may come from memory; a Volume reload
+    # costs about a second and the sidebar asked for it on every refresh.
+    READ_MAX_AGE = 60.0
+
     def __init__(self, path, volume):
         self.path = Path(path)
         self.volume = volume
+        self._cache = None
+        self._read_at = 0.0
 
-    def _read(self):
+    def _read(self, fresh=False):
         import json
-        self.volume.reload()
-        return json.loads(self.path.read_text()) if self.path.exists() else {}
+        if fresh or self._cache is None or time.monotonic() - self._read_at > self.READ_MAX_AGE:
+            self.volume.reload()
+            self._cache = json.loads(self.path.read_text()) if self.path.exists() else {}
+            self._read_at = time.monotonic()
+        return dict(self._cache)
 
     def get(self, key, default=0):
         return self._read().get(key, default)
 
     def __setitem__(self, key, value):
         import json
-        records = self._read()
+        records = self._read(fresh=True)
         records[key] = value
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(records))
         temporary.replace(self.path)
         self.volume.commit()
+        self._cache, self._read_at = records, time.monotonic()
 
 
 # Frontend transport chunks are at most 8 studies x 7 checkpoints (56 jobs).
@@ -90,7 +100,8 @@ def optional_int_env(name, default=None):
 
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                monthly_limit=None, max_jobs_per_request=DEFAULT_MAX_JOBS_PER_REQUEST, cancel=None,
-               frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None, nano_models=None):
+               frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None, nano_models=None,
+               background_commit=False):
     if auth_enabled and (not username or not password):
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
@@ -99,6 +110,38 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     status_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="job-status")
     reload_lock = threading.Lock()  # one Volume reload at a time; asset reads never wait on `lock`
     refresh_state = {"at": 0.0}
+    pending_commit = threading.Event()
+
+    def flush_commit():
+        """Persist pending library writes; also runs before any reload so a reload never meets unsaved edits."""
+        if pending_commit.is_set():
+            pending_commit.clear()
+            try:
+                commit()
+            except Exception:
+                pending_commit.set()  # retried by the next flush
+                logging.getLogger("studio").warning("Background Volume commit failed", exc_info=True)
+
+    def commit_soon():
+        """Library edits answer at once; the Volume commit (a slow network call) follows in the background."""
+        if not background_commit:
+            commit()
+            return
+        pending_commit.set()
+        wake_committer.set()
+
+    wake_committer = threading.Event()
+
+    def committer():
+        while True:
+            wake_committer.wait()
+            wake_committer.clear()
+            time.sleep(0.5)  # gather a burst of clicks into one commit
+            with reload_lock:
+                flush_commit()
+
+    if background_commit:
+        threading.Thread(target=committer, daemon=True, name="volume-committer").start()
 
     def refresh_cached(*, force=False):
         """Volume reload is a network call; collapse bursts of polling into one."""
@@ -109,6 +152,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             # Re-check: a burst of requests all passed the cheap check above while one of them reloaded.
             if not force and time.monotonic() - refresh_state["at"] < VOLUME_REFRESH_INTERVAL:
                 return
+            flush_commit()
             try:
                 refresh()
             except RuntimeError as exc:
@@ -634,7 +678,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         with lock:
             refresh_cached(force=True)
             result = api_library_save(item_id)
-            commit()
+            commit_soon()
             return result
 
     @app.get("/api/library")
@@ -684,10 +728,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         if target is None:
             raise HTTPException(404, "Thumbnail not found.")
         if created:
-            try:
-                commit()  # without this the thumbnail vanished with the container and was rebuilt on every cold start
-            except Exception:
-                logging.getLogger("studio").warning("Could not persist thumbnail %s", target.name, exc_info=True)
+            commit_soon()  # without this the thumbnail vanished with the container and was rebuilt on every cold start
         return asset_response(target, "image/webp", request)
 
     @app.get("/api/library/{item_id}/export")
@@ -725,7 +766,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         with lock:
             refresh_cached()
             result = api_library_delete(item_id)
-            commit()
+            commit_soon()
             return result
 
     @app.put("/api/library/order")
@@ -733,7 +774,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         with lock:
             refresh_cached()
             result = api_library_order(payload.get("ids", []))
-            commit()
+            commit_soon()
             return result
 
     if frontend_dir and Path(frontend_dir).is_dir():

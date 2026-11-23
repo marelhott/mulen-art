@@ -167,6 +167,34 @@ class CloudFlowTests(unittest.TestCase):
         ledger["2026-10"] = 100
         self.assertEqual(VolumeUsage(path, Mock()).get("2026-10"), 100)
 
+    def test_usage_reads_come_from_memory_but_writes_reload_first(self):
+        from app_runtime.cloud_server import VolumeUsage
+        from unittest.mock import Mock
+        volume = Mock()
+        ledger = VolumeUsage(self.output / "usage-cache.json", volume)
+        for _ in range(5):
+            ledger.get("2026-11")
+        self.assertEqual(volume.reload.call_count, 1)
+        ledger["2026-11"] = 3
+        self.assertEqual(volume.reload.call_count, 2)
+        self.assertEqual(ledger.get("2026-11"), 3)
+        self.assertEqual(volume.reload.call_count, 2)
+
+    def test_background_commit_answers_first_and_commits_once_shortly_after(self):
+        import time as _time
+        from app_runtime.cloud_server import create_app
+        commits = []
+        app = create_app(jobs={}, usage={}, submit=lambda *a, **k: None, refresh=lambda: None,
+                         commit=lambda: (_time.sleep(0.3), commits.append(True)),
+                         username=None, password=None, auth_enabled=False, background_commit=True)
+        client = TestClient(app)
+        started = _time.monotonic()
+        client.put("/api/library/order", json={"ids": []})
+        client.put("/api/library/order", json={"ids": []})
+        self.assertLess(_time.monotonic() - started, 0.3)
+        _time.sleep(1.5)
+        self.assertEqual(len(commits), 1)
+
     def test_public_frontend_refresh_never_reuses_equal_size_build(self):
         import os
         frontend = self.output / "frontend"
