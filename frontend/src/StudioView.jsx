@@ -411,7 +411,7 @@ export default function StudioView(p) {
   return (
     <div className={`studio ${rightOpen ? "" : "right-hidden"}`}>
       <nav className="icon-rail" aria-label="Navigace studia">
-        <a href="#" className="brand-symbol" aria-label="Mulen IMG2IMG">
+        <a href="#" className="brand-symbol" aria-label="Mulen Art">
           <Sparkles size={23} />
         </a>
         <button className={isVari ? "active" : ""} onClick={() => setTab("vari")} title="Vari — sourozenci jednoho obrázku přes OpenRouter a Venice">
@@ -449,7 +449,7 @@ export default function StudioView(p) {
       </nav>
       <header className="app-header">
         <div className="brand-wordmark">
-          MULEN <span>IMG2IMG</span>
+          MULEN <span>ART</span>
           <small>SDXL STUDIO</small>
         </div>
         <div className="header-actions">
