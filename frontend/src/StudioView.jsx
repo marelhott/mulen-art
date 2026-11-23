@@ -412,7 +412,10 @@ export default function StudioView(p) {
     <div className={`studio ${rightOpen ? "" : "right-hidden"}`}>
       <nav className="icon-rail" aria-label="Navigace studia">
         <a href="#" className="brand-symbol" aria-label="Mulen Art">
-          <Sparkles size={23} />
+          <svg width="26" height="21" viewBox="200 110 1190 960" fill="currentColor" aria-hidden="true">
+            <path d="M231 137 801 630 1356 137V1028H1261V350L800 771 329 352V1028H231Z" />
+            <path d="M383 523 801 917 1204 536V655L798 1047 383 655Z" />
+          </svg>
         </a>
         <button className={isVari ? "active" : ""} onClick={() => setTab("vari")} title="Vari — sourozenci jednoho obrázku přes OpenRouter a Venice">
           <Layers3 /><span>VARI</span>
@@ -450,7 +453,6 @@ export default function StudioView(p) {
       <header className="app-header">
         <div className="brand-wordmark">
           MULEN <span>ART</span>
-          <small>SDXL STUDIO</small>
         </div>
         <div className="header-actions">
           <span className="cloud-status">
