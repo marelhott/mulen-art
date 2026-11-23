@@ -226,3 +226,15 @@ export const EXPIRED_NOTICE = "Starší úlohy už vypršely a byly vynechány. 
 export function keepUnexpired(jobs, records) {
   return jobs.filter((_, index) => !records[index]?.expired);
 }
+
+// The set of ids this browser treats as deleted only ever grew, and it is stored in the gallery snapshot, so an
+// image restored on the server stayed hidden here for good. A fresh server listing is authoritative: an id the
+// server lists as live is no longer deleted, and the server's own deleted list is added.
+export function reconcileDeleted(current, serverDeleted, liveIds) {
+  const next = new Set(current);
+  const server = new Set(serverDeleted || []);
+  for (const id of liveIds) if (!server.has(id)) next.delete(id);
+  for (const id of server) next.add(id);
+  return next;
+}
+

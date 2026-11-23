@@ -162,3 +162,10 @@ test("expired jobs are not restored again, live ones are", async () => {
   assert.deepEqual(keepUnexpired(jobs, records), [{ job_id: "b" }]);
   assert.deepEqual(keepUnexpired(jobs, []), jobs);
 });
+
+test("a restored image is no longer treated as deleted after a fresh listing", async () => {
+  const { reconcileDeleted } = await import("./studioTools.js");
+  const next = reconcileDeleted(new Set(["a", "b", "c"]), ["c", "d"], ["a", "x"]);
+  assert.deepEqual([...next].sort(), ["b", "c", "d"]);
+  assert.deepEqual([...reconcileDeleted(new Set(), undefined, ["z"])], []);
+});

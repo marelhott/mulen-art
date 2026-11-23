@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch, readJson } from "./api";
 import { GALLERY_CACHE_KEY, cacheableItems, readCached, writeCached } from "./galleryCache";
+import { reconcileDeleted } from "./studioTools";
 
 // The gallery: the saved library, the generation history (`results`, which also holds in-flight
 // placeholders) and the ids the user deleted. It starts from the browser's last snapshot, then
@@ -18,7 +19,10 @@ export function useGallery() {
 
   // Shows a gallery snapshot (cached or fresh): library list, history list and deleted ids.
   function applyGallery(library, history, fresh = false) {
-    for (const id of history?.deleted_ids || []) deletedIds.current.add(id);
+    if (fresh) {
+      const live = [...(history?.items || []), ...(library?.items || [])].map((item) => item.id);
+      deletedIds.current = reconcileDeleted(deletedIds.current, history?.deleted_ids, live);
+    } else for (const id of history?.deleted_ids || []) deletedIds.current.add(id);
     setLoading(false);
     setLibraryItems((library?.items || []).filter((item) => !deletedIds.current.has(item.id)));
     const incoming = history?.items || [];
