@@ -43,3 +43,16 @@ Claudova poznámka: SDXL checkpointy (trigger + CFG ~0.5) pokyny neplní. Most: 
 2. A/B v Ateliéru: kontrola / kolizní podmalba / prostorová slova v 1. fázi (po ověření titulků) / kolize + 2. průchod. Stejné seedy, 3 checkpointy x 4 seedy.
 3. Rozhodnutí -> úprava podmalby + maska; kurátor v mezipatře; střídání modelů v čase jako samostatný experiment.
 4. Ukládání sourozenců (dávka + výběr) co nejdřív, ať se sbírají data.
+
+## Výsledky pokusů (2026-11-25)
+- **Kolize výřezů z archivů (denoise 0,9, pak 0,93-0,95 s rozmazanými výřezy / tonálními masami):** uživatel se výsledky vůbec nelíbí. Checkpointy z jakýchkoli hmot domalují figuru (tvář, ruka se štětcem), obsah je z archivu. **Mrtvá cesta.** Skripty: `scripts/experiments/ab_atelier.py`, `ab_atelier2.py`, výstupy `outputs/verification/ab-atelier*/` (mimo git).
+- **Druhý průchod 1536 px (denoise 0,28):** viditelně nic nepřidal. Odloženo.
+- **Prostorová slova v 1. fázi (30 %):** u Mulen Mara a Hofmanna 2x výrazně plnější a tmavší obraz, 2x zvrhnutí (cihlová stěna, plochá zelená). Vzorek 4 seedy, nerozhodnuto.
+- **Test rozhodnutí přes Nano Pro:** blokováno OpenRouter 402 (bez kreditu). Skript: scratchpad `decisions/run.py` (není v repu).
+- **Kurátor, data:** v Ateliéru nejsou žádné smazané záznamy; 10 uložených do knihovny vs 43 ostatních. Měření (`scripts/experiments/curator_measures.py`) ukázala jen slabý náznak: uložené jsou tmavší (podíl tmy AUC 0,69, v režimu noise 0,74). 10 kladných příkladů je příliš málo na rozhodnutí.
+- **batch_id** (commit bc273f4): každá studie dostane id dávky, aby se mohly sbírat sourozenecké sady (co z dávky uživatel uložil). Zatím nenasazeno.
+
+## Diagnóza, kterou držet (potvrdil uživatel)
+- `SUBJECTS` jsou záměrně ploché ("cropped", "plain background", "flat light", "no surrounding context", "even daylight") -> model poslušně redukuje.
+- Volná studie = čistý šum + prázdný prompt -> kompozice padá do průměru (jako dřív barva, 98 % jeden odstín).
+- Kompozici určuje prvních 20-30 % kroků (hrubé masy, ne slova); na tu fázi teď nic cíleně nepůsobí.
