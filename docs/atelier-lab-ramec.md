@@ -57,3 +57,37 @@ Výstup: kontaktní archy po checkpointech (řádky seedy, sloupce operace). Cen
 2. Druhé kolo: jemnější síly, kombinace, jiný checkpoint pro léčení, kurátor (batch_id data).
 3. Teprve potom: nová záložka v aplikaci (např. "Lab") s ovládáním Kdy/Kde/Co/Léčení, jako samostatný režim; výchozí Ateliér nedotčený.
 4. Otevřené: pushnout lokální commity (zrychlení startu, poznámky; ověřit `git log origin/feat/vari..HEAD`).
+
+## 8. Druhé kolo: rozbíjet i vstupní fotky (dohodnuto s uživatelem 2026-11-25)
+Nová osa **kam se zasahuje**: do vstupu / do modelu / do obojího; výsledek se přemalovává stejně jako v aplikaci (`repaint`, denoise 0,8).
+- **Vstup:** `none`, `blur64` (zmenšení na 64 px a zpět, kostra, která u Posunu fungovala), `tiles` (8x8 dlaždic, 25 % zamíchaných).
+- **Model:** `control`, `top_suppress`, `sa_identity`, `chan_drop` (tři operace, které v 1. kole opravdu změnily obraz), v prvních 30 % kroků.
+- **Zdroje** (fotky, na kterých se testoval Posun): Thanatos, základní obraz s parníkem, sopečná krajina, rozbitá soška.
+- Skript: `scripts/experiments/glitch_lab_img2img.py`, 1 checkpoint (mulen_mara), 4 zdroje x 3 vstupy x 4 operace + kontrola úniku.
+- Klingemann tohle nepopisuje; je to naše rozšíření (Network Bending = transformace uvnitř sítě při zpracování vstupu).
+
+## 9. Výsledky kola 1 (2026-11-25, glitch_lab.py; mulen_mara, hofmann_sdxl, tuymans_modal_2400 x 4 seedy x 8 operací)
+Archy: `outputs/verification/glitch-lab/sheet-*.jpg` (mimo git). Kontrola úniku (kontrola znovu na konci): 0,000 u všech tří checkpointů, hooky se uklízejí správně. Poznámka: Modal worker jednou spadl při `starmap` bez ošetření chyb (RemoteError); vstupní bod teď ukládá po každém modelu a chybu vypíše.
+Průměrná absolutní odchylka od kontroly (0-255): mid_noise 3,1 | xa_zero 2,8 | weight_noise 1,8 | sa_identity 6,4 | chan_drop 13,5 | top_suppress 25,1 | full_suppress 28,7.
+- **Nic viditelného:** mid_noise (i při 1,5x std), weight_noise (25 % std) a xa_zero. Zásahy do mid bloku a cross-attention s prázdným promptem se ztratí.
+- **top_suppress** (nejsilnějších 5 % aktivací v prvních 8 krocích) rozbije význam: tvary se rozpadnou na hrubé střepy a oblázky, zachová se rozložení, barvy i rukopis (léčení funguje). Riziko: vzniká vlastní uniformní textura "oblázků".
+- **chan_drop** podobné, mírnější. **sa_identity** jemné změny stavby.
+- **full_suppress** (bez léčení) rozbije i kompozici na rovnoměrnou mozaiku, tedy příliš.
+- Zatím vyhodnoceno okem Claude; konečný soud má uživatel.
+
+## 10. Výsledky kola 2 (2026-11-25, glitch_lab_img2img.py, jen Tuymans `tuymans_modal_2400`; mulen_mara spadl na nahodilé Modal chybě RemoteError, zatím nespuštěno znovu)
+Archy: `outputs/verification/glitch-lab-img2img/sheet-tuymans_modal_2400-{thanatos,zaklad,sopka,soska}.jpg`. Přemalování denoise 0,8, 28 kroků, poškození v prvních 8. Kontrola úniku 0,000.
+- **Vstup rozhoduje víc než zásah do modelu.** Rozdíl mezi `none`, `blur64` a `tiles` je mnohem větší než mezi `control`, `top_suppress`, `sa_identity`, `chan_drop`.
+- **blur64:** zdroj ztratí identitu (postava, parník, sloupy zmizí), zůstanou hmoty a barvy; výsledek je měkký, malířský, bez rozpoznatelného předmětu. Nejblíž cíli "posun".
+- **tiles:** rozbitá místní identita, ale checkpoint z dlaždic často složí **zvíře** (pták s kloboukem, hlava se zobákem); vzniká prototyp.
+- **Tuymans checkpoint sám přečte ostrou fotku jako zvířecí tvar** (slon, pták) i bez poškození; to je jeho prior, ne zásah.
+- top_suppress přidává střepy, chan_drop a sa_identity jen jemně; v kombinaci s blur64 mění detail uvnitř již rozpuštěných hmot.
+
+## 11. Nasazeno do kódu (2026-11-25, necommitnuto, nenasazeno na Modal): Rozpad modelu v Ateliéru a ve Vari
+Na přání uživatele ("první možnost", tedy rozbití modelu, ne blur ani dlaždice) jako **volba, výchozí chování beze změny**.
+- `app_runtime/glitch.py`: kontext `damaged(pipe, op, total_calls, until, seed)`; operace `top_suppress` (Rozpad aktivací), `chan_drop` (Vynechané kanály), `sa_identity` (Chybné čtení pozornosti); hooky na `pipe.unet` jen v prvních `until` (0,1 až 0,6, výchozí 0,3) voláních UNetu, vždy uklizené ve `finally`.
+- Ateliér: `GenerationInput.glitch`, `glitch_until`; `core.parse_input` (jen `atelier` a `reimagine`); `atelier.py` (noise/subject běh) a `repaint.py` (photo/archive); meta `glitch`, `glitch_until`; UI `Atelier.jsx` ("ROZPAD MODELU" + posuvník), `App.jsx` posílá pole jen při zapnutí.
+- Vari: `pre_unclip_glitch` (jen s `pre_unclip`) se v `modal_app.py: unclip_stage` předá dětskému unCLIP jobu jako `glitch`; `unclip.generate_variations` ho aplikuje na UNet SD 2.1. Nano Pro a Gemini (API) rozbít nejde. UI `Nano.jsx` ("ROZPAD UNCLIPU" jen po zapnutí předstupně), `nanoTools.js`, `glitchTools.js`.
+- Testy: `tests/test_glitch.py` (validace, hooky a úklid na falešném UNetu, napojení na Ateliér), `frontend/src/glitchTools.test.js`, doplněk v `nanoTools.test.js`. Celá sada: 191 backend, 52 frontend OK.
+- Ověření na GPU (`scripts/experiments/glitch_check.py`): Ateliér s modulem = experiment (střední odchylka 0,13 až 0,17 z 255); unCLIP: top_suppress 9,9, chan_drop 5,6, sa_identity 1,8 odchylky od kontroly, kontrola po poškození 0,0 (žádný únik).
+- Zbývá: nasadit (`modal deploy`) a pushnout až na výslovný souhlas; mulen_mara v kole 2 spustit znovu, pokud je potřeba.
