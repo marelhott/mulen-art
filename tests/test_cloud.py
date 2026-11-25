@@ -1098,6 +1098,17 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(self.jobs["q"]["status"], "failed")  # persisted, not just reported
         self.assertEqual(self.jobs["fresh"]["status"], "queued")
 
+    def test_warm_starts_artist_workers_once_per_minute_and_ignores_everything_else(self):
+        started = []
+        client = TestClient(self.make_app(lambda key, payload: None, monthly_limit=None, warm=started.append))
+        client.auth = ("studio", "test-password")
+        self.assertEqual(TestClient(self.make_app(lambda k, p: None, warm=started.append)).post("/api/warm", json={"model_ids": ["hofmann_sdxl"]}).status_code, 401)
+        r = client.post("/api/warm", json={"model_ids": ["hofmann_sdxl", "sdxl_base", "mix:a:50,b:50", 7, "hofmann_sdxl"]})
+        self.assertEqual(r.json(), {"warmed": ["hofmann_sdxl"]})
+        self.assertEqual(client.post("/api/warm", json={"model_ids": ["hofmann_sdxl"]}).json(), {"warmed": []})  # throttled
+        self.assertEqual(client.post("/api/warm", json={"model_ids": "x"}).json(), {"warmed": []})
+        self.assertEqual(started, ["hofmann_sdxl"])
+
 
 if __name__ == "__main__":
     unittest.main()

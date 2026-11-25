@@ -64,6 +64,9 @@ gpu_image = (
 MAX_GPU_JOBS = 10
 MAX_BACKLOG_JOBS = int(os.environ.get("MAX_BACKLOG_JOBS", "1000"))
 SLOT_TTL_SECONDS = 1200 + 300  # worker timeout + slack; reclaims slots leaked by a crashed worker
+# A GPU container stays up this long after its job: the next batch (or a quick re-run) reuses the loaded checkpoint instead of
+# paying the ~20 s cold start. Measured: a warm container starts a job in ~2 s, a cold one in 17-40 s (4 min right after a deploy).
+WORKER_IDLE_SECONDS = 60
 SNAPSHOT = os.environ.get("MODAL_GPU_SNAPSHOT") == "1"  # alpha GPU memory snapshot, opt-in at deploy time
 
 
@@ -336,7 +339,7 @@ def generate_job(job_id: str, payload: dict):
     image=gpu_image, gpu=["L4", "A10G"], cpu=2, memory=24576,  # 24 GB: blending two checkpoints holds two SDXL copies on the CPU
     volumes={"/models": models, "/outputs": outputs, "/archives": archives},
     # Per model pool (see MAX_GPU_JOBS above): one container per job, 10 per model.
-    min_containers=0, max_containers=MAX_GPU_JOBS, scaledown_window=20,
+    min_containers=0, max_containers=MAX_GPU_JOBS, scaledown_window=WORKER_IDLE_SECONDS,
     timeout=1200, retries=0,
     enable_memory_snapshot=SNAPSHOT,
     experimental_options={"enable_gpu_snapshot": True} if SNAPSHOT else {},
@@ -354,6 +357,11 @@ class ImageWorker:
                 ensure_pipeline(self.model_id)
         except Exception as exc:  # run() retries lazily and reports the real error on the job
             log.warning(f"preload of {self.model_id} failed: {exc}")
+
+    @modal.method()
+    def warm(self):
+        """No-op: starting the container is the whole point (the checkpoint loads in preload())."""
+        return True
 
     @modal.method()
     def run(self, job_id: str, payload: dict):
@@ -517,4 +525,5 @@ def web():
         max_jobs_per_request=optional_int_env("MAX_JOBS_PER_REQUEST", DEFAULT_MAX_JOBS_PER_REQUEST),
         frontend_dir="/app/frontend/dist",
         nano_models=lambda: nano_status.remote(),
+        warm=lambda model_id: ImageWorker(model_id=model_id).warm.spawn(),
     )

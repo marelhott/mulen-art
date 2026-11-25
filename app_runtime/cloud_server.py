@@ -103,7 +103,7 @@ def optional_int_env(name, default=None):
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                monthly_limit=None, max_jobs_per_request=DEFAULT_MAX_JOBS_PER_REQUEST, cancel=None,
                frontend_dir=None, auth_enabled=True, spend=None, monthly_budget_usd=None, nano_models=None,
-               background_commit=False):
+               background_commit=False, warm=None):
     if auth_enabled and (not username or not password):
         raise ValueError("Application credentials are required when authentication is enabled")
     app = FastAPI(title="SDXL Modal Studio", docs_url=None, redoc_url=None)
@@ -519,6 +519,29 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
         except Exception as exc:
             raise HTTPException(422, f"Invalid atelier request: {exc}") from exc
         return await run_in_threadpool(enqueue, payloads)
+
+    warmed = {}  # model id -> monotonic time of the last warm-up request (one per model per minute is plenty)
+
+    @app.post("/api/warm")
+    async def warm_workers(request: Request):
+        """Start the GPU worker of the chosen checkpoints while the user is still choosing settings, so the first job
+        does not wait for a cold start. Fire and forget: it never fails the page and never touches a record."""
+        data = await read_payload(request, 4 * 1024)
+        ids = data.get("model_ids") if isinstance(data, dict) else None
+        if warm is None or not isinstance(ids, list):
+            return {"warmed": []}
+        from .atelier import is_atelier_model
+        now, started = time.monotonic(), []
+        for model_id in list(dict.fromkeys(i for i in ids if isinstance(i, str)))[:5]:
+            if model_id.startswith("mix:") or not is_atelier_model(model_id) or now - warmed.get(model_id, -1e9) < 60:
+                continue
+            warmed[model_id] = now
+            try:
+                await run_in_threadpool(warm, model_id)
+                started.append(model_id)
+            except Exception as exc:  # a failed warm-up costs nothing but the speed-up
+                logging.getLogger("studio").warning("warm-up of %s failed: %s", model_id, exc)
+        return {"warmed": started}
 
     def store_source(image_base64):
         digest = hashlib.sha256(image_base64.encode()).hexdigest()

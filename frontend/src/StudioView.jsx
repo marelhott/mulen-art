@@ -1,3 +1,4 @@
+import { apiFetch } from "./api";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
@@ -60,6 +61,16 @@ export default function StudioView(p) {
   const [filterText, setFilterText] = useState("");
   const [tab, setTab] = useState("vari");
   const isAtelier = tab === "atelier";
+  // Start the GPU worker of the chosen checkpoints while the settings are still being chosen (first job skips the cold start).
+  const warmIds = isAtelier ? (p.atelier?.modelIds || []).filter(id => !id.startsWith("mix:")).join(",") : "";
+  useEffect(() => {
+    if (!warmIds) return undefined;
+    let pings = 0;
+    const ping = () => { if (document.hidden || pings++ >= 3) return; apiFetch("/api/warm", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({model_ids: warmIds.split(",")})}).catch(() => {}); };
+    ping();
+    const timer = setInterval(ping, 55000);  // a few keep-alives only (about 3 minutes): an idle open tab must not hold a GPU all day
+    return () => clearInterval(timer);
+  }, [warmIds]);
   const isReimagine = tab === "reimagine";
   const isVari = tab === "vari";
   const isCollage = tab === "collage";
