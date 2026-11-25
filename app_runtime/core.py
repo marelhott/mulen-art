@@ -73,6 +73,7 @@ class GenerationInput:
     generation_type: str = "img2img"
     atelier_mode: str = "noise"
     atelier_theme: str = "all"
+    atelier_framing: str = "crop"  # "whole" drops the crop wording of the curated subjects
     atelier_archive: str = "hofmann"
     atelier_photo_source: str = "generated"
     atelier_photo_collection: str = "malba"
@@ -394,6 +395,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         raise ValueError("Prompt is too long")
     atelier_mode = str(payload.get("atelier_mode", "noise"))
     atelier_theme = str(payload.get("atelier_theme", "all"))
+    atelier_framing = "whole" if payload.get("atelier_framing") == "whole" else "crop"
     width, height = 1024, 1024
     if generation_type == "atelier":
         from .atelier import MODES, THEMES, is_atelier_model
@@ -437,7 +439,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         max_side=int(clamp(int(payload.get("max_side", 1536)), 512, 2048)),
         detail_strength=clamp(float(payload.get("detail_strength", 0.25)), 0.05, 0.6),
         detail_steps=int(clamp(int(payload.get("detail_steps", 15)), 1, 80)),
-        generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme,
+        generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme, atelier_framing=atelier_framing,
         noise_level=int(clamp(int(payload.get("noise_level", 0)), 0, 500)),
         **(reimagine_fields(payload) if generation_type == "reimagine" else {}),
         **nano_fields,

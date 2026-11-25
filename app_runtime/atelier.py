@@ -41,6 +41,32 @@ SUBJECTS = [
     ("intimacy", "Starší dospělá dvojice", "a non-sexual intimate portrait of two elderly clothed adults aged seventy holding hands at a kitchen table, natural faces and hands, ordinary daylight"),
     ("intimacy", "Odpočívající dospělá postava", "a non-sexual intimate study of an adult person aged thirty resting on a bed in loose everyday clothing, full body, relaxed posture and soft window light"),
 ]
+# Optional "whole" framing: the same subjects without the crop wording, so the whole thing sits inside the frame with room around it.
+# Keyed by the subject title; subjects not listed (figures, nudes, intimacy) are already full-length and stay as they are.
+WHOLE = {
+    "Část tváře mimo záběr": "a whole face and shoulders seen straight on, the entire head inside the frame with space around it, neutral expression",
+    "Tvář z nekvalitního záznamu": "a whole face with the head and shoulders in a low quality television still, indistinct expression, plain background",
+    "Zátylek": "a whole person seen from behind, head, neck and shoulders fully inside the frame with empty space around them",
+    "Průkazový portrét": "an identification photograph of a whole head and shoulders, frontal, flat light, the full figure of the head inside the frame",
+    "Výřez chodby": "a whole institutional corridor receding into depth, the closed doors along it fully visible, flat daylight",
+    "Stěna a okraj okna": "a whole plain room seen across its floor, one wall with a window, the window fully visible, subdued daylight",
+    "Prázdná místnost": "an unoccupied ordinary room seen as a whole, all four walls and the floor visible, furniture inside the room, flat light",
+    "Zábradlí": "a whole staircase with its railing from the bottom step to the top, no people, even daylight",
+    "Detail rukávu": "a whole person seen to the knees, the sleeves and both hands fully visible, ordinary fabric, plain background",
+    "Předmět v obalu": "a small ordinary object wrapped in plain paper, the whole object on a table with space around it",
+    "Pohár na stole": "a whole drinking glass standing on a table, the entire glass and the table edge visible, flat light",
+    "Přeložená látka": "a whole piece of folded plain cloth lying on a surface, the entire cloth visible with space around it, a few broad folds",
+    "Okraj stavby": "a whole low ordinary building standing in an open field, the entire building visible, pale sky above it",
+    "Výřez vegetace": "a whole tree standing in front of a flat wall, the entire tree from the ground to the top visible",
+    "Vzdálený břeh": "a wide view across a narrow strip of water to a distant bank, the whole shoreline visible, flat overcast light",
+    "Část hřiště": "an empty whole sports field seen from its edge, the entire field and its far boundary visible, a faint line across the ground",
+}
+
+
+def whole_text(title, text):
+    return WHOLE.get(title, text)
+
+
 THEMES = {"all", "face", "interior", "object", "landscape", "figure", "nude", "intimacy"}
 MODES = {"noise", "subject", "photo", "archive"}
 
@@ -228,6 +254,8 @@ def generate_study(spec, progress, image_callback):
     for index in range(spec.num_images):
         seed = random.randint(0, 2**32 - 1) if spec.seed == -1 else (spec.seed + index) % 2**32
         subject_id, title, text = subject_for(seed, spec.atelier_theme)
+        if spec.atelier_framing == "whole":
+            text = whole_text(title, text)
         if spec.atelier_mode == "noise":
             title, text, subject_id = "Volná studie bez námětu", "", None
         base = index / spec.num_images
@@ -329,7 +357,7 @@ def generate_study(spec, progress, image_callback):
             del text_pipe
         result, actual_upscaler = core.apply_output_upscaler(result, spec.scale, spec.use_realsrgan, spec.output_upscaler, spec.restormer_mode)
         meta = {"generation_type": "atelier", "atelier_mode": spec.atelier_mode,
-            "atelier_theme": spec.atelier_theme, "subject_id": subject_id, "subject_title": title,
+            "atelier_theme": spec.atelier_theme, "atelier_framing": spec.atelier_framing, "subject_id": subject_id, "subject_title": title,
             "subject_text": text, "subject_origin": "photos-library" if spec.atelier_mode == "photo" and spec.atelier_photo_source == "library" else ("none" if subject_id is None else "curated-starter-v1"),
             "model_id": spec.model_id, "model_name": core.get_config_item("models", spec.model_id)["name"],
             "lora_id": "none", "seed": seed, "steps": spec.steps, "actual_steps": actual_steps,

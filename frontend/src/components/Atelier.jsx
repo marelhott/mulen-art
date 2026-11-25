@@ -149,6 +149,8 @@ export function AtelierControls({atelier: a, update, models, archives = [], arch
     </>}
     {!["noise", "archive"].includes(a.mode) && <Select label="OKRUH NÁMĚTŮ" value={a.theme} onChange={theme => update({theme})}
       items={[{id:"all",name:"Všechny okruhy"},{id:"face",name:"Tváře a výřezy"},{id:"figure",name:"Celé dospělé postavy"},{id:"nude",name:"Dospělé akty · neexplicitní"},{id:"intimacy",name:"Intimní studie · nesexuální"},{id:"interior",name:"Interiéry"},{id:"object",name:"Předměty"},{id:"landscape",name:"Krajina a stavby"}]} />}
+    {!["noise", "archive"].includes(a.mode) && <Select label="ZÁBĚR NÁMĚTŮ" value={a.framing || "crop"} onChange={framing => update({framing})}
+      items={[{id:"crop",name:"Výřez (současný)"},{id:"whole",name:"Celek · celý objekt v záběru"}]} />}
     {(a.mode === "archive" || (a.mode === "photo" && a.photoSource === "library")) && <Range label="DALŠÍ ZVĚTŠENÍ PŘEDLOHY" min={1} max={4} step={0.05} value={a.inputScale ?? 1} onChange={inputScale => update({inputScale})} hint="Předloha pod 1000 px se automaticky zvětší nad 1000 px; další zvětšení omezuje zvolené rozlišení modelu. Poměr stran zůstává zachován." />}
     <Select label="ROZLIŠENÍ PRO MODEL" value={a.ratio === "random" ? "random" : `${a.width}x${a.height}`} onChange={value => {if(value === "random") {update({ratio:"random"}); return;} const [width,height] = value.split("x").map(Number); update({width,height,ratio:"fixed"});}}
       items={[{id:"random",name:"Random · různé poměry stran"},{id:"1024x1024",name:"1024 × 1024 · čtverec"},{id:"832x1216",name:"832 × 1216 · na výšku"},{id:"1216x832",name:"1216 × 832 · na šířku"},{id:"1536x1536",name:"1536 × 1536 · experiment"}]} />

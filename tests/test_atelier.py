@@ -214,3 +214,17 @@ class ModelMetadataTests(unittest.TestCase):
         self.assertEqual(atelier.color_archive_for("hofmann_sdxl"), "hofmann")
         self.assertEqual({item["id"] for item in core.get_options()["models"] if item.get("atelier")},
                          {"tuymans_sdxl", "tuymans_modal_2400", "tuy_small", "hofmann_sdxl", "mulen_mara"})
+
+
+class FramingTest(unittest.TestCase):
+    def test_whole_framing_is_opt_in_and_only_rewrites_cropped_subjects(self):
+        from app_runtime import atelier
+        self.assertEqual(core.parse_input({"generation_type": "atelier", "model_id": "tuymans_modal_2400"}).atelier_framing, "crop")
+        self.assertEqual(core.parse_input({"generation_type": "atelier", "model_id": "tuymans_modal_2400", "atelier_framing": "bogus"}).atelier_framing, "crop")
+        self.assertEqual(core.parse_input({"generation_type": "atelier", "model_id": "tuymans_modal_2400", "atelier_framing": "whole"}).atelier_framing, "whole")
+        titles = {title: text for _, title, text in atelier.SUBJECTS}
+        self.assertTrue(set(atelier.WHOLE) <= set(titles))  # every key names a real subject
+        for title, whole in atelier.WHOLE.items():
+            self.assertNotIn("crop", whole.lower())
+            self.assertNotEqual(whole, titles[title])
+        self.assertEqual(atelier.whole_text("Stojící dospělá postava", "x"), "x")  # full-length subjects are untouched

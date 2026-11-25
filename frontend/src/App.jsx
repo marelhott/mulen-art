@@ -435,7 +435,7 @@ function App() {
     if (!modelIds.length || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(total)) {
       setError("Vyber checkpoint a kladný celý počet studií."); return;
     }
-    const settings = {generation_type: "atelier", input_scale: atelier.inputScale ?? 1, atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_archive: atelier.archive || "hofmann", atelier_photo_source: atelier.photoSource || "generated", atelier_photo_collection: atelier.photoCollection || "malba", atelier_photo_id: atelier.photoId || "", atelier_ratio: atelier.ratio || "fixed", atelier_color_level: atelier.colorLevel ?? 2,
+    const settings = {generation_type: "atelier", input_scale: atelier.inputScale ?? 1, atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_framing: atelier.framing || "crop", atelier_archive: atelier.archive || "hofmann", atelier_photo_source: atelier.photoSource || "generated", atelier_photo_collection: atelier.photoCollection || "malba", atelier_photo_id: atelier.photoId || "", atelier_ratio: atelier.ratio || "fixed", atelier_color_level: atelier.colorLevel ?? 2,
       width: atelier.width, height: atelier.height, scale: Number(atelier.scale), use_realsrgan: Boolean(atelier.useRealsrgan), output_upscaler: atelier.useRealEsrgan ? 'realesrgan' : atelier.useRealsrgan ? 'swinir' : 'lanczos', restormer_mode: atelier.restormerMode || 'off', cfg: Number(atelier.cfg),
       steps: Number(atelier.steps), sampler: atelier.sampler, schedule: atelier.schedule, denoise: Number(atelier.denoise), render_mode: "quick"};
     const requestedSeed = Number(atelier.seed === "" ? -1 : atelier.seed);
