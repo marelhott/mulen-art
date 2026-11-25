@@ -273,6 +273,8 @@ def generate_job(job_id: str, payload: dict):
         meta = {**meta, "source_name": meta.get("source_name") or payload.get("source_name", "Input image"), "source_url": meta.get("source_url") or payload.get("source_url")}
         # Real GPU time up to this saved image, so the library can show cost per file.
         meta = {**meta, "worker_seconds": round(time.monotonic() - started, 2), "gpu": gpu_name, "gpu_hourly_usd": gpu_hourly}
+        if payload.get("batch_id"):
+            meta = {**meta, "batch_id": payload["batch_id"], "job_id": job_id}
         items = persist_generated_images({"images": [image], "meta": dict(meta)})
         # Other containers must see the files before their URLs are published.
         outputs.commit()

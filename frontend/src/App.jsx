@@ -452,10 +452,11 @@ function App() {
     }
     let sent = 0;
     const issues = [];
+    const batchId = `${Date.now().toString(36)}-${seed.toString(36)}`;  // groups the siblings of this click in the gallery records
     for (let offset = 0; offset < count; offset += 8) {
       try {
         const response = await apiFetch("/api/atelier-batch", {method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({model_ids: modelIds, count: Math.min(8, count - offset), settings: {...settings, seed: (seed + offset) % 4294967296}})});
+          body: JSON.stringify({model_ids: modelIds, batch_id: batchId, count: Math.min(8, count - offset), settings: {...settings, seed: (seed + offset) % 4294967296}})});
         const data = await readJson(response, "Ateliér: odeslání se nezdařilo.");
         const jobs = data.jobs.map(job => ({...job, source_id: `atelier-${seed}-${job.model_id}-${offset + job.source_index}`, generation_type: "atelier"}));
         const accepted = jobs.reduce((sum, job) => sum + job.expected_images, 0); sent += accepted;

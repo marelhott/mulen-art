@@ -481,6 +481,8 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             from .user_photos import photo_for
             photo_for(first.atelier_photo_collection, 0, first.atelier_photo_id)
         seed = secrets.randbits(32) if first.seed == -1 else first.seed
+        # One id for every study of one click (all transport chunks), so the siblings and the one kept can be compared later.
+        batch_id = re.sub(r"[^A-Za-z0-9_-]", "", str(data.get("batch_id") or ""))[:40] or secrets.token_hex(8)
         payloads = []
         for index in range(count):
             for model_id in models:
@@ -505,7 +507,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
                 if first.atelier_mode == "photo" and first.atelier_photo_source == "library":
                     payload.update(atelier_photo_collection=first.atelier_photo_collection,
                                    atelier_photo_id=first.atelier_photo_id)
-                payload.update(source_index=index, variant_index=index)
+                payload.update(source_index=index, variant_index=index, batch_id=batch_id)
                 payloads.append(payload)
         return payloads
 

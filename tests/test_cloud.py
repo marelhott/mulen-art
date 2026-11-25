@@ -264,6 +264,11 @@ class CloudFlowTests(unittest.TestCase):
             rejected = client.post("/api/atelier-batch", json={"model_ids":["hofmann_sdxl"], "count":1, **invalid})
             self.assertEqual(rejected.status_code,422)
         self.assertEqual(len(self.submissions),8)
+        # Every study of one click shares one batch id (sent or generated), so siblings can be compared later.
+        self.assertEqual(len({p["batch_id"] for p in payloads}), 1)
+        client.post("/api/atelier-batch", json={"model_ids": ["hofmann_sdxl"], "count": 2, "batch_id": "ab<c>-1",
+            "settings": {"atelier_mode": "subject", "atelier_theme": "face", "seed": 5}})
+        self.assertEqual({p["batch_id"] for _, p in self.submissions[-2:]}, {"abc-1"})
 
     def test_archive_fusion_validates_source_before_submitting_and_keeps_models_independent(self):
         client = TestClient(self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None))
