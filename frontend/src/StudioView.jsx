@@ -30,7 +30,7 @@ import { TEXT } from "./texts";
 import { Compare } from "./components/Compare";
 import { CheckpointPicker } from "./components/CheckpointPicker";
 import { VariantsPanel } from "./components/VariantsPanel";
-import { AtelierControls, AtelierQueue } from "./components/Atelier";
+import { AtelierControls } from "./components/Atelier";
 import { ReimagineControls } from "./components/Reimagine";
 import { VariControls, CollageControls } from "./components/Nano";
 import { ContextMenu } from "./components/ContextMenu";
@@ -674,7 +674,6 @@ export default function StudioView(p) {
             {exporting ? `BALÍM… ${exportProgress}` : "EXPORTOVAT VŠE"}
           </button>
         </div>
-        {isAtelier && <AtelierQueue p={progressState} />}
         <div className="gallery-tools">
           <div className="segmented tabs">
             <button aria-pressed={isVari} onClick={() => setTab("vari")}>Vari <span>{variItems.filter(Boolean).length}</span></button>
