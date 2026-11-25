@@ -63,6 +63,10 @@ WHOLE = {
 }
 
 
+# Free study (no subject): the checkpoint itself zooms into details, so the whole-framing hint goes into the first phase of the run.
+WHOLE_FREE = "one whole form standing in open space, nothing cut off by the frame, room around it"
+
+
 def whole_text(title, text):
     return WHOLE.get(title, text)
 
@@ -269,11 +273,14 @@ def generate_study(spec, progress, image_callback):
         # colours from the photograph and the archive mode from the reference painting.
         base_prompt = prompt
         color_text, color_source, cfg = None, None, spec.cfg
-        if spec.atelier_mode in {"noise", "subject"} and (spec.atelier_color_level > 0 or spec.atelier_color_text):
+        free_whole = spec.atelier_mode == "noise" and spec.atelier_framing == "whole"
+        if spec.atelier_mode in {"noise", "subject"} and (spec.atelier_color_level > 0 or spec.atelier_color_text or free_whole):
             if spec.atelier_color_text:
                 color_text = spec.atelier_color_text
-            else:
+            elif spec.atelier_color_level > 0:
                 color_text, color_source = color_hint(spec.model_id, seed, adjectives=spec.atelier_color_level != 2)
+            if free_whole:  # same two-phase mechanism as the colour: text acts only in the first steps
+                color_text = f"{color_text}, {WHOLE_FREE}" if color_text else WHOLE_FREE
             # For a subject the colour comes first, so the subject text cannot drown it out.
             prompt = painting_prompt(spec.model_id, color_text if spec.atelier_mode == "noise" else f"{color_text}, {text}")
             cfg = max(spec.cfg, spec.atelier_color_cfg or (COLOR_GUIDANCE_VIVID if spec.atelier_color_level == 2 else COLOR_GUIDANCE))
