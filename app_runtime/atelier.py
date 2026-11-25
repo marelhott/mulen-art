@@ -249,7 +249,7 @@ def generate_study(spec, progress, image_callback):
         from .archives import generate_reference
         return generate_reference(spec, progress, image_callback)
     import time
-    from . import core
+    from . import core, glitch
     started = time.monotonic()
     torch = core.get_torch()
     modules = core.get_diffusers()
@@ -290,6 +290,7 @@ def generate_study(spec, progress, image_callback):
         photo_prompt = None
         photo_source_meta = {}
         recipe_pipe = None  # the pipeline whose attention backend belongs in the stored recipe
+        glitch_meta = {}
         # The optional photographic study uses SDXL Base, then releases its pipeline before painting.
         if spec.atelier_mode == "photo":
             if spec.atelier_photo_source == "library":
@@ -341,26 +342,29 @@ def generate_study(spec, progress, image_callback):
             text_pipe = modules["text_pipeline"].from_pipe(pipe)
             recipe_pipe = pipe
             notify(.15, "Ateliér: nový obraz z šumu")
-            until = spec.atelier_color_until if color_text else 1.0
-            if until < 1.0:
-                # Two phases of one denoising run. The colour hint decides palette and layout in the first steps;
-                # the rest runs without it (the artist's own prompt and CFG), because a text prompt present all the
-                # way through measurably softens the brushwork (edge strength -27 %).
-                latents = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
-                    guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(), denoising_end=until, output_type="latent",
-                    callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72 * until, stage="Ateliér · barva"),
-                    callback_on_step_end_tensor_inputs=[]).images
-                result = pipe(prompt="" if spec.atelier_mode == "noise" else base_prompt, negative_prompt=None, image=latents, denoising_start=until,
-                    guidance_scale=spec.cfg, num_inference_steps=spec.steps, generator=generator(),
-                    callback_on_step_end=core.build_step_callback(notify, .18 + .72 * until, 1, 0, spec.steps, span=.72 * (1 - until), stage="Ateliér · tah"),
-                    callback_on_step_end_tensor_inputs=[]).images[0]
-                actual_steps = int(pipe.num_timesteps) + int(text_pipe.num_timesteps)
-            else:
-                result = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
-                    guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(),
-                    callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72, stage="Ateliér"),
-                    callback_on_step_end_tensor_inputs=[]).images[0]
-                actual_steps = int(text_pipe.num_timesteps)
+            with glitch.damaged(pipe, spec.glitch, spec.steps, spec.glitch_until, seed) as glitch_info:  # Rozpad modelu: off by default
+                until = spec.atelier_color_until if color_text else 1.0
+                if until < 1.0:
+                    # Two phases of one denoising run. The colour hint decides palette and layout in the first steps;
+                    # the rest runs without it (the artist's own prompt and CFG), because a text prompt present all the
+                    # way through measurably softens the brushwork (edge strength -27 %).
+                    latents = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
+                        guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(), denoising_end=until, output_type="latent",
+                        callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72 * until, stage="Ateliér · barva"),
+                        callback_on_step_end_tensor_inputs=[]).images
+                    result = pipe(prompt="" if spec.atelier_mode == "noise" else base_prompt, negative_prompt=None, image=latents, denoising_start=until,
+                        guidance_scale=spec.cfg, num_inference_steps=spec.steps, generator=generator(),
+                        callback_on_step_end=core.build_step_callback(notify, .18 + .72 * until, 1, 0, spec.steps, span=.72 * (1 - until), stage="Ateliér · tah"),
+                        callback_on_step_end_tensor_inputs=[]).images[0]
+                    actual_steps = int(pipe.num_timesteps) + int(text_pipe.num_timesteps)
+                else:
+                    result = text_pipe(prompt=prompt, negative_prompt=None, width=spec.width, height=spec.height,
+                        guidance_scale=cfg, num_inference_steps=spec.steps, generator=generator(),
+                        callback_on_step_end=core.build_step_callback(notify, .18, 1, 0, spec.steps, span=.72, stage="Ateliér"),
+                        callback_on_step_end_tensor_inputs=[]).images[0]
+                    actual_steps = int(text_pipe.num_timesteps)
+            if glitch_info["glitch"]:
+                glitch_meta = {"glitch": glitch_info["glitch"], "glitch_until": spec.glitch_until}
             del text_pipe
         result, actual_upscaler = core.apply_output_upscaler(result, spec.scale, spec.use_realsrgan, spec.output_upscaler, spec.restormer_mode)
         meta = {"generation_type": "atelier", "atelier_mode": spec.atelier_mode,
@@ -382,7 +386,7 @@ def generate_study(spec, progress, image_callback):
             **photo_source_meta,
             "generation_and_save_seconds": round(time.monotonic() - started, 2),
             "color_hint": color_text, "color_source": color_source, "color_level": spec.atelier_color_level if color_text else 0,
-            **repaint_meta}
+            **glitch_meta, **repaint_meta}
         image = {**core.encode_image(result, meta), "generation_meta": meta}
         output_images.append(image)
         if image_callback: image_callback(image, meta)

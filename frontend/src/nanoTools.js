@@ -1,5 +1,7 @@
 // Vari and Koláž (ported from Mulen Nano): which models, how far from the source, how many, and the request plan.
 // A request is ONE model run: the server makes all its variants inside one job.
+import { glitchSettings } from "./glitchTools.js";
+
 export const NANO_MAX_PER_MODEL = 5;
 export const COLLAGE_MAX_SOURCES = 10;
 
@@ -17,7 +19,7 @@ export const VARI_CHAINS = [
   {id: "free", name: "Volná"},
   {id: "loose", name: "Střední + odchylka"},
 ];
-export const DEFAULT_VARI = {models: ["nano-pro", "gemini"], distance: "displace", count: 3, prompt: "", chain: ""};
+export const DEFAULT_VARI = {models: ["nano-pro", "gemini"], distance: "displace", count: 3, prompt: "", chain: "", glitch: "", glitchUntil: 0.3};
 export const DEFAULT_COLLAGE = {models: ["nano-pro"], fuse: true, count: 3, prompt: ""};
 
 export const clampCount = value => Math.min(NANO_MAX_PER_MODEL, Math.max(1, Math.round(Number(value)) || 1));
@@ -40,7 +42,9 @@ export function planVari(state, catalogue) {
   const count = clampCount(state.count);
   return usableModels(state.models, catalogue).map(model => ({
     generation_type: "vari", nano_model: model.id, nano_distance: state.distance, num_images: count, prompt: String(state.prompt || "").trim(),
-    ...(state.chain ? {pre_unclip: state.chain} : {})}));
+    ...(state.chain ? {pre_unclip: state.chain} : {}),
+    // Rozpad modelu: only inside the unCLIP pre-stage (the API models themselves cannot be damaged)
+    ...(state.chain && state.glitch ? {pre_unclip_glitch: state.glitch, glitch_until: glitchSettings(state.glitch, state.glitchUntil).glitch_until} : {})}));
 }
 
 // Koláž requests for `inputCount` stored sources. `uploadIds` are the stored source ids in input order.
@@ -63,7 +67,8 @@ export const plannedImages = plan => plan.reduce((sum, item) => sum + (item.sett
 // Back from a stored image's settings to the controls (the "repeat" action).
 export function variFromSettings(settings, current) {
   return {...current, models: settings.nano_model ? [settings.nano_model] : current.models, distance: settings.nano_distance || current.distance,
-    prompt: settings.custom_prompt ?? current.prompt, chain: settings.pre_unclip || ""};
+    prompt: settings.custom_prompt ?? current.prompt, chain: settings.pre_unclip || "",
+    glitch: settings.pre_unclip_glitch || "", glitchUntil: settings.glitch_until ?? current.glitchUntil};
 }
 
 export function collageFromSettings(settings, current) {

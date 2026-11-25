@@ -1,6 +1,7 @@
 import React from "react";
 import { Layers3, Combine } from "lucide-react";
-import { Label } from "./controls";
+import { Label, Range, Select } from "./controls";
+import { GLITCH_OPS, GLITCH_UNTIL, glitchOp } from "../glitchTools";
 import { COLLAGE_MAX_SOURCES, VARI_CHAINS, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, forCollage, isFused, takesImages, usableModels } from "../nanoTools";
 
 // Model picker shared by Vari and Koláž: a model whose provider key is missing is shown but cannot be chosen, with the reason.
@@ -66,6 +67,12 @@ export function VariControls({value, update, models, inputCount, generating, onG
       </div>
       <span className="help-text">{value.chain ? "Obrázek se nejdřív přepíše modelem unCLIP na GPU (každá varianta zvlášť), z toho vznikne výsledek. Zdroj se víc rozbije, trvá to déle." : "Volitelný mezikrok: nejdřív přepsat obraz unCLIPem, pak teprve Posun."}</span>
     </div>
+    {value.chain && <div className="control-block">
+      <Select label="ROZPAD UNCLIPU" value={value.glitch || ""} onChange={glitch => update({glitch})} items={GLITCH_OPS.map(item => ({id: item.id, name: item.name}))} />
+      <span className="help-text">{value.glitch ? glitchOp(value.glitch).hint + " Týká se jen unCLIP mezikroku; modely Nano Pro a Gemini se rozbít nedají." : "Volitelné: unCLIP se v prvních krocích záměrně poškodí, než ho zdravý model dokončí."}</span>
+      {value.glitch && <Range label="ROZPAD · PRVNÍCH % KROKŮ" min={GLITCH_UNTIL.min} max={GLITCH_UNTIL.max} step={GLITCH_UNTIL.step} value={value.glitchUntil ?? GLITCH_UNTIL.default}
+        onChange={glitchUntil => update({glitchUntil})} hint={`${Math.round((value.glitchUntil ?? GLITCH_UNTIL.default) * 100)} % kroků je poškozených`} />}
+    </div>}
     <CountField value={value.count} update={update} label="POČET NA MODEL A OBRÁZEK"
       hint={!inputCount ? "Přidej obrázek, ze kterého se varianty odvodí." : !picked ? "Vyber alespoň jeden model." : `${inputCount} × ${picked} × ${count} = ${total} obrázků`} />
     <PromptField value={value.prompt} update={update} placeholder="Prázdné = ověřený prompt pro zvolenou vzdálenost" hint="Vlastní prompt se pošle tak, jak je (u Blíž až Divně se k němu přidá jedna věta o vzdálenosti)." />

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from . import core
+from . import core, glitch
 from .core import GenerationInput, ProgressCallback, report_progress
 
 UNCLIP_MODEL_ID = "sd21_unclip"
@@ -228,21 +228,22 @@ def generate_variations(generation_input: GenerationInput, progress_callback: Pr
 
         pipe.scheduler.set_timesteps = set_timesteps_from
         try:
-            result = pipe(
-                image=embedding_image(source), latents=init_latents,
-                prompt=generation_input.prompt or None,
-                negative_prompt=generation_input.negative_prompt or None,
-                width=width, height=height,
-                num_inference_steps=generation_input.steps,
-                guidance_scale=generation_input.cfg,
-                noise_level=generation_input.noise_level,
-                generator=generator,
-                callback=step_callback(progress_callback, base, 0.76 / total, index, total, run_steps),
-                callback_steps=1,
-            ).images[0]
+            with glitch.damaged(pipe, generation_input.glitch, run_steps, generation_input.glitch_until, seed) as glitch_info:
+                result = pipe(
+                    image=embedding_image(source), latents=init_latents,
+                    prompt=generation_input.prompt or None,
+                    negative_prompt=generation_input.negative_prompt or None,
+                    width=width, height=height,
+                    num_inference_steps=generation_input.steps,
+                    guidance_scale=generation_input.cfg,
+                    noise_level=generation_input.noise_level,
+                    generator=generator,
+                    callback=step_callback(progress_callback, base, 0.76 / total, index, total, run_steps),
+                    callback_steps=1,
+                ).images[0]
         finally:
             pipe.scheduler.set_timesteps = original_set_timesteps
-        image_meta = {**meta, "seed": seed, "actual_steps": run_steps,
+        image_meta = {**meta, "seed": seed, "actual_steps": run_steps, **({"glitch": glitch_info["glitch"], "glitch_until": generation_input.glitch_until} if glitch_info["glitch"] else {}),
                       "output_width": result.width, "output_height": result.height,
                       "setup_seconds": round(setup_seconds, 2),
                       "generation_and_save_seconds": round(time.monotonic() - inference_started, 2),

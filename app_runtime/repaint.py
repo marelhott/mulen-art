@@ -4,7 +4,7 @@ DEFAULT_REPAINT_DENOISE = 0.82
 
 
 def repaint(source, spec, seed, progress):
-    from . import core
+    from . import core, glitch
     from .atelier import painting_prompt
 
     pipe = core.ensure_pipeline(spec.model_id, resident=2 if spec.atelier_mode == "photo" else 1)
@@ -15,14 +15,16 @@ def repaint(source, spec, seed, progress):
     cfg = max(spec.cfg, spec.repaint_cfg_floor) if prompt else spec.cfg
     core.set_vae_tiling(pipe, spec.vae_tiling)
     schedule_steps, strength = core.inference_schedule(spec.steps, spec.denoise, True)
-    result = pipe(
-        prompt=prompt, negative_prompt=None, image=source, strength=strength,
-        guidance_scale=cfg, num_inference_steps=schedule_steps,
-        generator=core.get_torch().Generator(device="cuda").manual_seed(seed),
-        callback_on_step_end=core.build_step_callback(progress, 0, 1, 0, spec.steps, span=1, stage="Přemalování"),
-        callback_on_step_end_tensor_inputs=[],
-    ).images[0]
+    with glitch.damaged(pipe, spec.glitch, spec.steps, spec.glitch_until, seed) as glitch_info:
+        result = pipe(
+            prompt=prompt, negative_prompt=None, image=source, strength=strength,
+            guidance_scale=cfg, num_inference_steps=schedule_steps,
+            generator=core.get_torch().Generator(device="cuda").manual_seed(seed),
+            callback_on_step_end=core.build_step_callback(progress, 0, 1, 0, spec.steps, span=1, stage="Přemalování"),
+            callback_on_step_end_tensor_inputs=[],
+        ).images[0]
     return result, {
+        **({"glitch": glitch_info["glitch"], "glitch_until": spec.glitch_until} if glitch_info["glitch"] else {}),
         "repaint_version": "artist-v2", "repaint_cfg_floor": spec.repaint_cfg_floor,
         "vae_tiling": spec.vae_tiling, "recipe": core.runtime_recipe(pipe), "prompt": prompt, "negative_prompt": "",
         "cfg": cfg, "guidance_scale": cfg, "requested_cfg": spec.cfg,

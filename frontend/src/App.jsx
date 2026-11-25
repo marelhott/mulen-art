@@ -5,6 +5,7 @@ import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEnt
 import { randomId, safeStorage } from "./shared";
 import { DEFAULT_REIMAGINE, planReimagine, plannedImages, reimagineFromSettings } from "./reimagineTools";
 import { DEFAULT_VARI, DEFAULT_COLLAGE, COLLAGE_MAX_SOURCES, forCollage, planVari, planCollage, plannedImages as nanoPlannedImages, variFromSettings, collageFromSettings, usableModels } from "./nanoTools";
+import { glitchSettings } from "./glitchTools";
 import { usePresets } from "./usePresets";
 import { useGallery } from "./useGallery";
 import { useServerOptions } from "./useServerOptions";
@@ -435,7 +436,7 @@ function App() {
     if (!modelIds.length || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(total)) {
       setError("Vyber checkpoint a kladný celý počet studií."); return;
     }
-    const settings = {generation_type: "atelier", input_scale: atelier.inputScale ?? 1, atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_framing: atelier.framing || "crop", atelier_archive: atelier.archive || "hofmann", atelier_photo_source: atelier.photoSource || "generated", atelier_photo_collection: atelier.photoCollection || "malba", atelier_photo_id: atelier.photoId || "", atelier_ratio: atelier.ratio || "fixed", atelier_color_level: atelier.colorLevel ?? 2,
+    const settings = {generation_type: "atelier", input_scale: atelier.inputScale ?? 1, atelier_mode: atelier.mode, atelier_theme: atelier.theme, atelier_framing: atelier.framing || "crop", atelier_archive: atelier.archive || "hofmann", atelier_photo_source: atelier.photoSource || "generated", atelier_photo_collection: atelier.photoCollection || "malba", atelier_photo_id: atelier.photoId || "", atelier_ratio: atelier.ratio || "fixed", atelier_color_level: atelier.colorLevel ?? 2, ...glitchSettings(atelier.glitch, atelier.glitchUntil),
       width: atelier.width, height: atelier.height, scale: Number(atelier.scale), use_realsrgan: Boolean(atelier.useRealsrgan), output_upscaler: atelier.useRealEsrgan ? 'realesrgan' : atelier.useRealsrgan ? 'swinir' : 'lanczos', restormer_mode: atelier.restormerMode || 'off', cfg: Number(atelier.cfg),
       steps: Number(atelier.steps), sampler: atelier.sampler, schedule: atelier.schedule, denoise: Number(atelier.denoise), render_mode: "quick"};
     const requestedSeed = Number(atelier.seed === "" ? -1 : atelier.seed);

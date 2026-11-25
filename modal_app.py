@@ -206,7 +206,8 @@ def unclip_stage(job_id, payload, preset, count, progress, cancelled):
     from app_runtime.core import parse_input
     from app_runtime.server import OUTPUTS_DIR, now_iso
     settings = {"generation_type": "reimagine", "reimagine_mode": "unclip", "long_side": 1024, "steps": 35, "cfg": 5.0, "num_images": count,
-                "seed": -1, "image_base64": "stored", **UNCLIP_PRESETS[preset]}
+                "seed": -1, "image_base64": "stored", **UNCLIP_PRESETS[preset],
+                "glitch": payload.get("pre_unclip_glitch") or "", "glitch_until": payload.get("glitch_until")}
     pre = asdict(parse_input(settings))
     pre.update(image_base64="", source_file=payload["source_file"], source_name=payload.get("source_name", "Input image"),
                source_url=payload.get("source_url"), queue_priority=0)

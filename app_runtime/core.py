@@ -94,6 +94,9 @@ class GenerationInput:
     nano_model: str = "nano-pro"  # Vari / Koláž: id from app_runtime/nano/models.py
     nano_distance: str = "middle"  # Vari: near | middle | far | weird
     pre_unclip: str = ""  # Vari: run the source through unCLIP first ("free" or "loose"), then make the variants from that
+    pre_unclip_glitch: str = ""  # Vari: damage the unCLIP model in the first part of that pre-stage (app_runtime/glitch.py GLITCH_OPS)
+    glitch: str = ""  # Ateliér and unCLIP: "" off, else a glitch operation; the UNet is damaged in the first part of the run only
+    glitch_until: float = 0.3  # fraction of the UNet calls that are damaged; a healthy model finishes the rest
     collage_fuse: bool = True  # Koláž: fuse all inputs into one picture (False = each input on its own)
     extra_source_ids: list = field(default_factory=list)  # Koláž: stored sources beyond the first (64 hex chars each)
 
@@ -321,7 +324,23 @@ def nano_input_fields(payload: dict[str, Any], generation_type: str) -> dict[str
     pre = str(payload.get("pre_unclip") or "")
     if pre not in {"", "free", "loose"} or (pre and generation_type != "vari"):
         raise ValueError("Unknown unCLIP pre-stage")
-    return {"nano_model": model_id, "nano_distance": distance, "pre_unclip": pre, "collage_fuse": bool(payload.get("collage_fuse", True)), "extra_source_ids": list(extra)}
+    pre_glitch = str(payload.get("pre_unclip_glitch") or "")
+    if pre_glitch and (generation_type != "vari" or not pre):
+        raise ValueError("The unCLIP glitch needs the Vari unCLIP pre-stage")
+    glitch_fields = {"pre_unclip_glitch": pre_glitch}
+    if pre_glitch:
+        glitch_fields.update(glitch_fields_for(pre_glitch, payload.get("glitch_until")))
+        glitch_fields.pop("glitch", None)  # the main Vari job calls API models; the pre-stage job gets the glitch
+    return {"nano_model": model_id, "nano_distance": distance, "pre_unclip": pre, "collage_fuse": bool(payload.get("collage_fuse", True)), "extra_source_ids": list(extra), **glitch_fields}
+
+
+def glitch_fields_for(op: Any, until: Any) -> dict[str, Any]:
+    """Validated glitch settings ("" = off) for a job that runs a UNet of ours."""
+    from .glitch import GLITCH_OPS, GLITCH_UNTIL_DEFAULT, GLITCH_UNTIL_RANGE
+    op = str(op or "")
+    if op and op not in GLITCH_OPS:
+        raise ValueError("Unknown glitch operation")
+    return {"glitch": op, "glitch_until": clamp(float(until if until not in (None, "") else GLITCH_UNTIL_DEFAULT), *GLITCH_UNTIL_RANGE)}
 
 
 def parse_input(payload: dict[str, Any]) -> GenerationInput:
@@ -442,6 +461,7 @@ def parse_input(payload: dict[str, Any]) -> GenerationInput:
         generation_type=generation_type, atelier_mode=atelier_mode, atelier_theme=atelier_theme, atelier_framing=atelier_framing,
         noise_level=int(clamp(int(payload.get("noise_level", 0)), 0, 500)),
         **(reimagine_fields(payload) if generation_type == "reimagine" else {}),
+        **(glitch_fields_for(payload.get("glitch"), payload.get("glitch_until")) if generation_type in {"atelier", "reimagine"} else {}),
         **nano_fields,
         width=width, height=height, atelier_archive=str(payload.get("atelier_archive", "hofmann")),
         atelier_photo_source=str(payload.get("atelier_photo_source", "generated")),

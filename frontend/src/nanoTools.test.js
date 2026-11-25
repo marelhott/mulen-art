@@ -61,3 +61,15 @@ test("the unCLIP chain is sent only when switched on and restored from settings"
   assert.equal(variFromSettings({nano_model: "gpt", pre_unclip: "free"}, DEFAULT_VARI).chain, "free");
   assert.equal(variFromSettings({nano_model: "gpt"}, {...DEFAULT_VARI, chain: "free"}).chain, "");
 });
+
+test("the unCLIP glitch is sent only together with the pre-stage, clamped, and restored from settings", () => {
+  const state = {...DEFAULT_VARI, models: ["gpt"], chain: "loose", glitch: "top_suppress", glitchUntil: 0.45};
+  const request = planVari(state, catalogue)[0];
+  assert.equal(request.pre_unclip_glitch, "top_suppress");
+  assert.equal(request.glitch_until, 0.45);
+  assert.equal(planVari({...state, glitchUntil: 5}, catalogue)[0].glitch_until, 0.6);
+  assert.equal(planVari({...state, chain: ""}, catalogue)[0].pre_unclip_glitch, undefined);  // nothing to damage without unCLIP
+  assert.equal(planVari({...state, glitch: ""}, catalogue)[0].pre_unclip_glitch, undefined);
+  assert.equal(planVari({...DEFAULT_VARI, models: ["gpt"]}, catalogue)[0].glitch_until, undefined);  // default request is unchanged
+  assert.equal(variFromSettings({nano_model: "gpt", pre_unclip: "free", pre_unclip_glitch: "chan_drop", glitch_until: 0.2}, DEFAULT_VARI).glitch, "chan_drop");
+});
