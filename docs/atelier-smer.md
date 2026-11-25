@@ -56,3 +56,8 @@ Claudova poznámka: SDXL checkpointy (trigger + CFG ~0.5) pokyny neplní. Most: 
 - `SUBJECTS` jsou záměrně ploché ("cropped", "plain background", "flat light", "no surrounding context", "even daylight") -> model poslušně redukuje.
 - Volná studie = čistý šum + prázdný prompt -> kompozice padá do průměru (jako dřív barva, 98 % jeden odstín).
 - Kompozici určuje prvních 20-30 % kroků (hrubé masy, ne slova); na tu fázi teď nic cíleně nepůsobí.
+
+## Zdroj D: Mario Klingemann, Neural Glitch (text od uživatele 2026-11-25 + ověřeno na quasimondo.com)
+- Vlastní popis (2018): plně natrénované GANy (vlastní architektury z pix2pix/pix2pixHD) mění náhodným pozměněním, smazáním nebo prohozením vah. Glitch působí na úrovni textury i významu. Řetězí několik GANů; následující modely se poškození snaží "vyléčit" ("Neurealism"). Žádná čísla, vrstvy ani výběr výsledků v textu nejsou.
+- GitHub Quasimondo: dnes hlavně ComfyUI nodes (WIP); nic o poškozování vah v diffusion. Tvrzení o sérii z roku 2026 (potlačení silných aktivací) jsem neověřil.
+- Claudův převod pro aplikaci: poškodit UNet vlastního checkpointu jen v první fázi běhu (architektura), druhou fázi doběhne zdravý checkpoint (léčení = rukopis). Využije existující dvoufázový mechanismus, nepotřebuje prompty. Varianty: šum ve vahách mid bloku, prohození hlav attention, vynulování části cross-attention, potlačení nejsilnějších aktivací. GANy (pix2pix, StyleGAN) znovu stavět nedává smysl, checkpointy jsou SDXL; laboratoř na Macu není potřeba, GPU pipeline na Modalu už je.
