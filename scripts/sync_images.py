@@ -2,6 +2,9 @@
 
   Plátno/   img2img results (canvas)
   Atelier/  Atelier studies
+  unCLIP/   unCLIP variants and metamorphoses
+  Vari/     Vari siblings
+  Koláž/    Koláž results
 
 New images are downloaded within seconds; an image you delete in the app is moved to the Trash here too
 (and comes back if you restore it in the app). Files you delete or move yourself are left alone.
@@ -15,8 +18,11 @@ from datetime import datetime
 from pathlib import Path
 
 DEFAULT_DEST = Path.home() / "Pictures" / "Mulen art"
-FOLDERS = {"canvas": "Plátno", "atelier": "Atelier"}
+FOLDERS = {"canvas": "Plátno", "atelier": "Atelier", "unclip": "unCLIP", "vari": "Vari", "collage": "Koláž"}
+KINDS = {"atelier": "atelier", "reimagine": "unclip", "vari": "vari", "collage": "collage"}
 VOLUME = "img2img-outputs"
+# The app lives in this Modal profile; the Mac's *active* profile is another workspace with its own, stale outputs Volume.
+PROFILE = "img2img"
 READ_TIMEOUT_SECONDS = 120
 SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 _READER = ThreadPoolExecutor(max_workers=16, thread_name_prefix="volume-read")
@@ -27,7 +33,7 @@ class TransientError(Exception):
 
 
 def classify(record):
-    return "atelier" if (record.get("settings") or {}).get("generation_type") == "atelier" else "canvas"
+    return KINDS.get((record.get("settings") or {}).get("generation_type"), "canvas")
 
 
 def read_bytes(volume, path, timeout=READ_TIMEOUT_SECONDS):
@@ -78,6 +84,7 @@ def save_state(path, state):
 
 def sync(dest, volume=None, trash=to_trash, now=None):
     if volume is None:
+        os.environ.setdefault("MODAL_PROFILE", PROFILE)  # must be set before modal reads its config
         import modal
         volume = modal.Volume.from_name(VOLUME)
     from modal.volume import FileEntryType
@@ -87,7 +94,9 @@ def sync(dest, volume=None, trash=to_trash, now=None):
     state_path = dest / ".sync-state.json"
     state = load_state(state_path)
     # A record needs a look when it is new or was rewritten (saved, deleted, restored) since we last saw it.
-    changed = [name for name, entry in entries.items() if name.endswith(".json") and (name not in state or state[name].get("mtime") != entry.mtime)]
+    # Downloads remembered without their kind predate the per-tab folders: look once more so the file moves where it belongs.
+    changed = [name for name, entry in entries.items() if name.endswith(".json") and (name not in state or state[name].get("mtime") != entry.mtime
+               or (state[name].get("status") == "downloaded" and "kind" not in state[name]))]
 
     def load(name):
         try:
@@ -126,8 +135,13 @@ def sync(dest, volume=None, trash=to_trash, now=None):
 
     def fetch(job):
         name, record, mtime = job
-        target = dest / FOLDERS[classify(record)] / record["filename"]
+        kind = classify(record)
+        target = dest / FOLDERS[kind] / record["filename"]
         fresh = False
+        previous = state.get(name, {})
+        old = previous.get("path") and dest / previous["path"]
+        if previous.get("status") == "downloaded" and old and old != target and old.is_file() and not target.exists():
+            os.replace(old, target)  # filed under another folder by an earlier version
         if not target.exists() and state.get(name, {}).get("status") != "downloaded":
             try:
                 data = read_bytes(volume, record["filename"])
@@ -146,7 +160,7 @@ def sync(dest, volume=None, trash=to_trash, now=None):
                 os.utime(target, (stamp, stamp))  # Finder sorts by the time the image was made
             except (KeyError, ValueError):
                 pass
-        return name, {"status": "downloaded", "path": str(target.relative_to(dest)), "mtime": mtime}, fresh
+        return name, {"status": "downloaded", "path": str(target.relative_to(dest)), "kind": kind, "mtime": mtime}, fresh
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         for name, entry, fresh in pool.map(fetch, downloads):

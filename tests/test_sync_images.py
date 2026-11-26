@@ -50,6 +50,19 @@ class SyncTests(unittest.TestCase):
         self.assertEqual((self.dest / "Atelier" / "b.png").read_bytes(), b"studio")
         self.assertEqual(self.run_sync(), {"downloaded": 0, "removed": 0, "checked": 0})  # nothing to do the second time
 
+    def test_every_tab_has_its_folder_and_misfiled_downloads_move_there_once(self):
+        for index, (name, kind) in enumerate([("u", "reimagine"), ("v", "vari"), ("k", "collage")]):
+            self.volume.put(f"{name}.png", kind.encode(), index + 1); self.volume.put(f"{name}.json", record(f"{name}.png", kind), index + 1)
+        # state written by the older script: the Vari image was filed under Plátno
+        (self.dest / "Plátno").mkdir(parents=True)
+        (self.dest / "Plátno" / "v.png").write_bytes(b"vari")
+        (self.dest / ".sync-state.json").write_text(json.dumps({"v.json": {"status": "downloaded", "path": "Plátno/v.png", "mtime": 2}}))
+        self.assertEqual(self.run_sync()["downloaded"], 2)
+        for folder, name in [("unCLIP", "u"), ("Vari", "v"), ("Koláž", "k")]:
+            self.assertTrue((self.dest / folder / f"{name}.png").is_file(), folder)
+        self.assertFalse((self.dest / "Plátno" / "v.png").exists())
+        self.assertEqual(self.run_sync(), {"downloaded": 0, "removed": 0, "checked": 0})
+
     def test_deleting_in_the_app_moves_the_file_to_the_trash_and_restoring_brings_it_back(self):
         self.volume.put("a.png", b"canvas", 1); self.volume.put("a.json", record("a.png"), 1)
         self.run_sync()
