@@ -61,6 +61,7 @@ export default function StudioView(p) {
   const [filterText, setFilterText] = useState("");
   const [tab, setTab] = useState("vari");
   const isAtelier = tab === "atelier";
+  const isCanvas = tab === "results";
   // Start the GPU worker of the chosen checkpoints while the settings are still being chosen (first job skips the cold start).
   const warmIds = isAtelier ? (p.atelier?.modelIds || []).filter(id => !id.startsWith("mix:")).join(",") : "";
   useEffect(() => {
@@ -137,8 +138,9 @@ export default function StudioView(p) {
   const collageItems = p.results.filter((item) => (item ? isCollageItem(item) : p.pendingMode === "collage"));
   const canvasItems = p.results.filter((item) => (item ? !isAtelierItem(item) && !isUnclipItem(item) && !isVariItem(item) && !isCollageItem(item) : p.pendingMode === "results"));
   const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : isReimagine ? unclipItems : isVari ? variItems : isCollage ? collageItems : canvasItems;
-  const items = filterItems(unfiltered, { modelId: filterModel, text: filterText });
-  const filtering = Boolean(filterModel || filterText.trim());
+  // Plátno has no filter bar, so a filter set elsewhere must not silently hide its images.
+  const items = filterItems(unfiltered, isCanvas ? { modelId: "", text: "" } : { modelId: filterModel, text: filterText });
+  const filtering = !isCanvas && Boolean(filterModel || filterText.trim());
   const modelNameFor = (item) => p.models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name;
   const count = items.length;
   const workspaceRef = useRef(null);
@@ -726,7 +728,7 @@ export default function StudioView(p) {
             <button type="button" aria-label="Zavřít hlášení" onClick={() => p.setError("")}><X size={13} /></button>
           </div>
         )}
-        {!isReimagine && (
+        {!isReimagine && !isCanvas && (
           <div className="canvas-actions">
             <button className={`toolbar-button ${selecting ? "active" : ""}`} aria-pressed={selecting}
               onClick={() => {setSelecting(!selecting); setSelection(new Set());}}>
@@ -764,7 +766,7 @@ export default function StudioView(p) {
             )}
           </div>
         )}
-        {tab !== "atelier" && !isReimagine && !isVari && !isCollage && unfiltered.filter(Boolean).length > 1 && (
+        {tab !== "atelier" && !isCanvas && !isReimagine && !isVari && !isCollage && unfiltered.filter(Boolean).length > 1 && (
           <div className="filter-bar" role="search">
             <select aria-label="Filtrovat podle modelu" value={filterModel} onChange={(event) => setFilterModel(event.target.value)}>
               <option value="">{TEXT.filterModelAll}</option>
