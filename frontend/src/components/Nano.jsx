@@ -5,7 +5,7 @@ import { GLITCH_OPS, GLITCH_UNTIL, glitchOp } from "../glitchTools";
 import { COLLAGE_MAX_SOURCES, VARI_CHAINS, NANO_DISTANCES, NANO_MAX_PER_MODEL, clampCount, forCollage, isFused, takesImages, usableModels } from "../nanoTools";
 
 // Model picker shared by Vari and Koláž: a model whose provider key is missing is shown but cannot be chosen, with the reason.
-function ModelPicker({models, value, update}) {
+export function ModelPicker({models, value, update}) {
   const toggle = id => update({models: value.includes(id) ? value.filter(item => item !== id) : [...value, id]});
   const usable = usableModels(value, models).length;
   return <div className="control-block">
@@ -42,7 +42,7 @@ function CountField({value, update, label, hint}) {
   </div>;
 }
 
-export function VariControls({value, update, models, inputCount, generating, onGenerate, inputBlock}) {
+export function VariControls({value, update, models, inputCount, generating, onGenerate, inputBlock, showModels = true}) {
   const picked = usableModels(value.models, models).length;
   const count = clampCount(value.count);
   const total = inputCount * picked * count;
@@ -52,7 +52,7 @@ export function VariControls({value, update, models, inputCount, generating, onG
       <Layers3 size={16} />{generating ? "PŘIDAT DO FRONTY" : "VYTVOŘIT VARIANTY"}
     </button>
     {inputBlock}
-    <ModelPicker models={models} value={value.models} update={update} />
+    {showModels && <ModelPicker models={models} value={value.models} update={update} />}
     <div className="control-block">
       <Label>VZDÁLENOST OD PŘEDLOHY</Label>
       <div className="segmented" role="group" aria-label="Vzdálenost od předlohy">

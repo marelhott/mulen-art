@@ -33,7 +33,7 @@ import { CheckpointPicker } from "./components/CheckpointPicker";
 import { VariantsPanel } from "./components/VariantsPanel";
 import { AtelierControls } from "./components/Atelier";
 import { ReimagineControls } from "./components/Reimagine";
-import { VariControls, CollageControls } from "./components/Nano";
+import { ModelPicker, VariControls, CollageControls } from "./components/Nano";
 import { ContextMenu } from "./components/ContextMenu";
 import { LibraryDialog } from "./components/LibraryDialog";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -488,7 +488,7 @@ export default function StudioView(p) {
         </div>
       </header>
       <aside className="left-panel control-panel">
-        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} onAddMix={p.addMix} onRemoveMix={p.removeMix} /> : isVari ? <VariControls value={p.vari} update={patch => p.setVari(current => ({...current, ...patch}))} models={p.nanoModels || []} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateVari} inputBlock={inputBlock} /> : isCollage ? <CollageControls value={p.collage} update={patch => p.setCollage(current => ({...current, ...patch}))} models={p.nanoModels || []} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateCollage} inputBlock={inputBlock} /> : isReimagine ? <ReimagineControls value={p.reimagine} update={patch => p.setReimagine(current => ({...current, ...patch}))} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateReimagine} inputBlock={inputBlock} /> : <>
+        {isAtelier ? <AtelierControls atelier={p.atelier} update={updateAtelier} models={p.models} archives={p.archives} archiveStatus={p.archiveStatus} reloadArchives={p.reloadArchives} generating={p.isGenerating} onGenerate={p.handleGenerateAtelier} onAddMix={p.addMix} onRemoveMix={p.removeMix} /> : isVari ? <VariControls value={p.vari} update={patch => p.setVari(current => ({...current, ...patch}))} models={p.nanoModels || []} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateVari} inputBlock={inputBlock} showModels={!rightOpen} /> : isCollage ? <CollageControls value={p.collage} update={patch => p.setCollage(current => ({...current, ...patch}))} models={p.nanoModels || []} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateCollage} inputBlock={inputBlock} /> : isReimagine ? <ReimagineControls value={p.reimagine} update={patch => p.setReimagine(current => ({...current, ...patch}))} inputCount={p.inputItems.length} generating={p.isGenerating} onGenerate={p.handleGenerateReimagine} inputBlock={inputBlock} /> : <>
         <button
           className="primary-button generate"
           disabled={!p.inputItems.length || (p.generationMode === "checkpoint" && !idsForSource(p.selectedModelIds, p.checkpointSource).length)}
@@ -837,7 +837,10 @@ export default function StudioView(p) {
           </div>
         )}
       </main>
-      <SettingsPanel p={p} isAtelier={isAtelier} isReimagine={isReimagine || isVari || isCollage} updateAtelier={updateAtelier} progressState={progressState} />
+      <SettingsPanel p={p} isAtelier={isAtelier} isReimagine={isReimagine || isVari || isCollage} updateAtelier={updateAtelier} progressState={progressState}>
+        {/* Vari keeps its models here; with the panel closed they fall back to the left one so they stay reachable. */}
+        {isVari && rightOpen && <ModelPicker models={p.nanoModels || []} value={p.vari.models} update={patch => p.setVari(current => ({...current, ...patch}))} />}
+      </SettingsPanel>
       <LibraryDialog open={libraryOpen} onClose={closeLibrary} suspended={Boolean(p.selectedImage) || compareOpen}
         items={p.libraryItems} models={p.models} actions={libraryActions} />
       {compareOpen && (

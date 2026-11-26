@@ -4,7 +4,7 @@ import { Progress } from "./Progress";
 import { IconButton, Label, Range, Select } from "./controls";
 
 // Right-hand panel: job progress, generation settings, saved presets and the activity log.
-export function SettingsPanel({ p, isAtelier, isReimagine = false, updateAtelier, progressState }) {
+export function SettingsPanel({ p, isAtelier, isReimagine = false, updateAtelier, progressState, children }) {
   return (
   <aside className="right-panel control-panel">
     <Progress
@@ -19,6 +19,7 @@ export function SettingsPanel({ p, isAtelier, isReimagine = false, updateAtelier
       planned={progressState.plannedOutputs}
       onCancel={p.handleCancel}
     />
+    {children}
     {!isReimagine && <>
     <div className="settings-heading">
       <SlidersHorizontal size={13} />
