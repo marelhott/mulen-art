@@ -1,6 +1,7 @@
 import React from "react";
 import { Shuffle } from "lucide-react";
 import { Label, Range, Select } from "./controls";
+import { GLITCH_OPS, GLITCH_UNTIL, glitchOp } from "../glitchTools";
 import { presetLabel, REIMAGINE_MODES, REIMAGINE_PRESETS } from "../reimagineTools";
 
 // unCLIP tab: "Varianta" (SD 2.1 unCLIP, faithful) or "Metamorfóza" (SDXL + IP-Adapter, the old Reimagine XL behaviour).
@@ -54,6 +55,12 @@ export function ReimagineControls({value: r, update, inputCount, generating, onG
     </>}
     {!metamorph && <Select label="ROZLIŠENÍ" value={String(r.longSide)} onChange={value => update({longSide: Number(value)})}
       items={[{id: "1024", name: "1024 px na delší straně · víc detailu"}, {id: "768", name: "768 px · nativní velikost modelu"}]} />}
+    {!metamorph && <>
+      <Select label="ROZPAD MODELU" value={r.glitch || ""} onChange={glitch => update({glitch})} items={GLITCH_OPS} />
+      <p className="help-text">{r.glitch ? glitchOp(r.glitch).hint + " Zbytek běhu dokončí zdravý model." : "Volitelné: model se v prvních krocích záměrně poškodí, aby si význam tvarů složil jinak."}</p>
+      {r.glitch && <Range label="ROZPAD · PRVNÍCH % KROKŮ" min={GLITCH_UNTIL.min} max={GLITCH_UNTIL.max} step={GLITCH_UNTIL.step} value={r.glitchUntil ?? GLITCH_UNTIL.default}
+        onChange={glitchUntil => update({glitchUntil})} hint={`${Math.round((r.glitchUntil ?? GLITCH_UNTIL.default) * 100)} % kroků je poškozených, zbytek zdravý`} />}
+    </>}
     <Range label="KROKY" min={10} max={50} step={1} value={metamorph ? r.mSteps : r.steps} onChange={value => update(metamorph ? {mSteps: value} : {steps: value})} />
     <Range label="CFG" min={1} max={metamorph ? 12 : 20} step={0.5} value={metamorph ? r.mCfg : r.cfg} onChange={value => update(metamorph ? {mCfg: value} : {cfg: value})}
       hint={metamorph ? "Výchozí 5,5. Vyšší hodnoty přidávají kontrast a ostrost." : "Výchozí 5. Hodnoty nad 7 zjednodušují plochy a přidávají nesmyslné figury."} />

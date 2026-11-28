@@ -29,6 +29,28 @@ export function ImageViewer({
   onDownload,
   gpuHourlyUsd,
 }) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  useEffect(() => setExportError(""), [image.id]);
+  // Fetched rather than linked: a failed export must show a message, not replace the app with the error response.
+  async function exportPrint() {
+    setExporting(true);
+    setExportError("");
+    try {
+      const response = await fetch(buildImageUrl(`/api/library/${image.id}/export?scale=2`));
+      if (!response.ok) throw new Error(response.status === 413 ? "Obrázek je pro export 2× příliš velký." : `Export se nezdařil (${response.status}).`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = Object.assign(document.createElement("a"), { href: url, download: `${image.id}_print_2x.png` });
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) {
+      setExportError(error.message);
+    } finally {
+      setExporting(false);
+    }
+  }
   const [mode, setMode] = useState("details"),
     [split, setSplit] = useState(50),
     [zoom, setZoom] = useState(1),
@@ -358,6 +380,7 @@ export function ImageViewer({
             </div>
           )}
         </div>
+        {exportError && <p className="help-text" role="alert">{exportError}</p>}
         <footer>
           <button
             className="primary-button"
@@ -378,10 +401,10 @@ export function ImageViewer({
             STÁHNOUT ORIGINÁL
           </button>
           {image.id && image.url?.startsWith("/library/") && (
-            <a className="toolbar-button" href={buildImageUrl(`/api/library/${image.id}/export?scale=2`)} download>
+            <button className="toolbar-button" disabled={exporting} onClick={exportPrint}>
               <Printer size={14} />
-              {TEXT.exportPrint}
-            </a>
+              {exporting ? "PŘIPRAVUJI EXPORT…" : TEXT.exportPrint}
+            </button>
           )}
         </footer>
       </aside>

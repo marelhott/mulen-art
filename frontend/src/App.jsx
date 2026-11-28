@@ -81,6 +81,7 @@ function App() {
   const [steps, setSteps] = useState(28);
   const [engine, setEngine] = useState(DEFAULT_ENGINE);
   const [batchResults, setBatchResults] = useState([]);
+  const [pendingModes, setPendingModes] = useState([]);
   const { results, setResults, libraryItems, setLibraryItems, deletedIds, loadLibrary, galleryLoading } = useGallery();
   const [selectedImage, setSelectedImage] = useState(null);
   const [error, setError] = useState("");
@@ -175,7 +176,7 @@ function App() {
 
   useJobs({
     activeJobs, setActiveJobs, submissionErrors, recordsCache, deletedIds, plannedCount, submitting,
-    setBatchResults, setResults, setJob, setError, loadLibrary, averageSeconds, onBatchFinished: refreshUsage,
+    setBatchResults, setResults, setPendingModes, setJob, setError, loadLibrary, averageSeconds, onBatchFinished: refreshUsage,
   });
 
   const generationSize = useMemo(() => {
@@ -588,7 +589,9 @@ function App() {
     const preview = planCollage(collage, nanoModels, inputItems.map(item => item.id), seedStart);
     await submitCalls("Koláž", nanoPlannedImages(preview), async issues => {
       const ids = [];
-      for (const item of inputItems) ids.push(await uploadSource(item));
+      for (const item of inputItems) {
+        try { ids.push(await uploadSource(item)); } catch (error) { throw new Error(`${item.file.name}: ${error.message}`); }
+      }
       return planCollage(collage, nanoModels, ids, seedStart).map(({sourceIndex, settings}) =>
         ({name: inputItems[sourceIndex].file.name, sourceId: ids[sourceIndex], refId: inputItems[sourceIndex].id, settings}));
     });
@@ -776,7 +779,7 @@ function App() {
         downloadLibraryImage,
         downloadSelectedImage,
         gpuHourlyUsd, nanoModels, vari, setVari, handleGenerateVari, collage, setCollage, handleGenerateCollage, applySettings, addMix, removeMix, variants, setVariants, variantsPlan, checkpointSource, setCheckpointSource, usageText: usageLabel(usage),
-        pendingMode: {atelier: "atelier", reimagine: "reimagine", vari: "vari", collage: "collage"}[activeJobs.at(-1)?.generation_type] || "results",
+        pendingModes,
       }}
     />
   );

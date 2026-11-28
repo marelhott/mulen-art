@@ -2,6 +2,8 @@
 //  - "unclip": SD 2.1 unCLIP around the noised source - faithful variations of the same picture.
 //  - "metamorph": SDXL Base img2img + IP-Adapter - keeps layout, palette and gesture but re-invents the forms
 //    (the behaviour of the old Clipdrop Reimagine XL). Defaults come from test grids on a real source.
+import {glitchSettings} from "./glitchTools.js";
+
 export const REIMAGINE_MODES = [
   {id: "unclip", name: "Varianta", description: "Věrné varianty stejného obrazu (SD 2.1 unCLIP)."},
   {id: "metamorph", name: "Metamorfóza", description: "Drží kompozici, paletu a gesto, ale tvary přetváří v nové předměty (SDXL + IP-Adapter)."},
@@ -43,7 +45,9 @@ function modeSettings(r) {
 
 // The request settings sent for ONE input image. Manual mode: chunks of up to 8 images with consecutive seeds.
 export function planReimagine(r, seed) {
-  const base = {generation_type: "reimagine", ...modeSettings(r)};
+  // Rozpad modelu exists for Varianta only: the Metamorfóza pipeline does not use it.
+  const damage = r.mode === "metamorph" ? {} : glitchSettings(r.glitch, r.glitchUntil);
+  const base = {generation_type: "reimagine", ...modeSettings(r), ...damage};
   if (r.usePresets) return (REIMAGINE_PRESETS[r.mode] || REIMAGINE_PRESETS.unclip).map((preset, index) => ({...base, ...preset.settings, num_images: 1, seed: r.sameSeed ? seed : (seed + index) % 4294967296}));
   const count = Number(r.count);
   return Array.from({length: Math.ceil(count / 8)}, (_, chunk) => ({...base, num_images: Math.min(8, count - chunk * 8), seed: (seed + chunk * 8) % 4294967296}));
@@ -56,7 +60,7 @@ export function reimagineFromSettings(settings, current) {
   if (settings.reimagine_mode === "metamorph")
     return {...current, mode: "metamorph", mStrength: settings.denoise ?? current.mStrength, ipScale: settings.ip_scale ?? current.ipScale,
       ipVariant: settings.ip_variant ?? current.ipVariant, mSteps: settings.steps ?? current.mSteps, mCfg: settings.guidance_scale ?? settings.cfg ?? current.mCfg};
-  return {...current, mode: "unclip", strength: settings.denoise ?? current.strength, noise: settings.noise_level ?? current.noise,
+  return {...current, mode: "unclip", glitch: settings.glitch || "", glitchUntil: settings.glitch_until ?? current.glitchUntil, strength: settings.denoise ?? current.strength, noise: settings.noise_level ?? current.noise,
     longSide: settings.generation_height && settings.generation_width ? (Math.max(settings.generation_width, settings.generation_height) > 800 ? 1024 : 768) : current.longSide,
     steps: settings.steps ?? current.steps, cfg: settings.guidance_scale ?? settings.cfg ?? current.cfg};
 }

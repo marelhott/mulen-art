@@ -69,7 +69,7 @@ class VolumeUsage:
 DEFAULT_MAX_JOBS_PER_REQUEST = 64
 
 
-MAX_EXPORT_PIXELS = 36_000_000
+MAX_EXPORT_PIXELS = 40_000_000  # covers 2x of the largest standard output (3072 x 3072)
 INTERACTIVE_REQUEST_JOBS = 4
 RUNNING_JOB_TIMEOUT_SECONDS = 1800
 QUEUED_JOB_TIMEOUT_SECONDS = 3 * 3600  # large batches legitimately queue for a long while; this only catches lost jobs
@@ -134,6 +134,7 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     lock = threading.Lock()
     thumbnail_lock = threading.Lock()
     status_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="job-status")
+    export_lock = threading.Lock()  # one print export at a time: two large ones would add up in memory
     reload_lock = threading.Lock()  # one Volume reload at a time; asset reads never wait on `lock`
     refresh_state = {"at": 0.0}
     pending_commit = threading.Event()
@@ -803,13 +804,14 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
             source = Image.open(path)
         except (OSError, ValueError, KeyError):
             raise HTTPException(404, "Image not found.")
-        with source:
-            width, height = source.width * scale, source.height * scale
-            if width * height > MAX_EXPORT_PIXELS:  # the gateway has 512 MB of RAM
-                raise HTTPException(413, "Export would be too large; try a smaller scale.")
-            upscaled = source.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
-        buffer = io.BytesIO()
-        upscaled.save(buffer, format="PNG", dpi=(300, 300))
+        with export_lock:
+            with source:
+                width, height = source.width * scale, source.height * scale
+                if width * height > MAX_EXPORT_PIXELS:  # the gateway has 2 GB for the whole app
+                    raise HTTPException(413, "Export would be too large; try a smaller scale.")
+                upscaled = source.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            upscaled.save(buffer, format="PNG", dpi=(300, 300))
         return Response(buffer.getvalue(), media_type="image/png",
                         headers={"Content-Disposition": f'attachment; filename="{item_id}_print_{scale}x.png"'})
 

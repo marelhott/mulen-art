@@ -26,7 +26,7 @@ import {
 import { signOut } from "./api";
 import { safeStorage, urlFor } from "./shared";
 import { buildImageUrl } from "./api";
-import { filterItems, idsForSource, sourceUrls, tabForSettings } from "./studioTools";
+import { filterItems, idsForSource, sourceUrls, tabForSettings, modelOptions, splitByMode } from "./studioTools";
 import { TEXT } from "./texts";
 import { Compare } from "./components/Compare";
 import { CheckpointPicker } from "./components/CheckpointPicker";
@@ -126,22 +126,14 @@ export default function StudioView(p) {
   const inputRef = useRef(null),
     moreRef = useRef(null);
   const closeLibrary = useCallback(() => setLibraryOpen(false), []);
-  // Two separate feeds: canvas (img2img) and Atelier; the library holds both. Pending placeholders
-  // (null) belong to the kind of job currently running.
-  const isAtelierItem = (item) => item?.settings?.generation_type === "atelier";
-  const isUnclipItem = (item) => item?.settings?.generation_type === "reimagine";
-  const atelierItems = p.results.filter((item) => (item ? isAtelierItem(item) : p.pendingMode === "atelier"));
-  const unclipItems = p.results.filter((item) => (item ? isUnclipItem(item) : p.pendingMode === "reimagine"));
-  const isVariItem = (item) => item?.settings?.generation_type === "vari";
-  const isCollageItem = (item) => item?.settings?.generation_type === "collage";
-  const variItems = p.results.filter((item) => (item ? isVariItem(item) : p.pendingMode === "vari"));
-  const collageItems = p.results.filter((item) => (item ? isCollageItem(item) : p.pendingMode === "collage"));
-  const canvasItems = p.results.filter((item) => (item ? !isAtelierItem(item) && !isUnclipItem(item) && !isVariItem(item) && !isCollageItem(item) : p.pendingMode === "results"));
+  // One feed per tab; the library holds them all. A pending placeholder (null) belongs to the tab of its own job.
+  const { atelier: atelierItems, reimagine: unclipItems, vari: variItems, collage: collageItems, results: canvasItems } = splitByMode(p.results, p.pendingModes);
   const unfiltered = tab === "library" ? p.libraryItems : isAtelier ? atelierItems : isReimagine ? unclipItems : isVari ? variItems : isCollage ? collageItems : canvasItems;
   // Plátno has no filter bar, so a filter set elsewhere must not silently hide its images.
   const items = filterItems(unfiltered, isCanvas ? { modelId: "", text: "" } : { modelId: filterModel, text: filterText });
   const filtering = !isCanvas && Boolean(filterModel || filterText.trim());
-  const modelNameFor = (item) => p.models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name;
+  const modelNameFor = (item) => p.models.find((model) => model.id === (item?.model_id || item?.settings?.model_id))?.name || item?.settings?.model_name;
+  const filterOptions = modelOptions(unfiltered, p.models);
   const count = items.length;
   const workspaceRef = useRef(null);
   const [workspaceWidth, setWorkspaceWidth] = useState(600);
@@ -783,7 +775,7 @@ export default function StudioView(p) {
           <div className="filter-bar" role="search">
             <select aria-label="Filtrovat podle modelu" value={filterModel} onChange={(event) => setFilterModel(event.target.value)}>
               <option value="">{TEXT.filterModelAll}</option>
-              {p.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+              {filterOptions.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
             </select>
             <label className="filter-search">
               <Search size={13} aria-hidden="true" />

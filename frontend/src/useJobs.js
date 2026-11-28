@@ -9,7 +9,7 @@ export { EMPTY_JOB, loadStoredJobs };
 // Polls active jobs in bulk, mirrors their state into the canvas/job panel and persists the list.
 export function useJobs({
   activeJobs, setActiveJobs, submissionErrors, recordsCache, deletedIds, plannedCount, submitting,
-  setBatchResults, setResults, setJob, setError, loadLibrary, averageSeconds, onBatchFinished,
+  setBatchResults, setResults, setPendingModes, setJob, setError, loadLibrary, averageSeconds, onBatchFinished,
 }) {
   useEffect(() => {
     if (!activeJobs.length) return undefined;
@@ -75,6 +75,13 @@ export function useJobs({
               : null,
         );
       });
+      // The tab of every empty slot, in the order of the slots: each job keeps its own cards while others run.
+      const pendingModes = records.flatMap((record, index) => {
+        if (record.expired) return [];
+        const images = record.result?.images || record.partial_images || [];
+        const total = activeJobs[index].expected_images || images.length || 1;
+        return Array.from({ length: total }, (_, slot) => slot).filter((slot) => !images[slot]).map(() => activeJobs[index].generation_type);
+      });
       const finished = records.filter((record) =>
         ["completed", "failed", "cancelled"].includes(record.status),
       ).length;
@@ -88,6 +95,7 @@ export function useJobs({
       // New outputs stay on the canvas until explicitly saved; the library is refetched after the batch.
       const latest = logs.at(-1)?.message || "Čekání na cloudové GPU";
       setBatchResults(slots);
+      setPendingModes(pendingModes);
       setResults((current) => {
         const ids = new Set(ready.map((item) => item.id));
         return [...slots, ...current.filter((item) => item && !ids.has(item.id))].filter((item) => !item || !deletedIds.current.has(item.id));

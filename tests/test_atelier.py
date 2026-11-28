@@ -154,6 +154,14 @@ class ColourHintTests(AtelierBase):
         self.assertEqual(text.calls[0]['prompt'], 'mvhpaint, deep blue and ochre')
         self.assertEqual(emitted[0]['color_hint'], 'deep blue and ochre')
 
+    def test_the_framing_phrase_steers_the_first_phase_but_is_not_recorded_as_a_colour(self):
+        from app_runtime.atelier import WHOLE_FREE
+        text, _, _, _, _, emitted, _ = self.run_study(atelier_framing='whole', atelier_color_level=0)
+        self.assertIn(WHOLE_FREE, text.calls[0]['prompt'])
+        self.assertEqual((emitted[0]['color_hint'], emitted[0]['color_level'], emitted[0]['framing_hint']), (None, 0, WHOLE_FREE))
+        text, _, _, _, _, emitted, _ = self.run_study(atelier_framing='whole', atelier_color_level=2)
+        self.assertEqual(text.calls[0]['prompt'], 'mvhpaint, ' + emitted[0]['color_hint'] + ', ' + WHOLE_FREE)
+
     def test_palette_phrase_follows_the_dominant_colours_of_a_painting(self):
         from app_runtime import atelier
         def phrase(*blocks):

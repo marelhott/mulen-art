@@ -293,3 +293,28 @@ export function atelierFromSettings(settings, current) {
   }
   return next;
 }
+
+// The library's model filter: the checkpoints, plus every other model that actually made one of the items
+// (Vari, Koláž and unCLIP outputs are not in the checkpoint list).
+export function modelOptions(items, models) {
+  const options = new Map(models.map((model) => [model.id, model.name]));
+  for (const item of items) {
+    const id = item?.model_id || item?.settings?.model_id;
+    if (id && !options.has(id)) options.set(id, item.settings?.model_name || id);
+  }
+  return [...options].map(([id, name]) => ({ id, name }));
+}
+
+export const FEEDS = ["atelier", "reimagine", "vari", "collage", "results"];
+
+// Splits the canvas results into one feed per tab. A null is a pending (or unfinished) slot; `pendingModes` names
+// the tab of each null, in order.
+export function splitByMode(results, pendingModes = []) {
+  const feeds = Object.fromEntries(FEEDS.map((name) => [name, []]));
+  let pending = 0;
+  for (const item of results) {
+    const type = item ? item.settings?.generation_type : pendingModes[pending++];
+    feeds[FEEDS.includes(type) ? type : "results"].push(item);
+  }
+  return feeds;
+}

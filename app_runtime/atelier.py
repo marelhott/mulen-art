@@ -279,10 +279,11 @@ def generate_study(spec, progress, image_callback):
                 color_text = spec.atelier_color_text
             elif spec.atelier_color_level > 0:
                 color_text, color_source = color_hint(spec.model_id, seed, adjectives=spec.atelier_color_level != 2)
-            if free_whole:  # same two-phase mechanism as the colour: text acts only in the first steps
-                color_text = f"{color_text}, {WHOLE_FREE}" if color_text else WHOLE_FREE
+            # The framing phrase uses the same two-phase mechanism as the colour (text acts only in the first steps),
+            # but it is not a colour: the record keeps the two apart.
+            hint = ", ".join(part for part in (color_text, WHOLE_FREE if free_whole else None) if part)
             # For a subject the colour comes first, so the subject text cannot drown it out.
-            prompt = painting_prompt(spec.model_id, color_text if spec.atelier_mode == "noise" else f"{color_text}, {text}")
+            prompt = painting_prompt(spec.model_id, hint if spec.atelier_mode == "noise" else f"{hint}, {text}")
             cfg = max(spec.cfg, spec.atelier_color_cfg or (COLOR_GUIDANCE_VIVID if spec.atelier_color_level == 2 else COLOR_GUIDANCE))
         notify(.02, "Ateliér: načítání modelu")
         source_url = None
@@ -343,7 +344,7 @@ def generate_study(spec, progress, image_callback):
             recipe_pipe = pipe
             notify(.15, "Ateliér: nový obraz z šumu")
             with glitch.damaged(pipe, spec.glitch, spec.steps, spec.glitch_until, seed) as glitch_info:  # Rozpad modelu: off by default
-                until = spec.atelier_color_until if color_text else 1.0
+                until = spec.atelier_color_until if color_text or free_whole else 1.0
                 if until < 1.0:
                     # Two phases of one denoising run. The colour hint decides palette and layout in the first steps;
                     # the rest runs without it (the artist's own prompt and CFG), because a text prompt present all the
@@ -386,6 +387,7 @@ def generate_study(spec, progress, image_callback):
             **photo_source_meta,
             "generation_and_save_seconds": round(time.monotonic() - started, 2),
             "color_hint": color_text, "color_source": color_source, "color_level": spec.atelier_color_level if color_text else 0,
+            **({"framing_hint": WHOLE_FREE} if free_whole else {}),
             **glitch_meta, **repaint_meta}
         image = {**core.encode_image(result, meta), "generation_meta": meta}
         output_images.append(image)
