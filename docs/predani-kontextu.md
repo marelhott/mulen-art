@@ -74,11 +74,14 @@ SDXL studio: FastAPI brána a GPU workery na Modalu, React frontend. Záložky V
 - Synchronizace do `~/Pictures/Mulen art`: složky Plátno, Atelier, unCLIP, Vari, Koláž; profil `img2img` je ve skriptu přednastavený. Staženo, stav po doplnění: 265 obrázků (81 / 76 / 44 / 64 / 0). 41 obrázků omylem stažených ze starého workspace je v Koši ve složce „Mulen art - stary ucet".
 
 ## 4. Stav teď
-- Poslední commit s kódem je `040ed95`, pushnutý.
+- Poslední **nasazený a pushnutý** commit s kódem je `040ed95`.
+- 28. 11. přibyly lokální opravy (**nepushnuté, nenasazené**): zrušení Vari zastaví i unCLIP mezikrok; Koláž si pamatuje všechny vstupy; Zopakovat umí Ateliér, vrací na správnou záložku a vstupy nahrazuje; mazání čerstvého obrázku; čekající karty zůstávají na své záložce; názvy a filtr modelů v Knihovně; export 2× i pro 3072 px s chybovou hláškou; pokyn k záběru se neukládá jako barva; jméno souboru při chybě nahrávání v Koláži; Rozpad modelu na unCLIP (jen Varianta). Testy po opravách: backend 197, frontend 59, lint i build OK. V prohlížeči ověřen jen ovladač Rozpadu na unCLIP; ostatní jen testy.
 - Živý web 28. 11. obsahuje Rozpad modelu, přepínač Záběr i `batch_id` (ověřeno v živém JS bundlu `index-BfynjvEB.js`). Samotný Rozpad modelu přes živé rozhraní vyzkoušený v zapsaných záznamech není; ověřen byl na GPU skriptem `glitch_check.py`.
 - Synchronizační služba `cz.mulen.art.sync` běží.
 
 ## 5. Otevřené a neověřené
+Z rozboru chyb (28. 11.) záměrně neopraveno: vracení kvóty po zrušení či pádu a cena API modelů v rozpočtu; `MODAL_PROFILE` a pročišťování stavu v `sync_images.py`; reset zvětšení na 1× při nahrání vstupu (nejdřív se zeptat); polovina kroků u Metamorfózy (oprava by změnila obrazy); sdílený či skrytý unCLIP mezikrok Vari (rozhodnutí o podobě); obsazení VRAM v UnclipWorker (neověřeno).
+
 1. **Koláž, termín:** 16 záznamů je znovu označeno jako smazané (`deleted_at` 23. 11. 15:41, příčina nezjištěná). Kolem **23. 12.** se odstraní natrvalo. Nabídka obnovit je bez odpovědi.
 2. Stažení nově vygenerovaného obrázku po opětovném zapnutí synchronizace zatím nebylo potvrzené.
 3. Neověřeno, že se `batch_id` skutečně zapisuje do nových záznamů.

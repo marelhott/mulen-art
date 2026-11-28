@@ -222,7 +222,7 @@ def unclip_stage(job_id, payload, preset, count, progress, cancelled):
     deadline = time.monotonic() + 1300
     while True:
         if cancelled():
-            from app_runtime.cloud_server import cancel_children
+            from app_runtime.job_flags import cancel_children
             cancel_children(jobs, job_id, cancel_call)
             raise RuntimeError("Zrušeno.")
         record = jobs.get(pre_id) or {}
@@ -440,7 +440,7 @@ def dispatch():
         return ImageWorker(model_id=payload["model_id"]).run.spawn(job_id, payload).object_id
 
     def is_cancelled(job_id):
-        from app_runtime.cloud_server import is_job_cancelled
+        from app_runtime.job_flags import is_job_cancelled
         return is_job_cancelled(jobs, job_id)
 
     def on_started(job_id, call_id):

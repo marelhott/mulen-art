@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
+from app_runtime.job_flags import cancel_children, is_job_cancelled
 from app_runtime.core import get_options, get_config_item, parse_input, decode_image, check_job_size
 from app_runtime.server import (api_atelier_photo, api_atelier_photos, api_options, OUTPUTS_DIR, THUMBS_DIR, api_library_save, load_deleted_ids,
                                 load_history_items, api_library_delete, api_library_order, load_library_items, now_iso,
@@ -98,30 +99,6 @@ def optional_int_env(name, default=None):
     if number < 1:
         raise ValueError(f"{name} must be a positive integer")
     return number
-
-
-def is_job_cancelled(jobs, job_id):
-    """A queued job must not start when it was cancelled: by its record, or by the flag a parent job set."""
-    if jobs.get(f"cancelled:{job_id}"):
-        return True
-    record = jobs.get(job_id)
-    return record is None or record.get("status") == "cancelled"
-
-
-def cancel_children(jobs, job_id, cancel):
-    """Stop the jobs a job queued itself (the Vari unCLIP pre-stage). The parent is killed before it can do this."""
-    for child_id in jobs.get(f"children:{job_id}") or []:
-        child = jobs.get(child_id)
-        if child is None or child.get("status") in {"completed", "failed", "cancelled"}:
-            continue
-        jobs[f"cancelled:{child_id}"] = True  # first, so a queued child is dropped even if stopping the call fails
-        jobs[child_id] = {**child, "status": "cancelled", "message": "Cancelled", "updated_at": now_iso()}
-        call_id = jobs.get(f"call:{child_id}")
-        if call_id and cancel is not None:
-            try:
-                cancel(call_id)
-            except Exception:
-                logging.getLogger("studio").exception("Could not cancel child job %s", child_id)
 
 
 def create_app(*, jobs, usage, submit, refresh, commit, username, password,
