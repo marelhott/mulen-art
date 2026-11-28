@@ -116,6 +116,14 @@ class LocalServerTests(unittest.TestCase):
         self.assertTrue((self.output / "source_used.png").exists())
         self.assertTrue((self.output / "source_fresh.png").exists())
 
+    def test_the_other_inputs_of_a_fused_collage_survive_the_purge(self):
+        import os
+        now = time.time()
+        Image.new("RGB", (8, 8)).save(self.output / "source_second.png")
+        os.utime(self.output / "source_second.png", (now - 20 * 86400,) * 2)
+        self.add_image("collage", source_url="/library/source_first.png", settings={"extra_source_urls": ["/library/source_second.png"]})
+        self.assertEqual(server.purge_orphan_sources(14, now=now), 0)
+
     def test_slim_payload_loads_only_a_well_formed_stored_source_name(self):
         name = "source_" + "a" * 64 + ".png"
         Image.new("RGB", (8, 8), "red").save(self.output / name)

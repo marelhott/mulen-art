@@ -151,7 +151,10 @@ def _generate(generation_input: GenerationInput, kind: str, progress_callback, i
     meta = {"generation_type": kind, "nano_model": spec["id"], "nano_distance": generation_input.nano_distance, "model_id": f"nano_{spec['id']}",
             "model_name": f"{title} · {spec['title']}", "lora_id": "none", "provider": models.provider_of(spec), "provider_model": spec["model"],
             "prompt": tasks[0]["prompt"], "negative_prompt": "", "scale": 1.0, "demo_mode": False, "source_width": primary.width,
-            "source_height": primary.height, "collage_fuse": fuse, "source_count": len(sources), "custom_prompt": custom.strip(), "pre_unclip": generation_input.pre_unclip}
+            "source_height": primary.height, "collage_fuse": fuse, "source_count": len(sources),
+            # The other inputs of a fused collage: "repeat" brings them back and the source purge keeps their files.
+            **({"extra_source_urls": [f"/library/source_{item}.png" for item in generation_input.extra_source_ids]} if len(sources) > 1 else {}),
+            "custom_prompt": custom.strip(), "pre_unclip": generation_input.pre_unclip}
     results: list = []
 
     def on_image(task, data: bytes):

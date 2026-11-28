@@ -187,6 +187,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual((len(self.calls[0]["images"]), self.calls[0]["aspect"], self.calls[0]["resolution"]), (3, "16:9", "1K"))
         self.assertEqual(result["meta"]["source_count"], 3)
+        self.assertEqual(result["meta"]["extra_source_urls"], [f"/library/source_{item}.png" for item in (extra, "b" * 64)])
         self.assertIn("This variant:", self.calls[0]["prompt"])
 
     def test_collage_single_input_makes_variants_with_different_techniques(self):

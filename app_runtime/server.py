@@ -504,7 +504,8 @@ def purge_orphan_sources(days: int = 14, now: float | None = None) -> int:
         if not isinstance(data, dict):
             continue
         settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
-        for url in (data.get("source_url"), settings.get("source_url")):
+        extra = settings.get("extra_source_urls") if isinstance(settings.get("extra_source_urls"), list) else []
+        for url in (data.get("source_url"), settings.get("source_url"), *extra):
             if isinstance(url, str):
                 referenced.add(Path(url).name)
     removed = 0
