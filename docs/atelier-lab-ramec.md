@@ -83,11 +83,11 @@ Archy: `outputs/verification/glitch-lab-img2img/sheet-tuymans_modal_2400-{thanat
 - **Tuymans checkpoint sám přečte ostrou fotku jako zvířecí tvar** (slon, pták) i bez poškození; to je jeho prior, ne zásah.
 - top_suppress přidává střepy, chan_drop a sa_identity jen jemně; v kombinaci s blur64 mění detail uvnitř již rozpuštěných hmot.
 
-## 11. Nasazeno do kódu (2026-11-25, necommitnuto, nenasazeno na Modal): Rozpad modelu v Ateliéru a ve Vari
+## 11. Nasazeno do kódu (2026-11-25, commit e3c8f62, nasazeno; ověřeno v živém bundlu 2026-11-28): Rozpad modelu v Ateliéru a ve Vari
 Na přání uživatele ("první možnost", tedy rozbití modelu, ne blur ani dlaždice) jako **volba, výchozí chování beze změny**.
 - `app_runtime/glitch.py`: kontext `damaged(pipe, op, total_calls, until, seed)`; operace `top_suppress` (Rozpad aktivací), `chan_drop` (Vynechané kanály), `sa_identity` (Chybné čtení pozornosti); hooky na `pipe.unet` jen v prvních `until` (0,1 až 0,6, výchozí 0,3) voláních UNetu, vždy uklizené ve `finally`.
 - Ateliér: `GenerationInput.glitch`, `glitch_until`; `core.parse_input` (jen `atelier` a `reimagine`); `atelier.py` (noise/subject běh) a `repaint.py` (photo/archive); meta `glitch`, `glitch_until`; UI `Atelier.jsx` ("ROZPAD MODELU" + posuvník), `App.jsx` posílá pole jen při zapnutí.
 - Vari: `pre_unclip_glitch` (jen s `pre_unclip`) se v `modal_app.py: unclip_stage` předá dětskému unCLIP jobu jako `glitch`; `unclip.generate_variations` ho aplikuje na UNet SD 2.1. Nano Pro a Gemini (API) rozbít nejde. UI `Nano.jsx` ("ROZPAD UNCLIPU" jen po zapnutí předstupně), `nanoTools.js`, `glitchTools.js`.
 - Testy: `tests/test_glitch.py` (validace, hooky a úklid na falešném UNetu, napojení na Ateliér), `frontend/src/glitchTools.test.js`, doplněk v `nanoTools.test.js`. Celá sada: 191 backend, 52 frontend OK.
 - Ověření na GPU (`scripts/experiments/glitch_check.py`): Ateliér s modulem = experiment (střední odchylka 0,13 až 0,17 z 255); unCLIP: top_suppress 9,9, chan_drop 5,6, sa_identity 1,8 odchylky od kontroly, kontrola po poškození 0,0 (žádný únik).
-- Zbývá: nasadit (`modal deploy`) a pushnout až na výslovný souhlas; mulen_mara v kole 2 spustit znovu, pokud je potřeba.
+- Commitnuto a nasazeno. Zbývá: mulen_mara v kole 2 spustit znovu, pokud je potřeba.
