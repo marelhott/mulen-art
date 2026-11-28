@@ -238,3 +238,58 @@ export function reconcileDeleted(current, serverDeleted, liveIds) {
   return next;
 }
 
+
+// ---- "Zopakovat" -------------------------------------------------------------------------------
+// The tab an output was made on.
+export const tabForSettings = (settings) =>
+  ["atelier", "reimagine", "vari", "collage"].includes(settings?.generation_type) ? settings.generation_type : "results";
+
+// The stored input images of an output, in the order they were used (a fused collage has several).
+export const sourceUrls = (item) => {
+  const first = item?.settings?.source_url || item?.source_url;
+  return first ? [first, ...(item.settings?.extra_source_urls || [])] : [];
+};
+
+// The server derives each study's seed as base + index + offset(model) (plan_atelier), so repeating one study
+// means typing the base seed: the stored seed minus that offset.
+export async function atelierBaseSeed(seed, modelId) {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(modelId));
+  const offset = new DataView(digest).getUint32(0);
+  return (((Number(seed) - offset) % 4294967296) + 4294967296) % 4294967296;
+}
+
+// Back from a stored Ateliér study to the Ateliér controls: one study of one checkpoint.
+export function atelierFromSettings(settings, current) {
+  const next = {...current, mode: settings.atelier_mode || current.mode, count: 1,
+    glitch: settings.glitch || "", glitchUntil: settings.glitch_until ?? current.glitchUntil};
+  const take = (key, value) => { if (value !== undefined && value !== null) next[key] = value; };
+  if (settings.model_id) {
+    next.modelIds = [settings.model_id];
+    next.source = sourceOf(settings.model_id);
+  }
+  take("theme", settings.atelier_theme);
+  take("framing", settings.atelier_framing);
+  take("steps", settings.steps);
+  take("cfg", settings.requested_cfg ?? settings.cfg);  // the stored cfg may be the boosted colour-phase value
+  take("sampler", settings.sampler);
+  take("schedule", settings.schedule);
+  take("scale", settings.scale);
+  take("denoise", settings.denoise);
+  take("restormerMode", settings.restormer_mode);
+  if (settings.upscaler) {
+    next.useRealEsrgan = settings.upscaler.startsWith("realesrgan");
+    next.useRealsrgan = settings.upscaler.startsWith("swinir");
+  }
+  if (next.mode === "noise" || next.mode === "subject") {
+    take("colorLevel", settings.color_level);  // the other modes always store 0
+    if (settings.generation_width && settings.generation_height)
+      Object.assign(next, {ratio: "fixed", width: settings.generation_width, height: settings.generation_height});
+  }
+  if (next.mode === "archive") take("archive", settings.atelier_archive);
+  if (next.mode === "photo" && settings.photo_source) {
+    next.photoSource = settings.photo_source;
+    take("photoCollection", settings.photo_collection);
+    next.photoId = settings.photo_id || "";
+  }
+  return next;
+}

@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -687,6 +688,19 @@ class CloudFlowTests(unittest.TestCase):
         self.assertTrue(cloud_server.is_job_cancelled(jobs, "a"))
         self.assertFalse(cloud_server.is_job_cancelled(jobs, "b"))
         self.assertTrue(cloud_server.is_job_cancelled(jobs, "missing"))
+
+    def test_a_fresh_image_can_be_deleted_before_this_container_has_seen_it(self):
+        def appear():
+            if not (self.output / "fresh.json").exists() and state["calls"] >= 1:
+                Image.new("RGB", (8, 8)).save(self.output / "fresh.png")
+                (self.output / "fresh.json").write_text(json.dumps({"id": "fresh", "filename": "fresh.png"}))
+            state["calls"] += 1
+        state = {"calls": 0}
+        app = create_app(jobs=self.jobs, usage=self.usage, submit=lambda *a: None, refresh=appear,
+                         commit=lambda: None, username="studio", password="test-password")
+        client = TestClient(app)
+        client.auth = ("studio", "test-password")
+        self.assertEqual(client.delete("/api/library/fresh").status_code, 200)
 
     def test_source_uploaded_once_can_back_many_batches_without_resending_bytes(self):
         app = self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None)

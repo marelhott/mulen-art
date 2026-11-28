@@ -817,6 +817,10 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def delete(item_id: str):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", item_id):
             raise HTTPException(404, "Image not found.")
+        # A freshly generated image may not be visible in this container yet (outside the lock: it can wait).
+        record_path = OUTPUTS_DIR / f"{item_id}.json"
+        refresh_cached()
+        wait_for_file(lambda: record_path if record_path.is_file() else None)
         with lock:
             refresh_cached()
             result = api_library_delete(item_id)
@@ -827,7 +831,11 @@ def create_app(*, jobs, usage, submit, refresh, commit, username, password,
     def reorder_library(payload: dict):
         with lock:
             refresh_cached()
-            result = api_library_order(payload.get("ids", []))
+            try:
+                result = api_library_order(payload.get("ids", []))
+            except HTTPException:
+                refresh_cached(force=True)  # an id of a brand new image may not be visible yet
+                result = api_library_order(payload.get("ids", []))
             commit_soon()
             return result
 

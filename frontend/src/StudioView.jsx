@@ -26,7 +26,7 @@ import {
 import { signOut } from "./api";
 import { safeStorage, urlFor } from "./shared";
 import { buildImageUrl } from "./api";
-import { filterItems, idsForSource } from "./studioTools";
+import { filterItems, idsForSource, sourceUrls, tabForSettings } from "./studioTools";
 import { TEXT } from "./texts";
 import { Compare } from "./components/Compare";
 import { CheckpointPicker } from "./components/CheckpointPicker";
@@ -223,22 +223,35 @@ export default function StudioView(p) {
       p.setError(error.message);
     }
   }
-  // Take over the stored settings and bring back the original source image as input.
+  // Take over the stored settings on the tab that made the image, and bring back its original inputs.
   async function repeat(item) {
-    p.applySettings(item.settings || {});
-    const source = item.settings?.source_url || item.source_url;
-    if (!source) return reuse(item);
-    try {
-      const response = await fetch(buildImageUrl(source));
-      if (!response.ok) throw new Error("source unavailable");
-      const blob = await response.blob();
-      addFiles([new File([blob], item.settings?.source_name || "vstup.png", { type: imageType(blob) })]);
+    const settings = item.settings || {};
+    const target = tabForSettings(settings);
+    const show = () => {
+      setTab(target);
       p.setSelectedImage(null);
       setLibraryOpen(false);
-      if (isAtelier) setTab("results");
+    };
+    await p.applySettings(settings);
+    // Ateliér makes its own sources: nothing goes into the shared input list.
+    if (target === "atelier") { show(); p.setError(""); return; }
+    const sources = sourceUrls(item);
+    if (!sources.length) { await reuse(item); show(); return; }
+    try {
+      const files = await Promise.all(sources.map(async (source, index) => {
+        const response = await fetch(buildImageUrl(source));
+        if (!response.ok) throw new Error("source unavailable");
+        const blob = await response.blob();
+        const name = index === 0 ? settings.source_name || "vstup.png" : `vstup-${index + 1}.png`;
+        return new File([blob], name, { type: imageType(blob) });
+      }));
+      p.setInputItems([]);  // repeating replaces the inputs, it does not add to them
+      addFiles(files);
+      show();
       p.setError("");
     } catch {
-      await reuse(item);
+      show();
+      p.setError("Původní vstupy se nepodařilo načíst. Nastavení je obnovené, vstupy vlož znovu.");
     }
   }
   async function drop(event) {

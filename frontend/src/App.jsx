@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StudioView from "./StudioView";
 import { useJobs, loadStoredJobs, EMPTY_JOB } from "./useJobs";
-import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY } from "./studioTools";
+import { averageWorkerSeconds, controlsFromSettings, usageLabel, isMixId, mixEntry, MIX_STORAGE_KEY, idsForSource, sourceOf, planVariants, DEFAULT_VARIANTS, VARIANTS_STORAGE_KEY, atelierBaseSeed, atelierFromSettings } from "./studioTools";
 import { randomId, safeStorage } from "./shared";
 import { DEFAULT_REIMAGINE, planReimagine, plannedImages, reimagineFromSettings } from "./reimagineTools";
 import { DEFAULT_VARI, DEFAULT_COLLAGE, COLLAGE_MAX_SOURCES, forCollage, planVari, planCollage, plannedImages as nanoPlannedImages, variFromSettings, collageFromSettings, usableModels } from "./nanoTools";
@@ -136,7 +136,14 @@ function App() {
   const typicalSeconds = useMemo(() => averageWorkerSeconds([...results, ...libraryItems].filter(Boolean)), [results, libraryItems]);
   averageSeconds.current = typicalSeconds;
 
-  function applySettings(settings) {
+  async function applySettings(settings) {
+    if (settings?.generation_type === "atelier") {
+      const id = settings.model_id;
+      if (id && isMixId(id) && mixEntry(id, serverModels)) setMixIds(current => (current.includes(id) ? current : [...current, id]));
+      const seed = settings.seed !== undefined && id ? String(await atelierBaseSeed(settings.seed, id)) : "-1";
+      setAtelier(current => ({...atelierFromSettings(settings, current), seed}));
+      return;
+    }
     if (settings?.generation_type === "vari") {
       setVari(current => variFromSettings(settings, current));
       return;
