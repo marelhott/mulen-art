@@ -215,13 +215,15 @@ def unclip_stage(job_id, payload, preset, count, progress, cancelled):
     jobs[pre_id] = {"id": pre_id, "status": "queued", "progress": 0, "message": "Waiting for cloud GPU", "source_name": pre["source_name"],
                     "source_url": pre["source_url"], "expected_images": count, "generation_type": "reimagine", "model_id": pre["model_id"],
                     "logs": [], "result": None, "error": None, "created_at": now_iso(), "updated_at": now_iso()}
+    jobs[f"children:{job_id}"] = [pre_id]  # cancelling the parent in the gateway cancels these too
     call_id = spawn_job(pre_id, pre)
     if call_id:
         jobs[f"call:{pre_id}"] = call_id
     deadline = time.monotonic() + 1300
     while True:
         if cancelled():
-            jobs[f"cancelled:{pre_id}"] = True
+            from app_runtime.cloud_server import cancel_children
+            cancel_children(jobs, job_id, cancel_call)
             raise RuntimeError("Zrušeno.")
         record = jobs.get(pre_id) or {}
         status = record.get("status")
@@ -438,8 +440,8 @@ def dispatch():
         return ImageWorker(model_id=payload["model_id"]).run.spawn(job_id, payload).object_id
 
     def is_cancelled(job_id):
-        record = jobs.get(job_id)
-        return record is None or record.get("status") == "cancelled"
+        from app_runtime.cloud_server import is_job_cancelled
+        return is_job_cancelled(jobs, job_id)
 
     def on_started(job_id, call_id):
         jobs[f"call:{job_id}"] = call_id

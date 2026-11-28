@@ -667,6 +667,27 @@ class CloudFlowTests(unittest.TestCase):
         self.assertEqual(client.post("/api/jobs/missing/cancel").status_code, 404)
         self.assertEqual(self.client.post(f"/api/jobs/{job_id}/cancel").status_code, 501)
 
+    def test_cancelling_a_job_also_cancels_the_job_it_queued(self):
+        cancelled = []
+        app = self.make_app(lambda key, payload: f"fc-{key}", monthly_limit=None, cancel=cancelled.append)
+        client = TestClient(app)
+        client.auth = ("studio", "test-password")
+        job_id = client.post("/api/generate", json=self.payload).json()["job_id"]
+        child = f"{job_id}-unclip"
+        self.jobs.update({child: {"id": child, "status": "running"}, f"call:{child}": "fc-child", f"children:{job_id}": [child]})
+        client.post(f"/api/jobs/{job_id}/cancel")
+        self.assertEqual(cancelled, [f"fc-{job_id}", "fc-child"])
+        self.assertEqual(self.jobs[child]["status"], "cancelled")
+        self.assertTrue(self.jobs[f"cancelled:{child}"])
+        client.post(f"/api/jobs/{job_id}/cancel")  # again: nothing left to stop
+        self.assertEqual(len(cancelled), 2)
+
+    def test_dispatcher_drops_a_job_that_only_carries_the_cancel_flag(self):
+        jobs = {"a": {"status": "queued"}, "cancelled:a": True, "b": {"status": "queued"}}
+        self.assertTrue(cloud_server.is_job_cancelled(jobs, "a"))
+        self.assertFalse(cloud_server.is_job_cancelled(jobs, "b"))
+        self.assertTrue(cloud_server.is_job_cancelled(jobs, "missing"))
+
     def test_source_uploaded_once_can_back_many_batches_without_resending_bytes(self):
         app = self.make_app(lambda key, payload: self.submissions.append((key, payload)), monthly_limit=None)
         client = TestClient(app)
