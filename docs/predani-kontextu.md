@@ -36,7 +36,7 @@ SDXL studio: FastAPI brána a GPU workery na Modalu, React frontend. Záložky V
   ```
   URL vypíše deploy. Ověření: název `assets/index-*.js` na živém webu = ten ve `frontend/dist/index.html`.
 - Přihlášení je v ignorovaném `.modal-app-credentials.json`. Hodnoty nevypisovat; používal se jen k ověřovacím dotazům na vlastní aplikaci.
-- Testy 28. 11.: backend `.venv/bin/python -m unittest discover -s tests` **192 OK**, frontend `node --test frontend/src/*.test.js` **52 OK**. Lint (součást `npm test`) teď spuštěný nebyl.
+- Testy 28. 11.: backend `.venv/bin/python -m unittest discover -s tests` **197 OK**, frontend `node --test frontend/src/*.test.js` **59 OK**, lint i build OK.
 - Lokální náhled: server `mulen-nano-ui` z `.claude/launch.json` (port 8002, demo režim). Po změně šířky okna stránku obnovit, otevření pravého panelu se počítá jen při načtení (hranice 900 px).
 - Start GPU: teplý asi 2 s, studený 17–40 s, hned po nasazení i kolem 4 min.
 
@@ -74,9 +74,9 @@ SDXL studio: FastAPI brána a GPU workery na Modalu, React frontend. Záložky V
 - Synchronizace do `~/Pictures/Mulen art`: složky Plátno, Atelier, unCLIP, Vari, Koláž; profil `img2img` je ve skriptu přednastavený. Staženo, stav po doplnění: 265 obrázků (81 / 76 / 44 / 64 / 0). 41 obrázků omylem stažených ze starého workspace je v Koši ve složce „Mulen art - stary ucet".
 
 ## 4. Stav teď
-- Poslední **nasazený a pushnutý** commit s kódem je `040ed95`.
-- 28. 11. přibyly lokální opravy (**nepushnuté, nenasazené**): zrušení Vari zastaví i unCLIP mezikrok; Koláž si pamatuje všechny vstupy; Zopakovat umí Ateliér, vrací na správnou záložku a vstupy nahrazuje; mazání čerstvého obrázku; čekající karty zůstávají na své záložce; názvy a filtr modelů v Knihovně; export 2× i pro 3072 px s chybovou hláškou; pokyn k záběru se neukládá jako barva; jméno souboru při chybě nahrávání v Koláži; Rozpad modelu na unCLIP (jen Varianta). Testy po opravách: backend 197, frontend 59, lint i build OK. V prohlížeči ověřen jen ovladač Rozpadu na unCLIP; ostatní jen testy.
-- Živý web 28. 11. obsahuje Rozpad modelu, přepínač Záběr i `batch_id` (ověřeno v živém JS bundlu `index-BfynjvEB.js`). Samotný Rozpad modelu přes živé rozhraní vyzkoušený v zapsaných záznamech není; ověřen byl na GPU skriptem `glitch_check.py`.
+- Poslední **nasazený a pushnutý** commit s kódem je `c28b8a3` (nasazeno 28. 11.; živý bundle `index-DqTfNyHe.js` shodný s buildem; `/api/usage` a `/api/library` odpovídají 200). Po tomto nasazení neproběhla žádná GPU úloha, takže rozběhnutí fronty a zrušení Vari naživo ověřené nejsou.
+- Opravy z 28. 11. v tomto nasazení: zrušení Vari zastaví i unCLIP mezikrok; Koláž si pamatuje všechny vstupy; Zopakovat umí Ateliér, vrací na správnou záložku a vstupy nahrazuje; mazání čerstvého obrázku; čekající karty zůstávají na své záložce; názvy a filtr modelů v Knihovně; export 2× i pro 3072 px s chybovou hláškou; pokyn k záběru se neukládá jako barva; jméno souboru při chybě nahrávání v Koláži; Rozpad modelu na unCLIP (jen Varianta). Testy po opravách: backend 197, frontend 59, lint i build OK. V prohlížeči ověřen jen ovladač Rozpadu na unCLIP; ostatní jen testy.
+- Před tímto nasazením živý web 28. 11. obsahoval Rozpad modelu, přepínač Záběr i `batch_id` (ověřeno v živém JS bundlu `index-BfynjvEB.js`). Samotný Rozpad modelu přes živé rozhraní vyzkoušený v zapsaných záznamech není; ověřen byl na GPU skriptem `glitch_check.py`.
 - Synchronizační služba `cz.mulen.art.sync` běží.
 
 ## 5. Otevřené a neověřené
